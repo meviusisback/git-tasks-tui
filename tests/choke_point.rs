@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gtasks::binaries::Binaries;
-use gtasks::gh::{Argv, Caps, gh, run_pipe_with_caps};
+use gtasks::gh::{Argv, Caps, check_argv, gh, run_pipe_with_caps};
 
 fn argv(program: PathBuf, args: Vec<OsString>) -> Argv {
     Argv {
@@ -41,7 +41,6 @@ fn every_forbidden_flag_is_refused() {
         "--force",
         "--auto",
         "-f",
-        "-d",
         "--force=true",
         "--admin=yes",
     ] {
@@ -120,4 +119,27 @@ fn a_public_builder_cannot_panic_on_a_forbidden_flag() {
         err.to_string().contains("forbidden flag"),
         "the transport must refuse it: {err:#}"
     );
+}
+
+/// `-d` is `--delete-branch`, which an action emits on request: the deny-list
+/// must not forbid a spelling of a flag the program legitimately builds. The
+/// cluster guard still catches `-fd`, because `f` is inside it.
+#[test]
+fn the_short_delete_flag_is_allowed_but_force_inside_a_cluster_is_not() {
+    let alone = argv(PathBuf::from("/bin/true"), vec![OsString::from("-d")]);
+    assert!(check_argv(&alone).is_ok(), "-d is --delete-branch: allowed");
+
+    let cluster = argv(PathBuf::from("/bin/true"), vec![OsString::from("-fd")]);
+    let err = check_argv(&cluster).unwrap_err().to_string();
+    assert!(
+        err.contains(r#""-f" inside "-fd""#),
+        "the cluster hides -f: {err}"
+    );
+
+    // And a value that merely starts with a dash is still a value.
+    let value = argv(
+        PathBuf::from("/bin/true"),
+        vec![OsString::from("-done"), OsString::from("-admin")],
+    );
+    assert!(check_argv(&value).is_ok(), "a value is not a flag");
 }

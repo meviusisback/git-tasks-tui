@@ -69,7 +69,7 @@ impl Argv {
 
 /// Flags that must never be produced by the builders (S9). Exact element
 /// match only: `--force-with-lease` and friends stay legal.
-const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto", "-d", "-f"];
+const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto", "-f"];
 
 /// Short flags whose combination is still dangerous (`-fd` = force + delete).
 /// A token is decomposed only when **every** letter is one of these: `-admin` is
