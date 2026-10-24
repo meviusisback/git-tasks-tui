@@ -169,7 +169,7 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 use crate::binaries::Binaries;
-use crate::gh::{Argv, gh};
+use crate::gh::gh;
 
 /// A repository slug that has already been validated. The field is private on
 /// purpose: the type constrains only if `parse` is the only way in.

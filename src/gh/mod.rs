@@ -71,10 +71,6 @@ impl Argv {
 /// match only: `--force-with-lease` and friends stay legal.
 const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto", "-f"];
 
-/// Short flags whose combination is still dangerous (`-fd` = force + delete).
-/// A token is decomposed only when **every** letter is one of these: `-admin` is
-/// a value that happens to start with a dash, not a cluster (A-2).
-const SHORT_FLAGS: &[char] = &['f', 'd'];
 
 /// Exposed so a test can assert that no action list contains a forbidden flag.
 pub fn is_forbidden_flag(flag: &str) -> bool {
@@ -349,8 +345,16 @@ impl CheckedArgv {
     /// Test-only escape hatch: integration tests live outside the crate and
     /// cannot call `from_checked`. Hidden from the docs on purpose — it exists so
     /// a probe can exercise `execute`, not so production code can skip the door.
+    /// This exists for the integration tests, which link the crate normally and
+    /// cannot reach `from_checked`. It is **not** a production shortcut: in a
+    /// debug build it panics if the argv would be refused by the strict check,
+    /// so a call site that tries to skip the door fails at once.
     #[doc(hidden)]
     pub fn unchecked_for_tests(argv: Argv) -> Self {
+        debug_assert!(
+            check_argv(&argv).is_ok(),
+            "unchecked_for_tests was given an argv the strict check refuses"
+        );
         Self(argv)
     }
 
