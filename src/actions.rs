@@ -169,8 +169,30 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 use crate::binaries::Binaries;
-use crate::config::validate_repo_slug;
 use crate::gh::{Argv, gh};
+
+/// A repository slug that has already been validated. The field is private on
+/// purpose: the type constrains only if `parse` is the only way in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoSlug(String);
+
+impl RepoSlug {
+    /// The single door: every slug in the program passes through here.
+    pub fn parse(slug: &str) -> anyhow::Result<Self> {
+        crate::config::validate_repo_slug(slug)?;
+        Ok(Self(slug.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RepoSlug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// How a pull request is merged. Exactly one of these is emitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,24 +217,24 @@ impl MergeMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Merge {
-        repo: String,
+        repo: RepoSlug,
         number: u64,
         method: MergeMethod,
         delete_branch: bool,
     },
     Comment {
-        repo: String,
+        repo: RepoSlug,
         number: u64,
         body: String,
     },
     Close {
-        repo: String,
+        repo: RepoSlug,
         number: u64,
         reason: Option<String>,
         comment: Option<String>,
     },
     Checkout {
-        repo: String,
+        repo: RepoSlug,
         number: u64,
     },
 }
@@ -225,16 +247,10 @@ enum Token {
     Value(OsString),
 }
 
-const MERGE_FLAGS: &[&str] = &[
-    "--repo",
-    "--merge",
-    "--squash",
-    "--rebase",
-    "--delete-branch",
-];
-const COMMENT_FLAGS: &[&str] = &["--repo", "--body"];
-const CLOSE_FLAGS: &[&str] = &["--repo", "--reason", "--comment"];
-const CHECKOUT_FLAGS: &[&str] = &["--repo"];
+const MERGE_FLAGS: &[&str] = &["--merge", "--squash", "--rebase", "--delete-branch"];
+const COMMENT_FLAGS: &[&str] = &["--body"];
+const CLOSE_FLAGS: &[&str] = &["--reason", "--comment"];
+const CHECKOUT_FLAGS: &[&str] = &[];
 
 /// Flags that must never appear in any action list.
 pub const FORBIDDEN_ACTION_FLAGS: &[&str] = &[
@@ -275,27 +291,17 @@ fn value(text: impl Into<OsString>) -> Token {
 }
 
 fn tokens_for(action: &Action) -> anyhow::Result<Vec<Token>> {
-    let repo = match action {
-        Action::Merge { repo, .. }
-        | Action::Comment { repo, .. }
-        | Action::Close { repo, .. }
-        | Action::Checkout { repo, .. } => repo,
-    };
-    validate_repo_slug(repo)?;
-
     let tokens = match action {
         Action::Merge {
-            repo,
             number,
             method,
             delete_branch,
+            ..
         } => {
             let mut tokens = vec![
                 value("pr"),
                 value("merge"),
                 value(number.to_string()),
-                Token::Flag("--repo"),
-                value(repo.clone()),
                 Token::Flag(method.flag()),
             ];
             if *delete_branch {
@@ -303,31 +309,23 @@ fn tokens_for(action: &Action) -> anyhow::Result<Vec<Token>> {
             }
             tokens
         }
-        Action::Comment { repo, number, body } => {
+        Action::Comment { number, body, .. } => {
             ensure_no_nul(body)?;
             vec![
                 value("pr"),
                 value("comment"),
                 value(number.to_string()),
-                Token::Flag("--repo"),
-                value(repo.clone()),
                 Token::Flag("--body"),
                 value(body.clone()),
             ]
         }
         Action::Close {
-            repo,
             number,
             reason,
             comment,
+            ..
         } => {
-            let mut tokens = vec![
-                value("pr"),
-                value("close"),
-                value(number.to_string()),
-                Token::Flag("--repo"),
-                value(repo.clone()),
-            ];
+            let mut tokens = vec![value("pr"), value("close"), value(number.to_string())];
             if let Some(reason) = reason {
                 ensure_no_nul(reason)?;
                 tokens.push(Token::Flag("--reason"));
@@ -340,13 +338,9 @@ fn tokens_for(action: &Action) -> anyhow::Result<Vec<Token>> {
             }
             tokens
         }
-        Action::Checkout { repo, number } => vec![
-            value("pr"),
-            value("checkout"),
-            value(number.to_string()),
-            Token::Flag("--repo"),
-            value(repo.clone()),
-        ],
+        Action::Checkout { number, .. } => {
+            vec![value("pr"), value("checkout"), value(number.to_string())]
+        }
     };
     Ok(tokens)
 }
@@ -378,16 +372,24 @@ fn ensure_allowlisted(tokens: &[Token], allowed: &[&str]) -> anyhow::Result<()> 
 /// argv is checked against the action's allowlist before it leaves.
 pub fn argv_for(binaries: &Binaries, action: &Action) -> anyhow::Result<Argv> {
     let tokens = tokens_for(action)?;
+    // Only the action's own tokens go through the allowlist: the `--repo`
+    // prefix is not in `flags_for(action)` because the **type** produces it,
+    // not because we skip it.
     ensure_allowlisted(&tokens, flags_for(action))?;
 
+    let slug = match action {
+        Action::Merge { repo, .. }
+        | Action::Comment { repo, .. }
+        | Action::Close { repo, .. }
+        | Action::Checkout { repo, .. } => repo,
+    };
+
     let cwd = std::env::current_dir()?;
-    let args: Vec<OsString> = tokens
-        .into_iter()
-        .map(|token| match token {
-            Token::Flag(flag) => OsString::from(flag),
-            Token::Value(text) => text,
-        })
-        .collect();
+    let mut args: Vec<OsString> = vec![OsString::from("--repo"), OsString::from(slug.as_str())];
+    args.extend(tokens.into_iter().map(|token| match token {
+        Token::Flag(flag) => OsString::from(flag),
+        Token::Value(text) => text,
+    }));
     Ok(gh(binaries, &cwd, args))
 }
 
