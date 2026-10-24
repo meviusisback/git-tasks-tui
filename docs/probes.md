@@ -128,5 +128,7 @@ surfaced it. A compiled example also catches what a review cannot — `let binar
 = Binaries::detect()?;` shadows the module name, so `binaries::resolve("gh")`
 stops resolving; the example needs `gtasks::binaries::resolve`.
 
-Rule: **`no_run` always, `ignore` never.** An example that cannot be made
-compilable is prose — take it out of the code block.
+Rule: **`no_run` always, `ignore` never.** `ignore` does not fail even when the
+symbol it mentions does not exist: it is not a postponed proof, it is an
+absent one. An example that cannot be made compilable is prose — take it out
+of the code block.
