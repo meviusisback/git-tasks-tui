@@ -12,11 +12,13 @@ fn a_symlinked_state_file_is_refused_through_the_public_seam() {
     std::os::unix::fs::symlink(&real, &link).unwrap();
 
     let err = State::load(&link).unwrap_err();
-    let text = format!("{err:#}");
-    assert!(
-        text.contains("symlink") || text.contains("Too many levels"),
-        "the open itself must fail, got: {text}"
-    );
+    // Assert the errno, not the message: ELOOP is what `O_NOFOLLOW` produces and
+    // a message can be reworded without anyone noticing the check went slack.
+    let io = err
+        .root_cause()
+        .downcast_ref::<std::io::Error>()
+        .unwrap_or_else(|| panic!("expected an io error, got: {err:#}"));
+    assert_eq!(io.raw_os_error(), Some(40), "ELOOP: {err:#}");
 }
 
 #[test]
