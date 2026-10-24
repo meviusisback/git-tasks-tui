@@ -109,3 +109,81 @@ fn classify(repo: &str, err: anyhow::Error) -> FetchError {
         source: err,
     }
 }
+
+/// Result of fetching several repos: what arrived, and what did not (with the
+/// reason), so the UI can say `failed=N` instead of hiding a broken repo.
+#[derive(Debug, Default)]
+pub struct FetchOutcome {
+    pub items: Vec<Item>,
+    pub failures: Vec<(String, String)>,
+}
+
+impl FetchOutcome {
+    pub fn failed(&self) -> usize {
+        self.failures.len()
+    }
+}
+
+/// Fetch every repo with at most `parallel` calls in flight. Results are kept
+/// in **repo order** regardless of which call finished first, so the list does
+/// not jump around between refreshes.
+pub fn fetch_many_with<F>(repos: &[String], parallel: usize, fetch: F) -> FetchOutcome
+where
+    F: Fn(&str) -> Result<Vec<Item>, FetchError> + Sync,
+{
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let parallel = parallel.clamp(1, 4).min(repos.len().max(1));
+    let next = AtomicUsize::new(0);
+    let collected: Mutex<Vec<(usize, Result<Vec<Item>, FetchError>)>> = Mutex::new(Vec::new());
+
+    std::thread::scope(|scope| {
+        for _ in 0..parallel {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::SeqCst);
+                    if index >= repos.len() {
+                        break;
+                    }
+                    let outcome = fetch(&repos[index]);
+                    let mut guard = match collected.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    guard.push((index, outcome));
+                }
+            });
+        }
+    });
+
+    let mut collected = match collected.into_inner() {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    collected.sort_by_key(|(index, _)| *index);
+
+    let mut outcome = FetchOutcome::default();
+    for (index, result) in collected {
+        match result {
+            Ok(items) => outcome.items.extend(items),
+            Err(err) => outcome
+                .failures
+                .push((repos[index].clone(), err.to_string())),
+        }
+    }
+    outcome
+}
+
+/// Fetch every repo with the real `gh`.
+pub fn fetch_many(
+    repos: &[String],
+    kind: ItemKind,
+    limit: usize,
+    timeout: Duration,
+    parallel: usize,
+) -> FetchOutcome {
+    fetch_many_with(repos, parallel, |repo| {
+        fetch_one(repo, kind, limit, timeout)
+    })
+}
