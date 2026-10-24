@@ -106,8 +106,10 @@ fn summarise(action: &Action) -> String {
 pub enum Executed {
     /// The process ran to completion, whatever its exit status.
     Finished(ExitStatus),
-    /// The transport refused **before** spawning (allowlist, forbidden flag, …):
-    /// nothing ran, so nothing happened on the remote.
+    /// The caller asked for something the transport will not do — today that is
+    /// a non-absolute program, i.e. a **bug in the caller**, not a policy and not
+    /// the environment. Policy is applied earlier, by `argv_for`, so it does not
+    /// reach this outcome on the typed path.
     Refused(String),
     /// The transport could not start the process at all (missing binary, bad
     /// permissions). Nothing ran, but this is a broken environment, not a policy
@@ -131,9 +133,15 @@ pub fn execute(argv: &CheckedArgv, timeout: Duration) -> Executed {
         Err(err) if err.downcast_ref::<crate::gh::Timeout>().is_some() => {
             Executed::Unknown(err.to_string())
         }
-        // A missing binary or a permission problem is not a policy refusal:
-        // nothing ran, but the cause is the environment, not a rule.
-        Err(err) if err.downcast_ref::<std::io::Error>().is_some() => {
+        // A missing binary, a path that is not a file, or one without the
+        // execute bit are environment failures, not policy refusals: nothing ran,
+        // and the user must not look for a rule that refused nothing (E-1).
+        Err(err)
+            if err.downcast_ref::<std::io::Error>().is_some()
+                || err
+                    .downcast_ref::<crate::binaries::ProgramNotUsable>()
+                    .is_some() =>
+        {
             Executed::SpawnFailed(err.to_string())
         }
         Err(err) => Executed::Refused(err.to_string()),
