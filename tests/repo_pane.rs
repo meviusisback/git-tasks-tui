@@ -86,6 +86,54 @@ fn picking_a_repo_filters_the_list_and_an_empty_one_empties_it() {
 }
 
 #[test]
+fn enter_in_the_repos_pane_drills_into_the_filtered_list() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    app.update(Msg::Key(Key::Down)); // row 1: me/empty
+    app.update(Msg::Key(Key::Down)); // row 2: me/busy
+    assert_eq!(app.visible_items().len(), 1);
+
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(
+        app.pane,
+        gtasks::app::Pane::List,
+        "Enter in the repos pane drills in"
+    );
+    assert_eq!(app.visible_items().len(), 1, "the filter came along");
+    assert_eq!(app.visible_items()[0].repo, "me/busy");
+}
+
+#[test]
+fn esc_in_a_filtered_list_climbs_back_to_the_repos_pane() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, filter live
+    app.update(Msg::Key(Key::Enter)); // drill in
+    assert_eq!(app.pane, gtasks::app::Pane::List);
+
+    app.update(Msg::Key(Key::Esc));
+    assert!(!app.quit, "drilling out is not quitting");
+    assert_eq!(app.pane, gtasks::app::Pane::Repos, "Esc drills out");
+    assert_eq!(
+        app.visible_items().len(),
+        1,
+        "the filter survived the round trip"
+    );
+
+    // Row 0 clears the filter: Esc at the top level does nothing (the shell
+    // rule: Esc climbs and stops, only q quits).
+    app.update(Msg::Key(Key::Up)); // me/empty
+    app.update(Msg::Key(Key::Up)); // row 0: all
+    app.update(Msg::Key(Key::Enter)); // drill in, no filter
+    assert!(app.repo_filter.is_none());
+    app.update(Msg::Key(Key::Esc));
+    assert!(!app.quit, "nothing to climb back to: Esc stays");
+    assert_eq!(app.pane, gtasks::app::Pane::List);
+}
+
+#[test]
 fn acting_on_an_item_uses_that_items_repo_not_the_cursor() {
     // The cursor sits on the "all" row (index 0), whose text is not a repo slug:
     // if the action took its repo from the cursor, this could never work.

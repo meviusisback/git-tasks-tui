@@ -442,6 +442,10 @@ impl App {
             // error here instead of silently inheriting an exit.
             Key::Esc => match self.pane {
                 Pane::Detail => self.pane = Pane::List,
+                // Drilled in (a repo filter is active): back to the repos
+                // pane, keeping the filter — the cursor did not move, so
+                // coming back shows the same list.
+                Pane::List if self.repo_filter.is_some() => self.pane = Pane::Repos,
                 Pane::List | Pane::Repos => {}
             },
             Key::Char('q') => self.quit = true,
@@ -462,6 +466,12 @@ impl App {
             Key::Down => self.move_cursor(1),
             Key::Backspace => {}
             Key::Char(_) => {}
+            // In the repos pane Enter drills in: the filter is already live
+            // (it follows the cursor), so reaching the list shows the repo's
+            // items. Anywhere else Enter opens the detail box.
+            Key::Enter if self.pane == Pane::Repos => {
+                self.pane = Pane::List;
+            }
             Key::Enter => self.request_detail(),
             // Handled at the top; repeated here because the match must be total.
             Key::CtrlC => {}
