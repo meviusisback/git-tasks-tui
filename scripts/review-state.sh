@@ -15,7 +15,9 @@ printf 'remote main  : %s\n' "$main"
 printf 'newest row   : %s\n' "${sha:-<none>}"
 
 if [ -n "${sha:-}" ] && git cat-file -e "$sha^{commit}" 2>/dev/null; then
-    ahead=$(git rev-list --count "$sha..origin/main" 2>/dev/null || echo '?')
+    # Docs commits only carry the ledger row itself: they must not count as
+    # "unreviewed code".
+    ahead=$(git rev-list --count "$sha..origin/main" -- . ':(exclude)docs' 2>/dev/null || echo '?')
     printf 'commits since: %s\n' "$ahead"
     if [ "$ahead" = "0" ]; then
         printf 'status       : in sync — review this tree\n'
