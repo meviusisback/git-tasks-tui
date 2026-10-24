@@ -237,13 +237,9 @@ fn coming_next_keys_produce_no_screen_change() {
     // The auditor's proof: every key in the overlay's "coming in the next
     // stages" section must be a no-op today. When a later stage binds one
     // of them, this test fails — the overlay section must shrink then, not
-    // keep promising what the screen already does.
-    for key in [
-        Key::Char('R'),
-        Key::Char('m'),
-        Key::Char('w'),
-        Key::Char('s'),
-    ] {
+    // keep promising what the screen already does. (`R` left this list the
+    // day the repo menu landed.)
+    for key in [Key::Char('m'), Key::Char('w'), Key::Char('s')] {
         let (mut app, view) = sample();
         let before = render(&app, &view);
         app.update(Msg::Key(key));
