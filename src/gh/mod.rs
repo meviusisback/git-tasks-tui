@@ -71,7 +71,6 @@ impl Argv {
 /// match only: `--force-with-lease` and friends stay legal.
 const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto", "-f"];
 
-
 /// Exposed so a test can assert that no action list contains a forbidden flag.
 pub fn is_forbidden_flag(flag: &str) -> bool {
     FORBIDDEN.contains(&flag)

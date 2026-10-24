@@ -145,3 +145,35 @@ fn the_cap_does_not_split_a_utf8_sequence() {
         "no replacement character may appear"
     );
 }
+
+/// The *size* of the tail matters, not just its existence: a `github_pat_` with a
+/// long body is ~200 bytes, so a 128-byte tail would still cut it in half.
+/// Verified by mutation: `MAX_SECRET_TAIL = 128` makes this fail.
+#[test]
+fn the_tail_is_long_enough_for_the_longest_credential() {
+    const CAP: usize = 64 * 1024;
+    let body: String = std::iter::repeat_n('A', 200).collect();
+    let token = format!("github_pat_{body}");
+
+    let mut sink: Vec<u8> = Vec::new();
+    {
+        let mut writer = SanitisingWriter::new(&mut sink);
+        writer.write_all(&vec![b'a'; CAP - 1]).unwrap();
+        writer.write_all(token.as_bytes()).unwrap();
+        writer.write_all(b"\n").unwrap();
+        writer.flush().unwrap();
+    }
+    let written = String::from_utf8(sink).unwrap();
+
+    // Not "the body is absent" but "no fragment of it survives": with a tail
+    // shorter than the token, the redactor sees the prefix, redacts up to the
+    // cut, and the rest of the body lands in the log — which the weaker
+    // assertion above would not notice.
+    let fragment: String = std::iter::repeat_n('A', 64).collect();
+    assert!(
+        !written.contains(&fragment),
+        "no fragment of the token may survive: …{}",
+        &written[written.len().saturating_sub(80)..]
+    );
+    assert!(written.contains("[REDACTED]"), "got a redaction");
+}
