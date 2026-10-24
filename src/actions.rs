@@ -19,9 +19,13 @@ const ALLOWED_HOSTS: &[&str] = &["github.com", "www.github.com"];
 /// control characters.
 pub fn validate_url(url: &str) -> anyhow::Result<&str> {
     anyhow::ensure!(!url.is_empty(), "empty url");
+    // `is_control()` only covers Cc: the line/paragraph separators and the
+    // zero-width no-break space are `Cf` and would slip through (U-1). Keep this
+    // list identical to `sanitize::strip_controls`.
     anyhow::ensure!(
-        !url.chars().any(|c| c.is_control() || c == ' '),
-        "url contains control or space characters"
+        !url.chars()
+            .any(|c| c.is_control() || c == ' ' || matches!(c as u32, 0x2028 | 0x2029 | 0xFEFF)),
+        "url contains control, separator or space characters"
     );
     let rest = url
         .strip_prefix("https://")
@@ -112,6 +116,17 @@ mod tests {
             "https://github.com:8443/o/r",
         ] {
             assert!(validate_url(url).is_err(), "{url} must be refused");
+        }
+    }
+
+    #[test]
+    fn unicode_separators_are_refused_too() {
+        for url in [
+            "https://github.com/o/r\u{2028}",
+            "https://github.com/o/r\u{2029}",
+            "https://github.com/o/r\u{feff}",
+        ] {
+            assert!(validate_url(url).is_err(), "{url:?} must be refused");
         }
     }
 
