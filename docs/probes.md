@@ -106,3 +106,27 @@ The first version of this check used `case "$remote_tags" in *"refs/tags/$tag"`;
 on a multi-line string that pattern only ever looks at the end, so a commit with
 one published and one unpublished tag was refused. The case that was *supposed*
 to pass found it, not the one supposed to fail.
+
+## Doctests: `no_run`, never `ignore`
+
+`no_run` compiles the example and skips executing it; `ignore` skips *compiling*
+too, so the example can rot for months and nothing says so. Measured here:
+`src/gh/mod.rs` carried a ```ignore``` block calling `gh(cwd, &args)` — three
+arguments, by reference — while the real signature is
+`gh(&Binaries, &Path, Vec<OsString>)`: two shapes that cannot both be true.
+
+Switching the same block to `no_run` produced, in order:
+
+```
+ignore   → 0 errors (never compiled)
+no_run   → E0425: `cwd`, `args`, `gh`, `binaries` not in scope
++ preamble → E0061: "takes 3 arguments but 2 were supplied"
+```
+
+The third line is the finding: the defect existed and only compiling the example
+surfaced it. A compiled example also catches what a review cannot — `let binaries
+= Binaries::detect()?;` shadows the module name, so `binaries::resolve("gh")`
+stops resolving; the example needs `gtasks::binaries::resolve`.
+
+Rule: **`no_run` always, `ignore` never.** An example that cannot be made
+compilable is prose — take it out of the code block.
