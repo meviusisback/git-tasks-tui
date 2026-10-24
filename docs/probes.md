@@ -61,3 +61,48 @@ than hidden — and it is why probe 2 counts **processes** instead of asserting 
    so it is a second scenario in the same script, not a second script.
 # z
 # z
+
+## The docs-only exemption in `pre-push`: the matrix
+
+The guard refuses a push to `main` that carries no `review/*` tag, with one
+exemption: a push whose changes are all under `docs/`. "Docs-only" means **not
+compiled** — not "not executable by a person". Nothing builds or CI-invokes
+`docs/` (no `build.rs`, and `Cargo.toml` has zero references to it), which is the
+property that makes the exemption safe. If that ever changes, the prefix must grow
+to cover the invoking path too.
+
+Measured adversarially — nine cases, no findings:
+
+| case | expected | measured |
+|---|---|---|
+| `docs/` only | exempt | `rc=0` · "touches docs/ only — no review tag needed" |
+| `docs/` + code in one push | strict | `rc=1` |
+| path `src/docs/x.rs` (prefix is anchored `^docs/`) | strict | `rc=1` |
+| deleting a code file | strict | `rc=1` |
+| executable script created under `docs/` | exempt | `rc=0` (informed acceptance: see above) |
+| rename inside `docs/` | exempt | `rc=0` |
+| filename containing a **newline** under `docs/` | strict | `rc=1` |
+| pushing a change to `.githooks/pre-push` itself | strict | `rc=1` — an exemption covering the guard would be a door that opens from inside |
+| new branch (zero remote sha) | strict | `rc=1` |
+
+To reproduce: in a scratch clone, make each change and run
+`git push origin HEAD:main` with no `review/*` tag on the tip, then read the exit
+code. The newline case holds in both `core.quotePath` settings: with quoting on,
+git prints the path in quotes, so it does not start with `docs/`; with quoting
+off, the second line (`README.md`) does not match anyway.
+
+### A published tag is not a local tag (H-4)
+
+`git tag --points-at` sees this clone only, so a tag that never left the machine
+used to be enough. The hook now asks the remote when it answers:
+
+| case | measured |
+|---|---|
+| local tag, remote reachable, tag not pushed | `rc=1` · "the remote has no such tag" · "push the tag first" |
+| same commit after `git push origin <tag>` | `rc=0` · "the tag is published" |
+| remote unreachable | `rc=0` with the warning "the tag was not verified against it" — failing **open**, loudly |
+
+The first version of this check used `case "$remote_tags" in *"refs/tags/$tag"`;
+on a multi-line string that pattern only ever looks at the end, so a commit with
+one published and one unpublished tag was refused. The case that was *supposed*
+to pass found it, not the one supposed to fail.

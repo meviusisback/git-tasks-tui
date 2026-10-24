@@ -25,6 +25,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # file → strict; a newline in the filename → strict (git quotes it, so it
     # does not start with docs/); modifying .githooks/pre-push itself → strict.
     # An exemption that covered the guard would be a door that opens from inside.
+    #
+    # Reproduce (the measurement, not the claim): in a scratch clone, make each
+    # change below and `git push origin HEAD:main` with no review tag on the tip.
+    # Expected rc: docs/ only → 0; docs/ + code → 1; src/docs/x.rs → 1; deleting a
+    # code file → 1; a filename containing a newline → 1; modifying this file → 1;
+    # a new branch (zero remote sha) → 1. Full matrix: docs/probes.md.
     docs_only=no
     case "$remote_sha" in
         0000000000000000000000000000000000000000) ;;
