@@ -243,22 +243,23 @@ impl App {
                 query = sanitize(&self.query)
             );
         }
-        let mut line = if self.pane == Pane::Detail {
-            String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
-            )
+        // One line of key hints. The status is rendered in its own panel
+        // (`status_text`), so it cannot be pushed off the right edge here.
+        String::from("q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions")
+    }
+
+    /// The status message, rendered in its own panel.
+    ///
+    /// It must NOT be a suffix of `legend()`: that string goes into a single
+    /// row, so a long legend pushes the status past the right edge and the
+    /// message disappears at 80–100 columns — exactly where "nothing selected"
+    /// and, later, "it may have been applied" have to be readable.
+    pub fn status_text(&self) -> Option<String> {
+        if self.status.is_empty() {
+            None
         } else {
-            // Nothing to close: say so, right after the recovery keys, so
-            // the note survives truncation at narrow widths.
-            String::from(
-                "q quit · ? help · Esc — nothing to close · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
-            )
-        };
-        if !self.status.is_empty() {
-            line.push_str(" │ ");
-            line.push_str(&sanitize(&self.status));
+            Some(sanitize(&self.status))
         }
-        line
     }
 
     /// Ask the loop to open the selected item, after checking its URL (S10).
@@ -442,7 +443,11 @@ impl App {
             // error here instead of silently inheriting an exit.
             Key::Esc => match self.pane {
                 Pane::Detail => self.pane = Pane::List,
-                Pane::List | Pane::Repos => {}
+                Pane::List | Pane::Repos => {
+                    // Nothing to close: say it as a status. In the legend it was
+                    // 24 characters that pushed every real message off the edge.
+                    self.status = "Esc — nothing to close".to_string();
+                }
             },
             Key::Char('q') => self.quit = true,
             Key::Char('?') => self.show_help = true,

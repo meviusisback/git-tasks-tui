@@ -68,7 +68,21 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     frame.render_stateful_widget(list, columns[0], &mut list_state);
 
     frame.render_widget(detail(app, view, columns[1].width), columns[1]);
-    frame.render_widget(legend(app), rows[1]);
+
+    // Two panels, so the status cannot be pushed off the right edge by the
+    // legend. The legend keeps the left side and truncates there: the recovery
+    // keys (`q`, `?`) are first, so what is lost is the least important part.
+    match app.status_text() {
+        Some(status) => {
+            let bottom = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+                .split(rows[1]);
+            frame.render_widget(legend(app), bottom[0]);
+            frame.render_widget(status_line(&status), bottom[1]);
+        }
+        None => frame.render_widget(legend(app), rows[1]),
+    }
 
     if app.show_help {
         draw_help(frame, frame.area());
@@ -198,6 +212,12 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
 
 fn legend(app: &App) -> Paragraph<'static> {
     Paragraph::new(sanitize(app.legend().as_str())).style(theme::legend())
+}
+
+fn status_line(status: &str) -> Paragraph<'static> {
+    // A visible separator: without it the truncated legend runs into the
+    // status ("nothing to clonothing selected").
+    Paragraph::new(format!("│ {status}")).style(theme::status())
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

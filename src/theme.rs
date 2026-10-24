@@ -54,6 +54,11 @@ pub fn legend() -> Style {
     Style::default().fg(SUBTEXT)
 }
 
+/// The status panel: brighter than the legend, because it is the app talking.
+pub fn status() -> Style {
+    Style::default().fg(TEXT)
+}
+
 /// Help overlay frame.
 pub fn overlay() -> Style {
     Style::default().fg(WARN)

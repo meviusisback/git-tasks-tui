@@ -9,13 +9,17 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 
 fn render(app: &App, view: &ViewModel) -> String {
-    let backend = TestBackend::new(80, 12);
+    render_sized(app, view, 80, 12)
+}
+
+fn render_sized(app: &App, view: &ViewModel, w: u16, h: u16) -> String {
+    let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| draw(frame, app, view)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let mut out = String::new();
-    for y in 0..12 {
-        for x in 0..80 {
+    for y in 0..h {
+        for x in 0..w {
             out.push_str(buffer[(x, y)].symbol());
         }
         out.push('\n');
@@ -208,10 +212,15 @@ fn recovery_keys_survive_narrow_widths() {
         assert!(screen.contains("q quit"), "{w}x{h}: q visible: {screen}");
         assert!(screen.contains("? help"), "{w}x{h}: ? visible: {screen}");
     }
-    let wide = render_narrow(100, 24);
+    // The note is no longer in the legend (S-6a: 24 characters there pushed
+    // every status message off the edge below ~110 columns). It appears as a
+    // status when Esc has nothing to close.
+    let (mut app, view) = sample();
+    app.update(Msg::Key(Key::Esc));
+    let wide = render_sized(&app, &view, 100, 24);
     assert!(
         wide.contains("Esc — nothing to close"),
-        "full width: the Esc note is in the legend: {wide}"
+        "full width: the Esc note is in the status panel: {wide}"
     );
 }
 
@@ -265,4 +274,19 @@ fn no_colour_literal_outside_the_theme_module() {
     );
     // The token itself resolves to the Mocha base colour.
     assert_eq!(theme::BASE, Color::Rgb(0x1e, 0x1e, 0x2e));
+}
+
+#[test]
+fn the_status_is_visible_at_eighty_columns() {
+    // S-6a: the status used to be a suffix of the legend string, rendered into
+    // one row: at 80 columns it fell past the right edge, so every honest
+    // message of the app ("nothing selected", "it may have been applied") was
+    // invisible on an ordinary terminal. It has its own panel now.
+    let (mut app, view) = sample();
+    app.update(Msg::Key(Key::Char('a')));
+    let screen = render_sized(&app, &view, 80, 24);
+    assert!(
+        screen.contains("nothing selected"),
+        "the status must be readable at 80 columns: {screen}"
+    );
 }
