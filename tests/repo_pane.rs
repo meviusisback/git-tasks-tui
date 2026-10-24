@@ -134,6 +134,36 @@ fn esc_in_a_filtered_list_climbs_back_to_the_repos_pane() {
 }
 
 #[test]
+fn status_says_where_you_are() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab)); // repos pane
+    app.update(Msg::Key(Key::Down)); // row 1: me/empty
+    assert_eq!(app.status, "0 items in me/empty");
+    app.update(Msg::Key(Key::Up)); // row 0: all
+    assert_eq!(app.status, "— all repos — · 1 items");
+}
+
+#[test]
+fn legend_follows_the_drill_mode() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab)); // repos pane
+    let repos_legend = app.legend();
+    assert!(repos_legend.contains("Enter drill in"), "{repos_legend}");
+    assert!(repos_legend.contains("nothing to close"), "{repos_legend}");
+    assert!(!repos_legend.contains("Esc back"), "{repos_legend}");
+
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, filter live
+    app.update(Msg::Key(Key::Enter)); // drill in
+    let drilled_legend = app.legend();
+    assert!(drilled_legend.contains("Esc back"), "{drilled_legend}");
+    assert!(
+        !drilled_legend.contains("nothing to close"),
+        "{drilled_legend}"
+    );
+}
+
+#[test]
 fn acting_on_an_item_uses_that_items_repo_not_the_cursor() {
     // The cursor sits on the "all" row (index 0), whose text is not a repo slug:
     // if the action took its repo from the cursor, this could never work.

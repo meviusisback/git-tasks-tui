@@ -207,7 +207,7 @@ impl App {
         let shown = self.visible_items().len();
         self.status = match &self.repo_filter {
             Some(repo) => format!("{shown} items in {repo}"),
-            None => format!("{shown} items in all repos"),
+            None => format!("— all repos — · {shown} items"),
         };
     }
 
@@ -243,15 +243,24 @@ impl App {
                 query = sanitize(&self.query)
             );
         }
+        // The legend names what the keys do *here*: the repos pane drills
+        // in, a filtered list drills back out, anywhere else Esc has
+        // nothing to close.
         let mut line = if self.pane == Pane::Detail {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
-        } else {
+        } else if self.pane == Pane::Repos {
+            String::from("q quit · ? help · Enter drill in · ↑/↓ move · Esc — nothing to close")
+        } else if self.repo_filter.is_none() {
             // Nothing to close: say so, right after the recovery keys, so
             // the note survives truncation at narrow widths.
             String::from(
                 "q quit · ? help · Esc — nothing to close · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+            )
+        } else {
+            String::from(
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
         };
         if !self.status.is_empty() {
