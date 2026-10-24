@@ -125,8 +125,28 @@ ctl_dotgit_file() {
   info "so clone validation must compare the git dir, not the toplevel"
 }
 
+ctl_spawn_detector() {
+  group "CTL S-SPAWN — the spawn-sites detector bites both ways, with no binary"
+  local d; d=$(new_dir); trap 'rm -rf "'\"$d\"'"' RETURN
+  mkdir -p "$d/src"
+  printf 'fn f() { Command::new("x"); }\n' >"$d/src/a.rs"
+  printf 'fn g() {}\n' >"$d/src/b.rs"
+  local out
+  if out=$(check_spawn_sites "$d" 2>&1); then
+    fail "the detector passed with an undeclared site" "$out"
+  else
+    pass "the detector fails on an undeclared site"
+  fi
+  if out=$(SPAWN_SITES_ALLOWED='src/a.rs|fixture' check_spawn_sites "$d" 2>&1); then
+    pass "the detector passes with the site declared"
+  else
+    fail "the detector failed with the site declared" "$out"
+  fi
+}
+
 main() {
   have git || { echo "git required" >&2; exit 2; }
+  ctl_spawn_detector
   ctl_worktree_symlink_in_clone
   ctl_outside_root_symlink
   ctl_chmod_follows_symlink
