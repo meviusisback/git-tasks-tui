@@ -70,7 +70,9 @@ fn search_mode_shows_the_typed_query() {
 #[test]
 fn untrusted_text_is_sanitised_before_display() {
     let (app, mut view) = sample();
-    view.items[0] = "evil\u{1b}[31m title\u{202e}".into();
+    // The same bytes the model probe uses: an OSC-52 clipboard write and a
+    // right-to-left override.
+    view.items[0] = "evil\u{1b}]52;c;Zm9v\u{07} title\u{202e}".into();
     let screen = render(&app, &view);
     assert!(
         !screen.contains('\u{1b}'),
@@ -81,8 +83,8 @@ fn untrusted_text_is_sanitised_before_display() {
         "bidi override must never reach it"
     );
     assert!(
-        screen.contains("evil[31m title"),
-        "the text itself survives"
+        screen.contains("evil]52;c;Zm9v title"),
+        "the visible text survives; the escape and the bidi override do not: {screen}"
     );
 }
 

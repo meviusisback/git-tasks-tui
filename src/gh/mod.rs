@@ -95,6 +95,18 @@ pub fn check_argv(argv: &Argv) -> anyhow::Result<()> {
             !FORBIDDEN.contains(&flag),
             "refusing forbidden flag {text:?}"
         );
+        // A short-flag cluster such as `-fd` hides `-f` and `-d`: decompose it.
+        if let Some(cluster) = flag.strip_prefix('-') {
+            if !cluster.starts_with('-') {
+                for short in cluster.chars() {
+                    let spelling = format!("-{short}");
+                    anyhow::ensure!(
+                        !FORBIDDEN.contains(&spelling.as_str()),
+                        "refusing forbidden flag {spelling:?} inside {text:?}"
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }

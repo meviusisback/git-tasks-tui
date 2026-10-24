@@ -64,3 +64,23 @@ fn a_similar_flag_stays_legal() {
     let output = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap();
     assert!(output.status.success());
 }
+
+#[test]
+fn a_short_flag_cluster_is_decomposed() {
+    // `-fd` hides `-f` and `-d`: a per-element match would let it through.
+    for cluster in ["-fd", "-df", "-af"] {
+        let argv = argv(PathBuf::from("/bin/echo"), vec![OsString::from(cluster)]);
+        let err = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("forbidden flag"),
+            "{cluster} must be refused: {err:#}"
+        );
+    }
+}
+
+#[test]
+fn a_harmless_cluster_stays_legal() {
+    let argv = argv(PathBuf::from("/bin/echo"), vec![OsString::from("-n")]);
+    let out = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap();
+    assert!(out.status.success());
+}
