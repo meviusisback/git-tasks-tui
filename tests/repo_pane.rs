@@ -156,8 +156,23 @@ fn legend_follows_the_drill_mode() {
     app.update(Msg::Key(Key::Tab)); // repos pane
     let repos_legend = app.legend();
     assert!(repos_legend.contains("Enter drill in"), "{repos_legend}");
-    assert!(repos_legend.contains("nothing to close"), "{repos_legend}");
     assert!(!repos_legend.contains("Esc back"), "{repos_legend}");
+    // A real status wins over the note: the note only fills an empty side.
+    assert!(
+        repos_legend.contains("1 items from 2 repos"),
+        "{repos_legend}"
+    );
+
+    // Empty status: the note says Esc closes nothing here.
+    let bare = App {
+        pane: gtasks::app::Pane::Repos,
+        ..App::default()
+    };
+    assert!(
+        bare.legend().contains("nothing to close"),
+        "{}",
+        bare.legend()
+    );
 
     app.update(Msg::Key(Key::Down));
     app.update(Msg::Key(Key::Down)); // me/busy, filter live

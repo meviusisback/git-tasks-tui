@@ -264,31 +264,43 @@ impl App {
                 query = sanitize(&self.query)
             );
         }
-        // The legend names what the keys do *here*: the repos pane drills
-        // in, a filtered list drills back out, anywhere else Esc has
-        // nothing to close.
+        // The legend names what the keys do *here*; the status side says
+        // where you are — or, when Esc would close nothing, says so. The
+        // note is status, not legend: the legend row stays short, so real
+        // messages survive at 80 columns.
         let mut line = if self.pane == Pane::Detail {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
         } else if self.pane == Pane::Repos {
-            String::from("q quit · ? help · Enter drill in · ↑/↓ move · Esc — nothing to close")
-        } else if self.repo_filter == RepoFilter::All {
-            // Nothing to close: say so, right after the recovery keys, so
-            // the note survives truncation at narrow widths.
-            String::from(
-                "q quit · ? help · Esc — nothing to close · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
-            )
-        } else {
+            String::from("q quit · ? help · Enter drill in · ↑/↓ move")
+        } else if matches!(self.repo_filter, RepoFilter::One(_)) {
             String::from(
                 "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
+        } else {
+            String::from(
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+            )
         };
         if !self.status.is_empty() {
-            line.push_str(" │ ");
-            line.push_str(&sanitize(&self.status));
+            // The message leads: at 80 columns the tail is cut, so the
+            // honest sentence goes first and the key hints truncate.
+            line = format!("{} │ {line}", sanitize(&self.status));
+        } else if self.nothing_to_close() {
+            line.push_str(" │ Esc — nothing to close");
         }
         line
+    }
+
+    /// Esc closes nothing here: no modal, no search, and a pane it cannot
+    /// leave (a filter would be left by `Esc back`, a detail by going back
+    /// to the list). The caller shows the note on the status side.
+    fn nothing_to_close(&self) -> bool {
+        self.modal.is_none()
+            && !self.searching
+            && !matches!(self.pane, Pane::Detail)
+            && matches!(self.repo_filter, RepoFilter::All)
     }
 
     /// Ask the loop to open the selected item, after checking its URL (S10).
