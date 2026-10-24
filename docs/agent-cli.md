@@ -75,3 +75,33 @@ See S11/S15.
 - `agent_seed_file_0600_and_unlinked`
 - a **PTY test** `agent_stays_interactive_after_first_turn`: spawn with a PTY, write the seed file,
   assert the process is still alive after the first turn, and that the seed file is gone after exit.
+
+## Task 1 spike evidence (2026-10-24, Hermes v0.22.5, profile `coder`)
+
+Seed file `/tmp/gtasks-spike-seed.txt` (one line, then deleted after the run):
+
+```text
+Reply with exactly: SPIKE-SEED-OK and nothing else. (Task 1 TTY spike; no tools needed.)
+```
+
+Exact command (regular file — never `-`, per C1; `script(1)` provides the TTY):
+
+```sh
+timeout 100 script -qec "hermes -p coder chat --query-file /tmp/gtasks-spike-seed.txt --in /tmp --ignore-rules" /dev/null < /dev/null
+```
+
+Observed:
+
+- Exit `124` (timeout): the process did **not** exit on its own — it seeded an
+  interactive session and waited for input.
+- The log shows the interactive banner plus the `coder ❯` prompt; the seed was
+  submitted literally as the first turn (visible in-progress as
+  `…Reply with exactly: SPIKE-SEED-OK…`) and the agent started working on it.
+  (Timeout fired mid-first-turn, so the final reply text was not observed —
+  irrelevant to the seeding question.)
+- After the kill: `Session terminated, killing shell... killed.` and `ps`
+  shows no stray `hermes chat` processes — the SIGHUP path restores cleanly.
+
+Conclusion: `--query-file <regular-file>` on a TTY seeds an interactive
+session (same semantics as `-q`), so the launch line above is correct for
+Task 11a/11b. The automated PTY test stays as specified.
