@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use gtasks::binaries::Binaries;
-use gtasks::gh::{Argv, Caps, Timeout, gh, git, run_pipe, run_pipe_with_caps};
+use gtasks::gh::{Argv, Caps, Timeout, check_argv, gh, git, run_pipe, run_pipe_with_caps};
 
 /// Builders take the resolved binaries; tests hand them explicit paths, so no
 /// test ever repairs `argv.program` after the fact.
@@ -75,21 +75,22 @@ fn argv_never_shell_metachars() {
     );
 }
 
-/// S9: `--admin`, `--force` and `--auto` can never be constructed — the
-/// builders panic on the exact element, for `gh` and `git` alike.
+/// S9: `--admin`, `--force` and `--auto` can never reach the spawn: the
+/// builders compose without panicking, and the transport refuses the argv.
 #[test]
-fn argv_forbids_admin_force_auto() {
+fn forbidden_flags_die_at_the_transport_not_in_the_builder() {
     let binaries = bins(PathBuf::from("/bin/true"), PathBuf::from("/bin/true"));
     for flag in ["--admin", "--force", "--auto"] {
         for (tool, make) in [
             ("gh", gh as fn(&Binaries, &Path, Vec<OsString>) -> Argv),
             ("git", git as fn(&Binaries, &Path, Vec<OsString>) -> Argv),
         ] {
-            let caught =
-                std::panic::catch_unwind(|| make(&binaries, Path::new("/tmp"), args(&["x", flag])));
+            // No panic: a public builder must not abort the process.
+            let built = make(&binaries, Path::new("/tmp"), args(&["x", flag]));
+            let err = check_argv(&built).unwrap_err().to_string();
             assert!(
-                caught.is_err(),
-                "{tool} must panic on forbidden flag {flag}"
+                err.contains("forbidden flag"),
+                "{tool} must be refused by the transport on {flag}: {err}"
             );
         }
     }
