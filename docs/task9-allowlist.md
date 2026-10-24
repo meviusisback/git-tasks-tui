@@ -120,3 +120,20 @@ the guarantee must not depend on it.
   caller, which reintroduces exactly the hole `Span::plain` had.
 - Don't rely on `gh` rejecting a flag. `gh pr merge -a` fails today, but the day it becomes an alias
   for `--auto` the argv is already built and valid.
+
+## A type constrains only if its constructor is the only door
+
+`Branch(String)` with a `pub` field can be built as `Branch("-dfdf")`: the typed positional becomes a
+string again, and `a_positional_cannot_be_a_flag` passes while the real code builds the branch by hand.
+The invariant must live in the constructor, not at the call site:
+
+```rust
+pub struct Branch(String);                 // private field
+impl Branch {
+    pub fn parse(s: &str) -> anyhow::Result<Self> { /* check-ref-format + charset rules */ }
+}
+```
+
+Same lesson as `Span::plain` and the "permissions" field we refused to put in `Argv`: if the type has a
+public field, the check is a convention that the next caller can skip.
+
