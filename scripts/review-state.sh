@@ -81,7 +81,7 @@ if [ -n "$pass_sha" ] && git cat-file -e "$pass_sha^{commit}" 2>/dev/null; then
     if [ -n "$ks_status" ]; then
         printf 'key-symbol     : %s %s "%s" -> %s\n' \
             "$ks_file" "$ks_verb" "$ks_text" \
-            "$([ "$ks_status" = ok ] && echo present || echo MISSING)"
+            "$([ "$ks_status" = ok ] && echo held || echo VIOLATED)"
     fi
     if [ "$ks_status" = missing ]; then
         printf 'status         : the newest PASS does not hold on this tree — its key-symbol is missing\n'
