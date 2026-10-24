@@ -6,6 +6,7 @@
 > **Rev 4.3** — Task 1b merged to `main` (linear cherry-pick; CI action SHAs corrected). Review r4 measured **G-2** (a `0600` seed in an attacker-writable dir is swappable → instruction injection) and folded it into S8/S14 + Task 11a, together with G-3 (dash negative control) and G-4 (PTY child leak). `portable-pty` stays: the duplicate gate is dev-aware.
 > **Rev 4.4** — r5b matrix PASS. **R5-1**: rotation is startup-only, so S14 now says exactly that and Task 5 owns in-session rotation. Task 2 carries the three harness API hooks verbatim (inspectable `Argv`+`env`, pure `resolve`, single `git` composition point).
 > **Rev 4.5** — logged L1/L2/L3 merged (`c50ada8`: rotation tests, `try_init`, `..` pre-scan) and **Task 11a-seed merged** (`f3669d2`: `SeedFile`, `ensure_runtime_dir` → `logging::ensure_state_dir`, C1 interactive + dash negative tests, harness vendored in CI). Task 2 API (`f969fa0`) is in review.
+> **Rev 4.6** — P2 fixed (`3584d3c`: the init guard runs before any fs work, so a refused second init cannot rotate the live log) and **Task 3 merged** (`c97b316`: serde models + pure filter/sort/group, 8 tests, no panic on malformed JSON).
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -133,7 +134,8 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 **Tests:** `argv_never_shell_metachars`, `argv_forbids_admin_force_auto`, `binaries_are_absolute_and_not_group_writable`, `child_env_has_no_git_vars`, `hung_gh_kills_process_group`, `stderr_flood_capped`, `huge_json_capped_before_parse`, `both_pipes_drained_no_deadlock`, **harness B** (`git_config_count_is_stripped` + control, `git_dir_does_not_hijack_c_flag` + control, `agent_env_has_no_gh_token`, `gh_env_knobs_present`).
 **Verify:** `cargo test gh_args gh_process env_harness`.
 
-### Task 3 — Models + pure list fns
+### Task 3 — Models + pure list fns — DONE (`c97b316`)
+**Delivered:** `src/model.rs` (serde types with defaults; `repo`/`kind` filled by the fetcher because `gh` does not carry them), `parse_list` returning `Err` on malformed JSON (no panic), `matches`/`filter_items` (case-insensitive over number, title, author, labels), `sort_items` (updated/created/number, asc/desc), `group_by_repo` (first-seen order). Eight tests with inline fixtures — no `gh` needed.
 **Files:** `src/model.rs`, `tests/fixtures/*.json`, `tests/parse.rs`.
 **Work:** serde types + `filter_items`/`sort_items`/`group_by_repo`.
 **Tests:** fixtures; invalid types error, no panic; truth tables.
