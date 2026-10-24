@@ -1,0 +1,56 @@
+//! S2 — absolute, verified binaries.
+//!
+//! Callers resolve a bare tool name once (`resolve`) and hand the absolute
+//! path to `Argv`; nothing is ever looked up at spawn time. Every candidate
+//! is canonicalised (symlinks resolved) and must be a regular executable
+//! file owned by root or by our own uid, with no group/world write bits.
+
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, ensure};
+
+/// Resolve a bare tool name against `PATH` (production entry point).
+pub fn resolve(name: &str) -> anyhow::Result<PathBuf> {
+    let owned: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    let dirs: Vec<&Path> = owned.iter().map(PathBuf::as_path).collect();
+    resolve_in(name, &dirs)
+}
+
+/// Resolve a bare tool name against explicit `dirs` (testable core: no
+/// environment access, so tests never mutate `PATH`).
+pub fn resolve_in(name: &str, dirs: &[&Path]) -> anyhow::Result<PathBuf> {
+    ensure!(!name.is_empty(), "binary name must not be empty");
+    ensure!(
+        !name.contains('/'),
+        "binary name must be bare, got {name:?}"
+    );
+    for dir in dirs {
+        if let Ok(path) = check(&dir.join(name)) {
+            return Ok(path);
+        }
+    }
+    anyhow::bail!("no verified binary {name:?} in {} search dirs", dirs.len())
+}
+
+/// Canonicalise and verify a single candidate path.
+fn check(path: &Path) -> anyhow::Result<PathBuf> {
+    let abs = std::fs::canonicalize(path)
+        .with_context(|| format!("cannot resolve {}", path.display()))?;
+    let meta = std::fs::metadata(&abs).with_context(|| format!("cannot stat {}", abs.display()))?;
+    ensure!(meta.is_file(), "not a regular file: {}", abs.display());
+    let mode = meta.permissions().mode();
+    ensure!(mode & 0o111 != 0, "not executable: {}", abs.display());
+    ensure!(mode & 0o022 == 0, "group/world writable: {}", abs.display());
+    let uid = meta.uid();
+    // SAFETY: geteuid has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    ensure!(
+        uid == 0 || uid == euid,
+        "owner is neither root nor us: {}",
+        abs.display()
+    );
+    Ok(abs)
+}
