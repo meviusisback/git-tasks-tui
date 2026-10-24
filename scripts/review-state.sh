@@ -51,23 +51,34 @@ pass_sha=$(printf '%s' "$last_pass" | cut -d'|' -f2)
 # the row to be true: `key-symbol: path contains "text"`. A merge that was
 # declared but never executed leaves no red test — it leaves a missing symbol,
 # and that is checkable by machine.
-key_symbol=$(printf '%s' "$last_pass_row" \
-    | sed -n 's/.*key-symbol: *\([^ ]*\) *\(contains\|absent\) *"\([^"]*\)".*/\1|\2|\3/p')
+key_symbol=$(printf '%s' "$last_pass_row" | grep -o 'key-symbol: [^|]*' | head -1 \
+    | sed 's/^key-symbol: *//')
 ks_status=''
 if [ -n "$key_symbol" ]; then
-    ks_file=$(printf '%s' "$key_symbol" | cut -d'|' -f1)
-    ks_verb=$(printf '%s' "$key_symbol" | cut -d'|' -f2)
-    ks_text=$(printf '%s' "$key_symbol" | cut -d'|' -f3)
-    if git show "origin/main:$ks_file" 2>/dev/null | grep -qF -- "$ks_text"; then
+    # K-2: the separator is ` contains ` / ` absent `, so a path may contain
+    # spaces, and the first occurrence in the row is the one that counts.
+    case "$key_symbol" in
+        *" contains "*) ks_file=${key_symbol%% contains *}; ks_verb=contains; ks_text=${key_symbol#* contains } ;;
+        *" absent "*)   ks_file=${key_symbol%% absent *};   ks_verb=absent;   ks_text=${key_symbol#* absent } ;;
+        *) ks_file='' ;;
+    esac
+    ks_text=$(printf '%s' "$ks_text" | sed 's/^"//; s/" *$//')
+    # K-1: a file that does not exist cannot satisfy `absent` — a missing file
+    # is a broken row, not an absent symbol.
+    if [ -z "$ks_file" ] || ! git cat-file -e "origin/main:$ks_file" 2>/dev/null; then
+        ks_status=missing
+    elif git show "origin/main:$ks_file" | grep -qF -- "$ks_text"; then
         ks_found=yes
     else
         ks_found=no
     fi
-    if { [ "$ks_verb" = contains ] && [ "$ks_found" = yes ]; } \
-        || { [ "$ks_verb" = absent ] && [ "$ks_found" = no ]; }; then
-        ks_status=ok
-    else
-        ks_status=missing
+    if [ -z "$ks_status" ]; then
+        if { [ "$ks_verb" = contains ] && [ "$ks_found" = yes ]; } \
+            || { [ "$ks_verb" = absent ] && [ "$ks_found" = no ]; }; then
+            ks_status=ok
+        else
+            ks_status=missing
+        fi
     fi
 fi
 
