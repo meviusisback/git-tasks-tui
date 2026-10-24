@@ -370,7 +370,7 @@ fn ensure_allowlisted(tokens: &[Token], allowed: &[&str]) -> anyhow::Result<()> 
 
 /// The single translation point: an action becomes a `gh` argv here, and the
 /// argv is checked against the action's allowlist before it leaves.
-pub fn argv_for(binaries: &Binaries, action: &Action) -> anyhow::Result<Argv> {
+pub fn argv_for(binaries: &Binaries, action: &Action) -> anyhow::Result<crate::gh::CheckedArgv> {
     let tokens = tokens_for(action)?;
     // Only the action's own tokens go through the allowlist: the `--repo`
     // prefix is not in `flags_for(action)` because the **type** produces it,
@@ -390,7 +390,9 @@ pub fn argv_for(binaries: &Binaries, action: &Action) -> anyhow::Result<Argv> {
         Token::Flag(flag) => OsString::from(flag),
         Token::Value(text) => text,
     }));
-    Ok(gh(binaries, &cwd, args))
+    Ok(crate::gh::CheckedArgv::from_checked(gh(
+        binaries, &cwd, args,
+    )))
 }
 
 /// Exposed for tests: the flags an action may emit.
