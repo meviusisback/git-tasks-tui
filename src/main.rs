@@ -18,6 +18,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{cursor, execute};
+use gtasks::actions;
 use gtasks::app::{App, Msg};
 use gtasks::binaries::Binaries;
 use gtasks::config::Config;
@@ -255,6 +256,17 @@ fn run_tui() -> anyhow::Result<()> {
                         app.status = format!("detail failed: {err}");
                     }
                 }
+            }
+        }
+
+        // `o`: the key handler already validated the URL.
+        if let Some(url) = app.open_requested.take() {
+            match &binaries.xdg_open {
+                Some(program) => match actions::open_in_browser(program, &url) {
+                    Ok(()) => app.status = "opened in the browser".to_string(),
+                    Err(err) => app.status = format!("cannot open: {err:#}"),
+                },
+                None => app.status = "no browser launcher (xdg-open) found".to_string(),
             }
         }
 

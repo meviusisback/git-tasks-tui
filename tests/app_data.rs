@@ -166,3 +166,32 @@ fn a_late_body_for_a_previous_selection_is_ignored() {
     app.apply_detail("acme/two", 9, "fresh body".to_string());
     assert_eq!(app.detail, "fresh body");
 }
+
+#[test]
+fn o_asks_to_open_the_selected_item() {
+    let mut app = App::default();
+    app.apply_outcome(outcome());
+
+    app.update(Msg::Key(Key::Char('o')));
+
+    let url = app.open_requested.clone().expect("a safe url is requested");
+    assert!(url.starts_with("https://github.com/"), "got {url}");
+    assert!(app.status.contains("opening #2"), "status: {}", app.status);
+}
+
+#[test]
+fn o_refuses_a_url_that_is_not_github() {
+    let mut app = App::default();
+    let mut outcome = outcome();
+    outcome.items[0].url = "javascript:alert(1)".to_string();
+    app.apply_outcome(outcome);
+
+    app.update(Msg::Key(Key::Char('o')));
+
+    assert!(app.open_requested.is_none(), "nothing must be launched");
+    assert!(
+        app.status.starts_with("cannot open"),
+        "status: {}",
+        app.status
+    );
+}

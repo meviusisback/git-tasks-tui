@@ -94,7 +94,7 @@ fn footer(app: &App) -> String {
         return format!("{}  —  y confirm · n/Esc cancel", sanitize(question));
     }
     if app.status.is_empty() {
-        "/ search · Tab pane · ↑↓ move · Enter open · q quit".to_string()
+        "/ search · Tab pane · ↑↓ move · Enter body · o open · r refresh · q quit".to_string()
     } else {
         sanitize(&app.status)
     }

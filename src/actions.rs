@@ -6,6 +6,8 @@
 //! validated here, never passed through.
 
 use std::ffi::OsString;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 /// Hosts allowed to reach the browser.
 const ALLOWED_HOSTS: &[&str] = &["github.com", "www.github.com"];
@@ -50,6 +52,25 @@ pub fn validate_url(url: &str) -> anyhow::Result<&str> {
 pub fn open_args(url: &str) -> anyhow::Result<Vec<OsString>> {
     let url = validate_url(url)?;
     Ok(vec![OsString::from(url)])
+}
+
+/// Launch the URL with the resolved launcher. The child is detached (the TUI
+/// must not wait) and inherits neither stdin nor our terminal output.
+pub fn open_in_browser(program: &Path, url: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        program.is_absolute(),
+        "browser launcher must be an absolute path: {}",
+        program.display()
+    );
+    let args = open_args(url)?;
+    Command::new(program)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| anyhow::anyhow!("cannot run {}: {err}", program.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -72,6 +72,8 @@ pub struct App {
     pub detail_for: Option<(String, u64)>,
     /// Set by the key handler: the loop fetches this body.
     pub detail_requested: Option<(String, u64)>,
+    /// Set by `o`: the loop launches the browser.
+    pub open_requested: Option<String>,
 }
 
 impl Default for App {
@@ -96,6 +98,7 @@ impl Default for App {
             detail: String::new(),
             detail_for: None,
             detail_requested: None,
+            open_requested: None,
         }
     }
 }
@@ -150,6 +153,24 @@ impl App {
                     || item.number.to_string().contains(&needle)
             })
             .collect()
+    }
+
+    /// Ask the loop to open the selected item, after checking its URL (S10).
+    pub fn request_open(&mut self) {
+        let Some((url, number)) = self
+            .selected_item()
+            .map(|item| (item.url.clone(), item.number))
+        else {
+            self.status = "nothing selected".to_string();
+            return;
+        };
+        match crate::actions::validate_url(&url) {
+            Ok(url) => {
+                self.open_requested = Some(url.to_string());
+                self.status = format!("opening #{number}…");
+            }
+            Err(err) => self.status = format!("cannot open: {err}"),
+        }
     }
 
     /// The item under the cursor, if any.
@@ -234,6 +255,8 @@ impl App {
 
         match key {
             Key::Char('/') => self.searching = true,
+            // `o` opens the selected item in the browser, if the URL is safe.
+            Key::Char('o') => self.request_open(),
             // One refresh at a time: a second `r` while loading is ignored.
             Key::Char('r') if !self.loading => {
                 self.loading = true;
