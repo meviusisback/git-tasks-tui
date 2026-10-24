@@ -15,12 +15,20 @@ status=0
 cargo test --locked --no-fail-fast "$@" >"$log" 2>&1 || status=$?
 
 bins=$(grep -c '^     Running' "$log" || true)
+docs=$(grep -c '^   Doc-tests' "$log" || true)
 ok=$(grep -c 'test result: ok' "$log" || true)
 failed=$(grep -c 'test result: FAILED' "$log" || true)
+# `suites ok` counts result lines, which include Doc-tests sections: three
+# numbers, three different things. The fourth is the one nobody looks at — a
+# suite that passes having run no tests at all, i.e. one that could be emptied
+# without the counter noticing.
+empty=$(grep -c '^test result: ok\. 0 passed' "$log" || true)
 
 printf 'binaries run : %s\n' "$bins"
+printf 'doc-tests    : %s\n' "$docs"
 printf 'suites ok    : %s\n' "$ok"
 printf 'suites failed: %s\n' "$failed"
+printf 'empty suites : %s (ok with 0 tests run)\n' "$empty"
 
 if [ "$failed" != "0" ]; then
     printf '\nfailures:\n'
