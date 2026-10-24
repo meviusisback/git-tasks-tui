@@ -173,8 +173,16 @@ fn help_overlay_lists_the_full_keymap() {
         "future keys get their own section: {screen}"
     );
     assert!(
-        screen.contains("repo selection menu (stage 11)"),
+        screen.contains("actions menu (stage 14)"),
         "future keys name their stage: {screen}"
+    );
+    assert!(
+        screen.contains("R          repo selection menu"),
+        "R is available today: {screen}"
+    );
+    assert!(
+        !screen.contains("repo selection menu (stage"),
+        "R is not promised for later anymore: {screen}"
     );
     assert!(
         !screen.contains("drill into the repo"),

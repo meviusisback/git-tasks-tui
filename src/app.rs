@@ -10,6 +10,8 @@ use crate::gh::CheckedArgv;
 use crate::model::Item;
 use crate::sanitize::sanitize;
 
+use std::collections::BTreeSet;
+
 /// Which pane has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -70,6 +72,16 @@ pub enum Msg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Modal {
     Confirm(String),
+    RepoMenu(RepoMenu),
+}
+
+/// The `R` multi-select: which of the configured repos the list shows.
+/// `Space` toggles the row, `Enter` applies, `Esc` cancels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoMenu {
+    pub rows: Vec<String>,
+    pub cursor: usize,
+    pub marked: BTreeSet<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,8 +103,14 @@ pub struct App {
     /// The repos the user configured, plus a leading "all repos" entry, so a
     /// repo with no open items is still visible and selectable.
     pub repos: Vec<String>,
+    /// Every configured repo, even when the list shows a subset: the rows
+    /// the `R` menu offers. Set once at startup, never filtered.
+    pub all_repos: Vec<String>,
     /// The repo selected in the repos pane; `All` means "all".
     pub repo_filter: RepoFilter,
+    /// `Enter` in the repo menu: the checked rows, for the loop to save to
+    /// `state.json`. The live list is already updated; this is only the file.
+    pub selection_applied: Option<Vec<String>>,
     /// A fetch is in flight: `r` must not start a second one.
     pub loading: bool,
     /// Repos whose last fetch failed.
@@ -133,7 +151,9 @@ impl Default for App {
             status: String::new(),
             items: Vec::new(),
             repos: Vec::new(),
+            all_repos: Vec::new(),
             repo_filter: RepoFilter::All,
+            selection_applied: None,
             loading: false,
             failed: 0,
             refresh_requested: false,
@@ -255,8 +275,17 @@ impl App {
     /// The bottom legend: the keys available right now, never the full keymap
     /// (that lives behind `?`). Untrusted text (query, status) is sanitised.
     pub fn legend(&self) -> String {
-        if let Some(Modal::Confirm(question)) = &self.modal {
-            return format!("{}  —  y confirm · n/Esc cancel", sanitize(question));
+        match &self.modal {
+            Some(Modal::Confirm(question)) => {
+                return format!("{}  —  y confirm · n/Esc cancel", sanitize(question));
+            }
+            Some(Modal::RepoMenu(menu)) => {
+                return format!(
+                    "{} marked — Space mark · Enter apply · Esc cancel",
+                    menu.marked.len()
+                );
+            }
+            None => {}
         }
         if self.searching {
             return format!(
@@ -314,6 +343,58 @@ impl App {
             }
             Err(err) => self.status = format!("cannot open: {err}"),
         }
+    }
+
+    /// `R`: pick which repos the list shows. The menu starts from the live
+    /// list (everything, when the state file never picked a subset).
+    pub fn open_repo_menu(&mut self) {
+        if self.all_repos.is_empty() {
+            self.status = "no repos configured".to_string();
+            return;
+        }
+        // The live list, minus the "all repos" row, is the current pick.
+        let live: Vec<&str> = self.repos.iter().skip(1).map(String::as_str).collect();
+        let marked: BTreeSet<usize> = self
+            .all_repos
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| live.contains(&row.as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        self.modal = Some(Modal::RepoMenu(RepoMenu {
+            rows: self.all_repos.clone(),
+            cursor: 0,
+            marked,
+        }));
+    }
+
+    fn menu_step(&mut self, delta: i32) {
+        if let Some(Modal::RepoMenu(menu)) = self.modal.as_mut() {
+            let len = menu.rows.len();
+            menu.cursor = step(menu.cursor, delta, len);
+        }
+    }
+
+    fn menu_toggle(&mut self) {
+        if let Some(Modal::RepoMenu(menu)) = self.modal.as_mut() {
+            if menu.cursor < menu.rows.len() && !menu.marked.remove(&menu.cursor) {
+                menu.marked.insert(menu.cursor);
+            }
+        }
+    }
+
+    /// `Enter` in the repo menu: the checked rows become the selection. An
+    /// empty check means "everything", like an empty state file. The list
+    /// updates from the items already in memory; the loop saves the file.
+    fn apply_selection(&mut self, selected: Vec<String>) {
+        let shown = if selected.is_empty() {
+            self.all_repos.clone()
+        } else {
+            selected.clone()
+        };
+        self.selection_applied = Some(selected);
+        self.modal = None;
+        self.set_repos(shown);
     }
 
     /// The item under the cursor, if any.
@@ -412,6 +493,28 @@ impl App {
             return;
         }
         if self.modal.is_some() {
+            // Route by dialog first: a key means different things per
+            // dialog, so the match is on the modal, then on the key.
+            if matches!(self.modal, Some(Modal::RepoMenu(_))) {
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Up => self.menu_step(-1),
+                    Key::Down => self.menu_step(1),
+                    Key::Char(' ') => self.menu_toggle(),
+                    Key::Enter => {
+                        if let Some(Modal::RepoMenu(menu)) = self.modal.take() {
+                            let selected: Vec<String> = menu
+                                .marked
+                                .iter()
+                                .filter_map(|i| menu.rows.get(*i).cloned())
+                                .collect();
+                            self.apply_selection(selected);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
             match key {
                 Key::Esc | Key::Char('n') => self.modal = None,
                 Key::Char('y') => {
@@ -466,6 +569,8 @@ impl App {
             // `a` asks to run the first action on the selected row.
             Key::Char('a') => self.request_action(),
             Key::Char('/') => self.searching = true,
+            // `R` picks which repos the list shows (multi-select menu).
+            Key::Char('R') => self.open_repo_menu(),
             // `o` opens the selected item in the browser, if the URL is safe.
             Key::Char('o') => self.request_open(),
             // One refresh at a time: a second `r` while loading is ignored.
