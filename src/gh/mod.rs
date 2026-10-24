@@ -5,9 +5,16 @@
 //! `args`, `env` and `cwd` are plain values, so tests never spawn to check them.
 //!
 //! Production pattern (S2): builders take no program — the caller resolves it:
-//! ```ignore
-//! let mut argv = gh(cwd, &args);
-//! argv.program = binaries::resolve("gh")?;
+//! ```no_run
+//! # use std::ffi::OsString;
+//! # use gtasks::{binaries::Binaries, gh::gh};
+//! # fn main() -> anyhow::Result<()> {
+//! # let cwd = std::path::Path::new(".");
+//! # let args: Vec<OsString> = Vec::new();
+//! # let binaries = Binaries::detect()?;
+//! let mut argv = gh(&binaries, cwd, args);
+//! argv.program = gtasks::binaries::resolve("gh")?;
+//! # Ok(()) }
 //! ```
 //! Tests override `argv.program` with an absolute fake (verified by
 //! `run_pipe` through `binaries::verify`, so every spawned binary is
