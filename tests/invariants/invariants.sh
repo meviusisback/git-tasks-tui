@@ -80,6 +80,17 @@ inv_gh_wrapper_argv() {
   skip "child_env_has_no_git_vars" "needs task/02 (env allowlist)"
 }
 
+
+inv_spawn_sites_declared() {
+  group "INV S2 — every spawn site is declared, and every declaration is still true"
+  local root; root=$(git rev-parse --show-toplevel)
+  if out=$(check_spawn_sites "$root" 2>&1); then
+    pass "all $(spawn_sites_found "$root" | wc -l) Command::new sites are declared"
+  else
+    fail "spawn sites match the declared list" "$out"
+  fi
+}
+
 inv_worktree_resolver() {
   group "INV S5/S6 — worktree path + reuse (NOT WIRED)"
   skip "reuse_only_from_worktree_list_porcelain" "needs task/10b (worktree resolver)"
@@ -95,6 +106,7 @@ main() {
   inv_log_symlink_not_followed
   inv_state_dir_mode
   inv_gh_wrapper_argv
+  inv_spawn_sites_declared
   inv_worktree_resolver
   summary
 }

@@ -1,7 +1,7 @@
 //! Task 10 shell: two columns, legend line, `?` overlay. Assertions read the
 //! real `TestBackend` buffer; untrusted text is sanitised on the way in.
 
-use gtasks::app::{App, Pane};
+use gtasks::app::{App, Key, Msg, Pane};
 use gtasks::theme;
 use gtasks::ui::{ViewModel, draw};
 use ratatui::Terminal;
@@ -213,6 +213,29 @@ fn recovery_keys_survive_narrow_widths() {
         wide.contains("Esc — nothing to close"),
         "full width: the Esc note is in the legend: {wide}"
     );
+}
+
+#[test]
+fn coming_next_keys_produce_no_screen_change() {
+    // The auditor's proof: every key in the overlay's "coming in the next
+    // stages" section must be a no-op today. When a later stage binds one
+    // of them, this test fails — the overlay section must shrink then, not
+    // keep promising what the screen already does.
+    for key in [
+        Key::Char('R'),
+        Key::Char('m'),
+        Key::Char('w'),
+        Key::Char('s'),
+    ] {
+        let (mut app, view) = sample();
+        let before = render(&app, &view);
+        app.update(Msg::Key(key));
+        assert!(!app.quit, "{key:?} must not quit");
+        assert!(app.modal.is_none(), "{key:?} must not open anything");
+        assert!(!app.show_help, "{key:?} must not open the overlay");
+        let after = render(&app, &view);
+        assert_eq!(before, after, "{key:?} must not change the screen");
+    }
 }
 
 #[test]
