@@ -208,6 +208,11 @@ fn recovery_keys_survive_narrow_widths() {
         assert!(screen.contains("q quit"), "{w}x{h}: q visible: {screen}");
         assert!(screen.contains("? help"), "{w}x{h}: ? visible: {screen}");
     }
+    let wide = render_narrow(100, 24);
+    assert!(
+        wide.contains("Esc — nothing to close"),
+        "full width: the Esc note is in the legend: {wide}"
+    );
 }
 
 #[test]

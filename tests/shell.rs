@@ -1,7 +1,7 @@
 //! Task 10 shell behaviour: arrows move between columns, `?` toggles the
 //! overlay, the legend always shows the keys available right now.
 
-use gtasks::app::{App, Key, Msg, Pane};
+use gtasks::app::{App, Key, Modal, Msg, Pane};
 
 fn press(app: &mut App, key: Key) {
     app.update(Msg::Key(key));
@@ -53,5 +53,35 @@ fn legend_names_the_keys_available_right_now() {
     let legend = app.legend();
     for key in ["←/→", "↑/↓", "Enter", "R repos", "m actions", "? help", "q"] {
         assert!(legend.contains(key), "legend names {key}: {legend}");
+    }
+}
+
+#[test]
+fn legend_states_when_esc_has_nothing_to_close() {
+    let top = App::default();
+    assert!(
+        top.legend().contains("Esc — nothing to close"),
+        "top level says Esc has nothing to close: {}",
+        top.legend()
+    );
+    for state in [
+        App {
+            pane: Pane::Detail,
+            ..App::default()
+        },
+        App {
+            modal: Some(Modal::Confirm("merge PR #7?".into())),
+            ..App::default()
+        },
+        App {
+            searching: true,
+            ..App::default()
+        },
+    ] {
+        assert!(
+            !state.legend().contains("nothing to close"),
+            "no note where Esc does something: {}",
+            state.legend()
+        );
     }
 }

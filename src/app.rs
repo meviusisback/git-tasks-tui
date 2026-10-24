@@ -243,9 +243,17 @@ impl App {
                 query = sanitize(&self.query)
             );
         }
-        let mut line = String::from(
-            "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
-        );
+        let mut line = if self.pane == Pane::Detail {
+            String::from(
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+            )
+        } else {
+            // Nothing to close: say so, right after the recovery keys, so
+            // the note survives truncation at narrow widths.
+            String::from(
+                "q quit · ? help · Esc — nothing to close · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+            )
+        };
         if !self.status.is_empty() {
             line.push_str(" │ ");
             line.push_str(&sanitize(&self.status));
