@@ -119,3 +119,31 @@ fn kind_is_set_by_the_fetcher_not_by_json() {
     items[0].kind = ItemKind::Pr;
     assert_eq!(items[0].kind, ItemKind::Pr);
 }
+
+/// M-5: `sort_items` compares RFC3339 strings lexicographically, which is
+/// chronological only in the `…Z` form `gh` emits. This test fixes the
+/// assumption so a future `+02:00` timestamp fails loudly instead of sorting
+/// silently wrong.
+#[test]
+fn sort_assumes_z_timestamps() {
+    let z_form = r#"[
+      {"number":1,"title":"early","state":"OPEN","updatedAt":"2026-10-20T09:00:00Z"},
+      {"number":2,"title":"late","state":"OPEN","updatedAt":"2026-10-20T11:00:00Z"}
+    ]"#;
+    let mut items = parse_list(z_form).unwrap();
+    sort_items(&mut items, SortKey::Updated, false);
+    assert_eq!(items[0].number, 2, "Z-form timestamps sort chronologically");
+
+    // A mixed offset parses (the model does not reject it) but is not
+    // comparable lexicographically: 09:00Z == 11:00+02:00, yet "09" < "11".
+    let mixed = r#"[
+      {"number":1,"title":"a","state":"OPEN","updatedAt":"2026-10-20T09:00:00Z"},
+      {"number":2,"title":"b","state":"OPEN","updatedAt":"2026-10-20T11:00:00+02:00"}
+    ]"#;
+    let mut items = parse_list(mixed).unwrap();
+    sort_items(&mut items, SortKey::Updated, false);
+    assert_eq!(
+        items[0].number, 2,
+        "documents the trap: mixed offsets are ordered by text, not instant"
+    );
+}
