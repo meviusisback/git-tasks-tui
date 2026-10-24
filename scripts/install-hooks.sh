@@ -17,4 +17,22 @@ if [ ! -x .githooks/commit-msg ]; then
     echo "install-hooks: .githooks/commit-msg is not executable — git would skip it" >&2
     exit 1
 fi
-echo "hooks installed and executable: core.hooksPath=$(git config --get core.hooksPath)"
+
+# H-2b: `test -x` checks a state, and a state can be restored by the `chmod`
+# above. This checks the **behaviour**: the hook must accept a true claim and
+# refuse a false one. Same reason probe 1b beats probe 1 — look at what the
+# thing does, not at what the file looks like.
+probe=$(mktemp)
+trap 'rm -f "$probe"' EXIT INT TERM
+printf 'probe\n\nClaims: .githooks/commit-msg contains "rev-parse"\n' > "$probe"
+if ! sh .githooks/commit-msg "$probe" >/dev/null 2>&1; then
+    echo "install-hooks: the hook REFUSES a true claim — it is not the right file" >&2
+    exit 1
+fi
+printf 'probe\n\nClaims: .githooks/commit-msg contains "no-such-text-zzz"\n' > "$probe"
+if sh .githooks/commit-msg "$probe" >/dev/null 2>&1; then
+    echo "install-hooks: the hook ACCEPTS a false claim — it is not running the check" >&2
+    exit 1
+fi
+
+echo "hooks installed and verified: core.hooksPath=$(git config --get core.hooksPath)"
