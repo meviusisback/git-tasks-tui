@@ -104,6 +104,25 @@ pub fn resolve(clone: &Path, slug: &str, branch: &str) -> anyhow::Result<PathBuf
 /// Pure core with an explicit base (tests pin the base directly instead of
 /// depending on the environment).
 ///
+/// The signature itself is pinned: stringly-typed calls must not compile.
+/// ```compile_fail,E0308
+/// use std::path::Path;
+/// use gtasks::worktree::resolve_in;
+///
+/// let _ = resolve_in(Path::new("/base"), Path::new("/clones/o/r"), ".", "x");
+/// ```
+/// while the typed form keeps working:
+/// ```rust
+/// use std::path::Path;
+/// use gtasks::actions::RepoSlug;
+/// use gtasks::worktree::{BranchName, resolve_in};
+///
+/// let slug = RepoSlug::parse("o/r").unwrap();
+/// let branch = BranchName::parse("x").unwrap();
+/// let path = resolve_in(Path::new("/base"), Path::new("/clones/o/r"), &slug, &branch).unwrap();
+/// assert_eq!(path, Path::new("/base/o/r/x"));
+/// ```
+///
 /// `clone` is not inspected here: it only selects the repo for Task 15's
 /// `git -C`, whose identity is established at creation time (canonicalise +
 /// containment). Everything that shapes the path already passed through the
