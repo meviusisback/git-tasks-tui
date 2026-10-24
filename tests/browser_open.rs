@@ -12,9 +12,9 @@ fn the_launcher_gets_one_argument_and_nothing_else() {
     let out = dir.path().join("args.txt");
     std::fs::write(
         &script,
+        // One write, not two: a reader must never see half the answer.
         format!(
-            "#!/bin/sh\nprintf '%s' \"$#\" > {}\nprintf '%s' \"$1\" >> {}\n",
-            out.display(),
+            "#!/bin/sh\nprintf '%s%s' \"$#\" \"$1\" > {}\n",
             out.display()
         ),
     )
@@ -56,4 +56,27 @@ fn an_unsafe_url_never_reaches_the_launcher() {
 
     let err = open_in_browser(&script, "file:///etc/passwd").unwrap_err();
     assert!(err.to_string().contains("https"), "got {err}");
+}
+
+/// B-2: the launcher is detached but must still be reaped, otherwise every
+/// press of `o` leaves a zombie until the app exits.
+#[test]
+fn the_launcher_is_reaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("xdg-open");
+    std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let pid = open_in_browser(&script, "https://github.com/o/r/pull/1").expect("launcher starts");
+
+    // A zombie keeps /proc/<pid> alive; a reaped child disappears.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let proc_entry = format!("/proc/{pid}");
+    while Instant::now() < deadline {
+        if !std::path::Path::new(&proc_entry).exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("child {pid} was never reaped: {proc_entry} still exists");
 }

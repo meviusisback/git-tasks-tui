@@ -263,7 +263,7 @@ fn run_tui() -> anyhow::Result<()> {
         if let Some(url) = app.open_requested.take() {
             match &binaries.xdg_open {
                 Some(program) => match actions::open_in_browser(program, &url) {
-                    Ok(()) => app.status = "opened in the browser".to_string(),
+                    Ok(pid) => app.status = format!("opened in the browser (pid {pid})"),
                     Err(err) => app.status = format!("cannot open: {err:#}"),
                 },
                 None => app.status = "no browser launcher (xdg-open) found".to_string(),

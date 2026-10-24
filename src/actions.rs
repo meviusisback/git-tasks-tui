@@ -60,21 +60,32 @@ pub fn open_args(url: &str) -> anyhow::Result<Vec<OsString>> {
 
 /// Launch the URL with the resolved launcher. The child is detached (the TUI
 /// must not wait) and inherits neither stdin nor our terminal output.
-pub fn open_in_browser(program: &Path, url: &str) -> anyhow::Result<()> {
+///
+/// The pid is returned so a test can prove the child is reaped: spawning without
+/// waiting would leave one zombie per press (B-2).
+pub fn open_in_browser(program: &Path, url: &str) -> anyhow::Result<u32> {
     anyhow::ensure!(
         program.is_absolute(),
         "browser launcher must be an absolute path: {}",
         program.display()
     );
     let args = open_args(url)?;
-    Command::new(program)
+    let mut child = Command::new(program)
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|err| anyhow::anyhow!("cannot run {}: {err}", program.display()))?;
-    Ok(())
+    let pid = child.id();
+    // Reap it. `xdg-open` exits immediately and nothing else waits for it, so
+    // without this thread every `o` would leave a zombie until the app exits.
+    // Not `SIGCHLD = SIG_IGN`: that is process-wide and would break `try_wait`
+    // in `run_pipe`.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
 }
 
 #[cfg(test)]
