@@ -117,20 +117,14 @@ pub fn check_argv(argv: &Argv) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn forbid_admin_force_auto(args: &[OsString], tool: &str) {
-    for arg in args {
-        let text = arg.to_string_lossy();
-        assert!(
-            !FORBIDDEN.iter().any(|flag| text == *flag),
-            "{tool}: forbidden flag {text:?} must never be constructed"
-        );
-    }
-}
-
 /// `gh` invocation: argv only, `gh` environment (token + non-interactive knobs).
 /// The caller fills in `program` with `binaries::resolve("gh")`.
+///
+/// The builder never panics: a forbidden flag is refused by [`check_argv`] at
+/// the spawn choke point, where the caller can still show an error. A public
+/// function that aborts the process on a coding slip is a crash surface, not a
+/// guard.
 pub fn gh(binaries: &Binaries, cwd: &Path, args: Vec<OsString>) -> Argv {
-    forbid_admin_force_auto(&args, "gh");
     Argv {
         program: binaries.gh.clone(),
         args,
@@ -143,7 +137,6 @@ pub fn gh(binaries: &Binaries, cwd: &Path, args: Vec<OsString>) -> Argv {
 /// the S16 overrides, so no repository hook, fsmonitor or pager can run.
 /// The caller fills in `program` with `binaries::resolve("git")`.
 pub fn git(binaries: &Binaries, cwd: &Path, args: Vec<OsString>) -> Argv {
-    forbid_admin_force_auto(&args, "git");
     let mut full: Vec<OsString> = Vec::with_capacity(args.len() + 6);
     for value in [
         "-c",

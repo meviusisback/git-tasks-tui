@@ -5,7 +5,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gtasks::gh::{Argv, Caps, run_pipe_with_caps};
+use gtasks::binaries::Binaries;
+use gtasks::gh::{Argv, Caps, gh, run_pipe_with_caps};
 
 fn argv(program: PathBuf, args: Vec<OsString>) -> Argv {
     Argv {
@@ -96,4 +97,27 @@ fn a_harmless_cluster_stays_legal() {
     let argv = argv(PathBuf::from("/bin/echo"), vec![OsString::from("-n")]);
     let out = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap();
     assert!(out.status.success());
+}
+
+/// A public builder must not abort the process on a coding slip: the flag dies
+/// at the transport, where there is a caller that can show the error.
+#[test]
+fn a_public_builder_cannot_panic_on_a_forbidden_flag() {
+    let binaries = Binaries {
+        gh: PathBuf::from("/bin/echo"),
+        git: PathBuf::from("/bin/true"),
+        hermes: None,
+        xdg_open: None,
+    };
+    let cwd = std::env::current_dir().unwrap();
+
+    // No panic: the argv is built.
+    let built = gh(&binaries, &cwd, vec![OsString::from("--admin")]);
+
+    // And the transport refuses it, which is where a caller can react.
+    let err = run_pipe_with_caps(&built, Duration::from_secs(5), Caps::default()).unwrap_err();
+    assert!(
+        err.to_string().contains("forbidden flag"),
+        "the transport must refuse it: {err:#}"
+    );
 }
