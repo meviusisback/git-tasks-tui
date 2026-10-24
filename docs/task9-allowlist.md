@@ -166,3 +166,30 @@ fn gh_action(b: &Binaries, slug: &RepoSlug, action: &Action) -> anyhow::Result<A
 Fail-closed is preserved: an action token that names `--repo` is not in `flags_for(action)` and is refused.
 This replaced an earlier `GH_COMMON` constant, which kept the flag in a list and merely deduplicated it.
 
+## `CheckedArgv`: the door must be in the same module
+
+Rust's private field is private to the **module and its children**, not to the
+crate. If `argv_for` lives in `actions`, it cannot construct `CheckedArgv` unless
+`gh` exposes a constructor — and a `pub(crate) fn new(argv: Argv)` reopens the
+door to the whole crate, which is the same as having no type.
+
+Two shapes close it, and the decision is to use **both**:
+
+```rust
+// actions.rs: the typed path yields a value that has already been checked
+pub fn argv_for(binaries: &Binaries, action: &Action) -> anyhow::Result<CheckedArgv>
+
+// gh/mod.rs: the raw path is not public, and it is fail-closed
+pub(crate) fn run_raw(argv: &Argv, timeout: Duration) -> anyhow::Result<Output>
+pub fn run_checked(argv: CheckedArgv, timeout: Duration) -> anyhow::Result<Output>
+```
+
+`run_raw` stays `pub(crate)` because a public `run_raw(&Argv)` would be the
+convenient signature, and every future call site would pick it. The public API
+gives the caller no type to make the mistake with.
+
+The executor of an action routes through the transport (`run_pipe`), never a
+second spawn: the process group, `PR_SET_PDEATHSIG` and the group kill arrive
+together, and a private spawn loses all three — measured: `kill(pid)` instead of
+`kill(-pid)` leaves the grandchild alive **and** stretches an 800 ms timeout to
+3 s (`tests/timeout_group.rs`).
