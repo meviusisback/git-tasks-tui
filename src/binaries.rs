@@ -35,6 +35,17 @@ pub fn resolve_in(name: &str, dirs: &[&Path]) -> anyhow::Result<PathBuf> {
     anyhow::bail!("no verified binary {name:?} in {} search dirs", dirs.len())
 }
 
+/// Verify an already-absolute path with the same checks (used by `run_pipe`
+/// for test-supplied programs, so every spawned binary is verified).
+pub fn verify(path: &Path) -> anyhow::Result<PathBuf> {
+    ensure!(
+        path.is_absolute(),
+        "binary path must be absolute: {}",
+        path.display()
+    );
+    check(path)
+}
+
 /// Canonicalise and verify a single candidate path.
 fn check(path: &Path) -> anyhow::Result<PathBuf> {
     let abs = std::fs::canonicalize(path)
