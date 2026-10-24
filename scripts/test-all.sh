@@ -22,13 +22,13 @@ failed=$(grep -c 'test result: FAILED' "$log" || true)
 # numbers, three different things. The fourth is the one nobody looks at — a
 # suite that passes having run no tests at all, i.e. one that could be emptied
 # without the counter noticing.
-empty=$(grep -c '^test result: ok\. 0 passed' "$log" || true)
+empty=$(grep -c '^test result: ok\. 0 passed; 0 failed; 0 ignored' "$log" || true)
 
 printf 'binaries run : %s\n' "$bins"
 printf 'doc-tests    : %s\n' "$docs"
 printf 'suites ok    : %s\n' "$ok"
 printf 'suites failed: %s\n' "$failed"
-printf 'empty suites : %s (ok with 0 tests run)\n' "$empty"
+printf 'empty suites : %s (ok, 0 passed and 0 ignored — a suite that declares nothing)\n' "$empty"
 
 if [ "$failed" != "0" ]; then
     printf '\nfailures:\n'
