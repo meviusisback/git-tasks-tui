@@ -3,6 +3,7 @@
 > **Rev 4** — folded @coder's architecture review, @auditor's security review (r0), and @auditor's doc re-review r1 (**C1 blocking: `--query-file -` cannot seed an interactive session; C2 terminal ownership; C3 per-child env; C4 new invariant S16; C5 five point fixes**).
 > **Rev 4.1** — Task 1 accepted (scaffold + spike evidence). Its automated seed-file/PTY tests move to Task 11a, with the negative control. Coordination protocol added (ref-only ops, per-agent worktrees, auditors read `origin/*`).
 > **Rev 4.2** — r2 review of Task 1: **FAIL** on two S5/S14 blockers (F-1/F-2, both reproduced with the binary) plus 6 findings. Added **Task 1b (hardening)** and settled F-3: one `crossterm`, 0.28 via `ratatui::crossterm`.
+> **Rev 4.3** — Task 1b merged to `main` (linear cherry-pick; CI action SHAs corrected). Review r4 measured **G-2** (a `0600` seed in an attacker-writable dir is swappable → instruction injection) and folded it into S8/S14 + Task 11a, together with G-3 (dash negative control) and G-4 (PTY child leak). `portable-pty` stays: the duplicate gate is dev-aware.
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -111,8 +112,9 @@ hermes -p <profile> chat --query-file <seed-file> --in <worktree> [--ignore-rule
 **Accepted deviations:** `edition = "2024"` (cargo default on 1.99), `tracing-subscriber` with `env-filter`.
 
 ### Task 1b — Hardening after the r2 review (branch `fix/task-01-hardening`, owner @coder)
+**Files:** `src/main.rs`, `src/agent.rs`, `tests/security_fs.rs` (or the existing `tests/agent_seed.rs`), `Cargo.toml`, `.github/workflows/ci.yml`, `rust-toolchain.toml`.
 All reproduced by the coordinator with the real binary before assignment; all closed **before** Task 2.
-- **F-1 (MEDIUM, S5/S14)** `ensure_state_dir`: `create_dir_all` + `chmod` on the path followed a symlinked state dir (foreign dir → `0700`, received `gtasks.log`). Fix: per-component `create_dir` + `symlink_metadata`, open `O_DIRECTORY|O_NOFOLLOW`, `set_permissions` on the fd.
+- **F-1 (MEDIUM, S5/S14)** `ensure_state_dir` **and the new `agent::ensure_runtime_dir`** both use `DirBuilder::recursive(true)` + chmod on the path: a symlinked dir becomes the target (foreign dir → `0700`, receives the log or the seed). Fix: per-component `create_dir` + `symlink_metadata`, open `O_DIRECTORY|O_NOFOLLOW`, `set_permissions` on the fd.
 - **F-2 (LOW, S14)** `open_log_file`: no `O_NOFOLLOW`, mode applied after creation (foreign file → `0600` + log bytes). Fix: `.mode(0o600).custom_flags(O_NOFOLLOW)`, `ELOOP` → stderr fallback; `set_permissions` only as a belt for existing regular files.
 - **Tests** (must fail on the old code): `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed` — victim mode/size/content unchanged, `Err` returned. They must exercise the real init path: `--version` exits inside clap **before** logging starts (this is why the manual repro initially looked clean).
 - **F-3 (MEDIUM)** two `crossterm` in the tree (0.28.1 via ratatui, 0.29.0 direct). **Decision: option A** — `crossterm = "0.28"`, imports via `ratatui::crossterm::*`; a CI step fails if a duplicate reappears.
@@ -198,6 +200,8 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 **Files:** `src/agent.rs`, `tests/agent_argv.rs`.
 **Work:** `build_seed_message` (minimal + fenced, S8); `build_command` → `--query-file <seed-file>` (never `-`), absolute `hermes`, per-child env (no `GH_TOKEN`), `--ignore-rules` per config, profile regex; `isatty` precondition.
 **Tests:** `agent_argv_has_no_yolo_no_accept_hooks`, `agent_launch_uses_ignore_rules`, `seed_uses_0600_file_never_dash_or_argv`, seed never contains body/title, `agent_env_has_no_gh_token` (shared with harness B).
+**Carried over from review r4 (G-2/G-3/G-4):** reuse the hardened directory helper (extract `fsx::ensure_private_dir` from `logging::ensure_state_dir`) for the runtime dir — a `0600` seed in an attacker-writable directory is swappable, because unlink rights come from the directory, not the file mode (S8). Tests: `runtime_dir_symlink_is_not_followed`, `seed_is_not_written_through_symlinked_dir`, `seed_can_be_replaced_when_the_dir_is_writable` (documents why the dir must be private). Add the C1 negative control `agent_query_file_dash_exits_2_empty` (exit 2 "is empty"); **never** pass a bogus `-p`, because profile validation runs before the query read and yields exit 1. In the live PTY test, kill the child **before** the asserts (or in a `Drop`), otherwise a failed assert leaks a `hermes` session.
+**Dev-deps:** keep `portable-pty` (the duplicate gate is dev-aware: `thiserror 1.x` is only `warning(dev-only)`). Do **not** use `script -c` (a command string = S1 class), and note `script -- argv` does not propagate the exit code (measured). If dev-deps must be zero, use `libc::openpty`: real argv, real exit status.
 **Verify:** `cargo test agent_argv`.
 
 ### Task 11b — Suspend / run / resume (+ terminal ownership)
@@ -233,7 +237,9 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 ## Coordination protocol (multiple agents in one repo)
 
 - **Coordinator is ref-only**: no `checkout` in the shared tree; move branches with `git branch -f` / `git worktree`, push refs (`git push origin <branch>:main`), and **always read the remote back** (`git ls-remote`, `gh api …/commits`) after a push — "push said OK" is not evidence it landed. (Learned the hard way: a docs commit sat only in the local ref while main stayed behind.)
-- **One dedicated worktree per coding agent** (`../git-tasks-tui-coder`), never the same checkout. Shared trees caused a docs commit to swallow someone else's scaffold.
+- **One dedicated worktree per coding agent** (`../git-tasks-tui-coder`), never the same checkout. Shared trees caused a docs commit to swallow someone else's scaffold, and a reset of the shared branch wiped a review tip twice.
+- **A branch under review is frozen**: no reset, no rebase, no new commits. Other work goes to a different branch **and** a different worktree.
+- **Tag the reviewed commit** (`review/<task>-rN`) and push the tag: a force-push of the branch can then never lose the exact commit under review.
 - **Auditors never touch a working tree**: review from `origin/*` (`git show origin/main:path`), deliver harness files on an `audit/*` branch.
 - **Docs are the coordinator's**: agents propose text, the coordinator commits it.
 - Every phase ends with a remote read-back (SHA + file content) before it is reported as done.

@@ -62,6 +62,13 @@ them with `gh`). Delivered through a **`0600` regular file** in a `0700` runtime
 `--query-file <path>`, never argv and never `--query-file -` (see `docs/agent-cli.md`, C1); the file
 is unlinked after the child exits.
 
+The runtime **directory** must be guaranteed private and symlink-free (same helper as S5/S14:
+`create_dir` per component + `O_DIRECTORY|O_NOFOLLOW`). A `0600` seed in a directory an attacker can
+write is **not** safe: unlink rights come from the directory, not the file mode, so the seed can be
+swapped between creation and the child's read — and `--query-file` would hand the attacker's text to
+the agent as its first turn (proven: `audit_seed_is_not_written_through_symlinked_dir`,
+`audit_seed_can_be_replaced_when_the_dir_is_writable`).
+
 ## S9 — Actions are typed and gated
 One `Action` enum feeds one argv builder. Forbidden forever (tested): `--admin`, `--force`,
 `--auto`. Merge requires a typed confirmation; approve and close/reopen require a modal;
@@ -105,7 +112,8 @@ a belt for pre-existing **regular** files. The log rotates at 5 MiB (`gtasks.log
 one generation) so a long-running TUI cannot fill the disk.
 `xdg-open` is called only for `https://` URLs on `github.com` / `www.github.com`. `gh repo clone`
 requires a **non-existing** target checked with `symlink_metadata`, under a configured root.
-Tests: `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed`.
+Tests: `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed`,
+`runtime_dir_symlink_is_not_followed`.
 
 ## S15 — Terminal ownership and signals
 Two spawn profiles:
