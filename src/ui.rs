@@ -50,6 +50,30 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     frame.render_widget(Paragraph::new(footer(app)), outer[2]);
 }
 
+/// Build what the frame needs from the current state: the repo column, the
+/// visible items (search applied) and the detail of the selected one.
+pub fn view_for(app: &App) -> ViewModel {
+    let visible = app.visible_items();
+    let items = visible
+        .iter()
+        .map(|item| format!("#{} {}", item.number, item.title))
+        .collect();
+    let detail = visible
+        .get(app.list_cursor)
+        .map(|item| {
+            format!(
+                "#{} {}\n\nstate: {}\nrepo: {}\nurl: {}",
+                item.number, item.title, item.state, item.repo, item.url
+            )
+        })
+        .unwrap_or_default();
+    ViewModel {
+        repos: app.repos.clone(),
+        items,
+        detail,
+    }
+}
+
 fn header(app: &App) -> String {
     let mut text = format!("gtasks — {:?}", app.pane);
     if app.searching {

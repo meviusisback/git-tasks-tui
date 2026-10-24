@@ -1,12 +1,15 @@
 //! gtasks — multi-repo GitHub issues & PRs in the terminal.
 //!
-//! Thin wrapper: logging, terminal lifetime, the event loop, and nothing else.
-//! All state lives in `gtasks::app`, all drawing in `gtasks::ui`.
+//! Thin wrapper: logging, terminal lifetime, the event loop, and the one place
+//! that owns the fetch thread. All state lives in `gtasks::app`, all drawing in
+//! `gtasks::ui`.
 
 #![deny(clippy::print_stdout)]
 
 use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use clap::Parser;
@@ -16,9 +19,12 @@ use crossterm::terminal::{
 };
 use crossterm::{cursor, execute};
 use gtasks::app::{App, Msg};
+use gtasks::config::Config;
+use gtasks::fetch::{self, FetchOutcome};
 use gtasks::input::map_key;
 use gtasks::logging::{init_file_logging, init_stderr_logging};
-use gtasks::ui::{self, ViewModel};
+use gtasks::model::ItemKind;
+use gtasks::ui;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -84,6 +90,61 @@ fn main() -> anyhow::Result<()> {
     run_tui()
 }
 
+/// `$XDG_CONFIG_HOME/gtasks/config.toml`, falling back to `~/.config`.
+fn config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(base.join("gtasks").join("config.toml"))
+}
+
+/// The config from disk when it is valid and non-empty, otherwise the defaults
+/// with one demo repo so the TUI has something to show on a fresh machine.
+fn load_config() -> Config {
+    let Some(path) = config_path() else {
+        return demo_config();
+    };
+    if !path.exists() {
+        tracing::info!(path = %path.display(), "no config, using the demo repo");
+        return demo_config();
+    }
+    match Config::load(&path) {
+        Ok(config) if config.validate().is_ok() && !config.repos.is_empty() => config,
+        Ok(_) => {
+            tracing::warn!(path = %path.display(), "config has no usable repos");
+            demo_config()
+        }
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "cannot read config");
+            demo_config()
+        }
+    }
+}
+
+fn demo_config() -> Config {
+    Config {
+        repos: vec!["meviusisback/git-tasks-tui".to_string()],
+        ..Config::default()
+    }
+}
+
+/// Start one fetch in the background. Dropping the receiver with the app means
+/// a late result is simply discarded.
+fn spawn_fetch(
+    repos: Vec<String>,
+    kind: ItemKind,
+    limit: usize,
+    timeout: Duration,
+    parallel: usize,
+) -> Receiver<FetchOutcome> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = fetch::fetch_many(&repos, kind, limit, timeout, parallel);
+        let _ = tx.send(outcome);
+    });
+    rx
+}
+
 fn run_tui() -> anyhow::Result<()> {
     install_signal_handlers();
 
@@ -98,11 +159,55 @@ fn run_tui() -> anyhow::Result<()> {
     let _guard = TuiGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
-    let view = demo_view();
-    let mut app = App::default();
-    app.set_lengths(view.repos.len(), view.items.len());
+    let config = load_config();
+    let repos = config.repos.clone();
+    let timeout = Duration::from_secs(config.timeout_s.max(1));
+    let parallel = config.parallel;
+    let limit = config.limit as usize;
+
+    let mut app = App {
+        loading: true,
+        status: "loading…".to_string(),
+        ..App::default()
+    };
+    let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
+        repos.clone(),
+        ItemKind::Pr,
+        limit,
+        timeout,
+        parallel,
+    ));
 
     while !app.quit && !TERMINATE.load(Ordering::SeqCst) {
+        // Take a finished fetch, if any.
+        if let Some(rx) = &pending {
+            match rx.try_recv() {
+                Ok(outcome) => {
+                    app.apply_outcome(outcome);
+                    pending = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    app.loading = false;
+                    app.status = "fetch ended unexpectedly".to_string();
+                    pending = None;
+                }
+            }
+        }
+
+        // One refresh in flight at a time (single-flight).
+        if app.refresh_requested && pending.is_none() {
+            app.refresh_requested = false;
+            pending = Some(spawn_fetch(
+                repos.clone(),
+                ItemKind::Pr,
+                limit,
+                timeout,
+                parallel,
+            ));
+        }
+
+        let view = ui::view_for(&app);
         terminal.draw(|frame| ui::draw(frame, &app, &view))?;
 
         if event::poll(Duration::from_millis(250))? {
@@ -122,21 +227,4 @@ fn run_tui() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// Placeholder data until the fetch layer is wired: it proves the frame, the
-/// key map and the terminal lifetime all work in a real terminal.
-fn demo_view() -> ViewModel {
-    ViewModel {
-        repos: vec![
-            "meviusisback/git-tasks-tui".to_string(),
-            "meviusisback/omarchy-bitwarden-dropdown".to_string(),
-        ],
-        items: vec![
-            "#12 Add the repository selector".to_string(),
-            "#7 Fix the worktree path collision".to_string(),
-            "#3 Sanitise titles before rendering".to_string(),
-        ],
-        detail: "Demo content.\n\nReal data arrives when the fetch layer lands.".to_string(),
-    }
 }

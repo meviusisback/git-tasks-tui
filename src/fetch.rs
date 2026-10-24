@@ -63,7 +63,13 @@ pub fn fetch_one(
         repo: repo.to_owned(),
         source: source.into(),
     })?;
-    let argv = gh(&cwd, fetch_args(repo, kind, limit));
+    // `gh()` composes the argv; resolving the program is the caller's job (S2),
+    // and the spawn refuses anything that is not absolute.
+    let mut argv = gh(&cwd, fetch_args(repo, kind, limit));
+    argv.program = crate::binaries::resolve("gh").map_err(|source| FetchError::Run {
+        repo: repo.to_owned(),
+        source,
+    })?;
     fetch_with_caps(&argv, repo, kind, timeout, Caps::default())
 }
 

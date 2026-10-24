@@ -2,6 +2,9 @@
 //! no async. The event loop only translates crossterm events into [`Msg`] and
 //! calls [`App::update`], so every transition is unit-testable.
 
+use crate::fetch::FetchOutcome;
+use crate::model::Item;
+
 /// Which pane has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -39,7 +42,7 @@ pub enum Modal {
     Confirm(&'static str),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct App {
     pub pane: Pane,
     pub query: String,
@@ -53,6 +56,16 @@ pub struct App {
     pub searching: bool,
     pub quit: bool,
     pub status: String,
+    /// Data from the last successful refresh, in repo order.
+    pub items: Vec<Item>,
+    /// Distinct repos, in the order they first appear.
+    pub repos: Vec<String>,
+    /// A fetch is in flight: `r` must not start a second one.
+    pub loading: bool,
+    /// Repos whose last fetch failed.
+    pub failed: usize,
+    /// Set by the key handler, consumed by the event loop that owns the thread.
+    pub refresh_requested: bool,
 }
 
 impl Default for App {
@@ -69,6 +82,11 @@ impl Default for App {
             searching: false,
             quit: false,
             status: String::new(),
+            items: Vec::new(),
+            repos: Vec::new(),
+            loading: false,
+            failed: 0,
+            refresh_requested: false,
         }
     }
 }
@@ -80,6 +98,49 @@ impl App {
         self.list_len = list;
         self.repos_cursor = self.repos_cursor.min(repos.saturating_sub(1));
         self.list_cursor = self.list_cursor.min(list.saturating_sub(1));
+    }
+
+    /// Take the result of a fetch. Repo order is preserved, so the list does
+    /// not reshuffle between refreshes.
+    pub fn apply_outcome(&mut self, outcome: FetchOutcome) {
+        let FetchOutcome { items, failures } = outcome;
+        self.items = items;
+        self.failed = failures.len();
+        self.loading = false;
+
+        self.repos.clear();
+        for item in &self.items {
+            if !self.repos.iter().any(|repo| repo == &item.repo) {
+                self.repos.push(item.repo.clone());
+            }
+        }
+
+        self.set_lengths(self.repos.len(), self.items.len());
+        self.status = match self.failed {
+            0 => format!("{} items from {} repos", self.items.len(), self.repos.len()),
+            failed => format!(
+                "{} items from {} repos · {} failed",
+                self.items.len(),
+                self.repos.len(),
+                failed
+            ),
+        };
+    }
+
+    /// Items matching the search box. Case-insensitive on the title and the
+    /// number, so `/42` finds `#42`.
+    pub fn visible_items(&self) -> Vec<&Item> {
+        if self.query.trim().is_empty() {
+            return self.items.iter().collect();
+        }
+        let needle = self.query.to_lowercase();
+        self.items
+            .iter()
+            .filter(|item| {
+                item.title.to_lowercase().contains(&needle)
+                    || item.number.to_string().contains(&needle)
+            })
+            .collect()
     }
 
     pub fn update(&mut self, msg: Msg) {
@@ -125,6 +186,12 @@ impl App {
 
         match key {
             Key::Char('/') => self.searching = true,
+            // One refresh at a time: a second `r` while loading is ignored.
+            Key::Char('r') if !self.loading => {
+                self.loading = true;
+                self.refresh_requested = true;
+                self.status = "refreshing…".to_string();
+            }
             Key::Esc | Key::Char('q') => self.quit = true,
             Key::Tab => self.pane = next_pane(self.pane, true),
             Key::BackTab => self.pane = next_pane(self.pane, false),
