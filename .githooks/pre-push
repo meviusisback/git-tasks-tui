@@ -10,6 +10,25 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     [ "$remote_ref" = "refs/heads/main" ] || continue
     # Deletions (all-zero sha) are not merges.
     case "$local_sha" in 0000000000000000000000000000000000000000) continue;; esac
+    # A documentation-only push needs no tag: the rule exists to stop *code*
+    # from reaching main without a measured tree. A new branch (zero remote sha)
+    # has no diff to inspect, so it keeps the strict path.
+    docs_only=no
+    case "$remote_sha" in
+        0000000000000000000000000000000000000000) ;;
+        *)
+            if paths=$(git diff --name-only "$remote_sha..$local_sha" 2>/dev/null); then
+                if [ -n "$paths" ] && ! printf '%s\n' "$paths" | grep -qv '^docs/'; then
+                    docs_only=yes
+                fi
+            fi
+            ;;
+    esac
+    if [ "$docs_only" = yes ]; then
+        echo "pre-push: $local_sha touches docs/ only — no review tag needed."
+        continue
+    fi
+
     tags=$(git tag --points-at "$local_sha" | grep '^review/' || true)
     if [ -z "$tags" ]; then
         echo "pre-push: $local_sha is going to main with no review tag on it." >&2
