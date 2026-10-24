@@ -1,24 +1,19 @@
-# Keys (draft — final set lands with Task 5)
+# Keys (what the code does today)
 
 | Key | Action |
 |---|---|
-| `q` | quit |
-| `?` | help overlay |
-| `Tab` / `Shift-Tab` | next/previous pane (repos → list → detail) |
-| `j` / `k`, arrows | move selection / scroll |
-| `Enter` | open detail (or expand) |
-| `Esc` | back / close modal |
-| `r` | refresh (single-flight) |
-| `/` | search |
-| `f` | filter menu (state, kind, group) |
-| `w` | create / go to worktree |
-| `a` | approve (confirmed) |
-| `c` | comment (editor) |
-| `m` | merge menu (typed confirm) |
-| `x` | close / reopen |
-| `o` | open in browser |
-| `y` | copy link |
-| `s` | settings |
-| `p` | pick profile for the agent |
+| `q` / `Esc` | quit |
+| `a` | ask to act on the selected PR: opens a confirmation showing the exact command |
+| `y` | in the confirmation: run the command |
+| `n` / `Esc` | in the confirmation: cancel — nothing runs |
+| `Enter` | open the detail of the selected item |
+| `Tab` | next pane (repos → list → detail) |
+| `↑` / `↓` | move the selection |
+| `/` | search (type to filter, `Enter` leaves the box, `Esc` closes it) |
+| `o` | open the selected item in the browser |
+| `r` | refresh |
 
-Destructive actions always open a confirmation; `--delete-branch` is a separate, non-default action.
+`a` on an **issue** does nothing and says why: issues are not merged. The merge
+method is a constant (`FIRST_ACTION_METHOD`, today `squash`) and `--delete-branch`
+is always off, so neither is reachable from the keyboard yet. `?`, `f`, `w`, `c`,
+`m`, `x`, `s`, `p` are planned, not implemented.
