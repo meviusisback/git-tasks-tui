@@ -143,3 +143,19 @@ fn the_short_delete_flag_is_allowed_but_force_inside_a_cluster_is_not() {
     );
     assert!(check_argv(&value).is_ok(), "a value is not a flag");
 }
+
+/// D-1 (known gap, LOW): the cluster alphabet does not generalise. `-fR`
+/// carries `-f` plus a letter the alphabet does not know, so it is not
+/// decomposed and passes. This test records the gap so it cannot be forgotten;
+/// when `CheckedArgv` lands (strict scanning for hand-built argvs) it must fail
+/// and be replaced by one that asserts the refusal.
+#[test]
+fn known_gap_a_cluster_with_an_unknown_letter_slips_through() {
+    for cluster in ["-fR", "-fq", "-fn"] {
+        let argv = argv(PathBuf::from("/bin/true"), vec![OsString::from(cluster)]);
+        assert!(
+            check_argv(&argv).is_ok(),
+            "{cluster}: if this now fails, D-1 was fixed — replace this test"
+        );
+    }
+}
