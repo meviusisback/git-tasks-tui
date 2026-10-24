@@ -296,25 +296,67 @@ impl std::io::Write for RotatingFile {
 /// would not — that only protects the call sites that remember to use it.
 pub struct SanitisingWriter<W> {
     inner: W,
+    /// Bytes seen but not yet terminated by `\n`: sanitising happens per LINE, not
+    /// per `write`, so a token split across two writes cannot slip through.
+    pending: Vec<u8>,
 }
+
+/// Flush `pending` unsanitised-cheaply if a writer never sends a newline.
+const MAX_PENDING: usize = 64 * 1024;
 
 impl<W> SanitisingWriter<W> {
     pub fn new(inner: W) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            pending: Vec::new(),
+        }
+    }
+
+    /// Sanitise one complete line body and terminate it with exactly one newline.
+    ///
+    /// `sanitize` keeps `\n` on purpose (the detail pane renders multi-line bodies),
+    /// but in a log a newline is a *record separator*: untrusted text carrying one
+    /// could forge a record (CWE-117). Escaping it here keeps one record per line.
+    fn emit_line(inner: &mut W, body: &[u8]) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        let text = String::from_utf8_lossy(body);
+        let clean = crate::sanitize::sanitize(&text).replace('\n', "\\n");
+        inner.write_all(clean.as_bytes())?;
+        inner.write_all(b"\n")
     }
 }
 
 impl<W: io::Write> io::Write for SanitisingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let text = String::from_utf8_lossy(buf);
-        let clean = crate::sanitize::sanitize(&text);
-        self.inner.write_all(clean.as_bytes())?;
+        self.pending.extend_from_slice(buf);
+
+        // A *record* is the unit of sanitising: accumulate until the buffer ends with
+        // the newline the formatting layer appends. Accumulating is what makes a token
+        // split across two writes still match (L-3).
+        if self.pending.last() == Some(&b'\n') {
+            let record: Vec<u8> = std::mem::take(&mut self.pending);
+            let body = record.strip_suffix(b"\n").unwrap_or(&record);
+            Self::emit_line(&mut self.inner, body)?;
+        } else if self.pending.len() > MAX_PENDING {
+            // A writer that never terminates a record must not grow this forever.
+            let body: Vec<u8> = std::mem::take(&mut self.pending);
+            Self::emit_line(&mut self.inner, &body)?;
+        }
+
         // Report the whole buffer as consumed: the caller must not retry the
         // remainder, the sanitised text is not byte-for-byte identical.
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        if !self.pending.is_empty() {
+            let body: Vec<u8> = std::mem::take(&mut self.pending);
+            let text = String::from_utf8_lossy(&body);
+            let clean = crate::sanitize::sanitize(&text).replace('\n', "\\n");
+            self.inner.write_all(clean.as_bytes())?;
+        }
         self.inner.flush()
     }
 }
