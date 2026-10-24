@@ -17,7 +17,7 @@
 
 - Plugin reference (live, 2418 lines, sha `9c475df2…`): `~/.hermes/desktop-plugins/git-tasks/plugin.js`. Source repo: `~/repo/git-tasks/desktop/plugin.js` (plus `test/`, `scripts/`, `docs/`).
 - Host: Omarchy/Arch, Fish, `gh` 2.103.0 authenticated as `meviusisback`, Hermes v0.22.5 at `~/.local/bin/hermes`, profiles in `~/.hermes/profiles/*`.
-- **No Rust toolchain installed** (`cargo`/`rustc`/`rustup` absent, `~/.cargo/bin` missing). `pacman` offers `rustup 1.29.1` → **Task 0, needs Alberto's OK**.
+- **Rust toolchain installed** (2026-10-24): `rustup 1.29.1` from pacman, toolchain `stable 1.99.1`, `clippy` + `rustfmt` present. `cargo` is at `/usr/sbin/cargo`. → Task 0 done.
 - Linux only in the MVP.
 
 ## Non-goals (MVP)
@@ -128,9 +128,8 @@ hermes -p <profile> chat --query-file - --in <worktree> [--ignore-rules]
 
 ## Task list (vertical; after Task 8 the app is usable read-only)
 
-### Task 0 — Toolchain (needs Alberto's OK)
-**Work:** `sudo pacman -S rustup` + `rustup default stable` (or CI-only, but Task 15 needs a local toolchain).
-**Verify:** `cargo --version`, `rustc --version`.
+### Task 0 — Toolchain — DONE (2026-10-24)
+`rustup 1.29.1` (pacman) + toolchain `stable 1.99.1` + `clippy`/`rustfmt`. Verified `cargo/rustc/clippy/fmt --version`.
 
 ### Task 1 — Scaffold + logging + CLI spike
 **Files:** `Cargo.toml`, `src/main.rs`, `.gitignore`, `rust-toolchain.toml`, `.github/workflows/ci.yml`, `docs/agent-cli.md`.
