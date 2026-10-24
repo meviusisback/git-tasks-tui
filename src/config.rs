@@ -205,13 +205,57 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 }
 
 /// Read a file, refusing a symlink at `path`.
+///
+/// The refusal is **atomic**: `O_NOFOLLOW` makes the open itself fail on a
+/// symlink, so there is no window between a `symlink_metadata` check and the
+/// read in which the link could be planted (the same TOCTOU class as S5's L4).
 pub(crate) fn read_private(path: &Path) -> anyhow::Result<String> {
-    let meta = std::fs::symlink_metadata(path)
-        .with_context(|| format!("cannot stat {}", path.display()))?;
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .with_context(|| format!("cannot open {} (symlinks are refused)", path.display()))?;
     ensure!(
-        !meta.file_type().is_symlink(),
-        "refusing to read a symlink: {}",
+        file.metadata()
+            .with_context(|| format!("cannot fstat {}", path.display()))?
+            .is_file(),
+        "refusing to read a non-regular file: {}",
         path.display()
     );
-    std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(text)
+}
+
+#[cfg(test)]
+mod read_private_tests {
+    use super::read_private;
+
+    #[test]
+    fn a_symlinked_config_is_refused_at_open_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.toml");
+        std::fs::write(&real, "repos = []").unwrap();
+        let link = dir.path().join("link.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let err = read_private(&link).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("symlink") || text.contains("Too many levels"),
+            "the open itself must fail, got: {text}"
+        );
+    }
+
+    #[test]
+    fn a_regular_file_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "repos = [\"a/b\"]").unwrap();
+        assert_eq!(read_private(&path).unwrap(), "repos = [\"a/b\"]");
+    }
 }

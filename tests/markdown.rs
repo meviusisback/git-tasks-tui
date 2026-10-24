@@ -92,3 +92,12 @@ fn lists_render_one_item_per_line() {
     assert!(texts[0].contains("first"));
     assert!(texts[2].contains("third"));
 }
+
+#[test]
+fn plain_spans_are_sanitised_too() {
+    // `Span::plain` is public: it must not become the shortcut that skips S13.
+    let span = gtasks::markdown::Span::plain("a\u{1b}[31mb\u{202e}");
+    assert!(!span.text.contains('\u{1b}'), "got {:?}", span.text);
+    assert!(!span.text.contains('\u{202e}'), "got {:?}", span.text);
+    assert!(span.text.starts_with('a'));
+}

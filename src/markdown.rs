@@ -25,9 +25,11 @@ pub struct Span {
 }
 
 impl Span {
+    /// A plain span. Text is sanitised here too: a public constructor that
+    /// skipped it would become the way hostile text reaches the renderer.
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            text: sanitize(&text.into()),
             style: Style::Plain,
         }
     }
