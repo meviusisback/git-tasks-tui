@@ -62,7 +62,9 @@ if [ -n "$key_symbol" ]; then
         *" absent "*)   ks_file=${key_symbol%% absent *};   ks_verb=absent;   ks_text=${key_symbol#* absent } ;;
         *) ks_file='' ;;
     esac
-    ks_text=$(printf '%s' "$ks_text" | sed 's/^"//; s/" *$//')
+    # K-3: after the closing quote comes prose, not more text — and a note after
+    # it must not turn a correct row into a false MISSING.
+    ks_text=$(printf '%s' "$ks_text" | sed 's/^"//; s/".*$//')
     # K-1: a file that does not exist cannot satisfy `absent` — a missing file
     # is a broken row, not an absent symbol.
     if [ -z "$ks_file" ] || ! git cat-file -e "origin/main:$ks_file" 2>/dev/null; then
