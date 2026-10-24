@@ -478,6 +478,14 @@ impl App {
                 Pane::List if matches!(self.repo_filter, RepoFilter::One(_)) => {
                     self.pane = Pane::Repos
                 }
+                // Second Esc, in the repos pane with a filter: clear it and
+                // go home to row 0. The filter follows the cursor, so moving
+                // the cursor is enough — `apply_repo_filter` resets the list
+                // cursor, the stale detail and the status line too.
+                Pane::Repos if matches!(self.repo_filter, RepoFilter::One(_)) => {
+                    self.repos_cursor = 0;
+                    self.apply_repo_filter();
+                }
                 Pane::List | Pane::Repos => {}
             },
             Key::Char('q') => self.quit = true,

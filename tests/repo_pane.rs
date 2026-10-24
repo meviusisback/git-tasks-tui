@@ -171,6 +171,29 @@ fn legend_follows_the_drill_mode() {
 }
 
 #[test]
+fn esc_in_the_repos_pane_with_a_filter_clears_it() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, filter live
+    app.update(Msg::Key(Key::Enter)); // drill in
+    app.update(Msg::Key(Key::Esc)); // drill out: Repos, cursor kept
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    assert_eq!(app.repos_cursor, 2);
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::One(_)));
+
+    app.update(Msg::Key(Key::Esc)); // second Esc: clear
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    assert_eq!(app.repos_cursor, 0, "Esc goes home to row 0");
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::All));
+    assert_eq!(app.status, "— all repos — · 1 items");
+
+    app.update(Msg::Key(Key::Esc)); // no filter: no-op, no quit
+    assert!(!app.quit);
+    assert_eq!(app.repos_cursor, 0);
+}
+
+#[test]
 fn acting_on_an_item_uses_that_items_repo_not_the_cursor() {
     // The cursor sits on the "all" row (index 0), whose text is not a repo slug:
     // if the action took its repo from the cursor, this could never work.
