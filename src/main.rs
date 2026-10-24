@@ -49,6 +49,10 @@ fn install_signal_handlers() {
         let handler = on_signal as *const () as libc::sighandler_t;
         libc::signal(libc::SIGTERM, handler);
         libc::signal(libc::SIGHUP, handler);
+        // SIGINT too: raw mode turns Ctrl-C into a key event, but an external
+        // `kill -INT` would otherwise leave the terminal in the alternate
+        // screen (S15).
+        libc::signal(libc::SIGINT, handler);
     }
 }
 

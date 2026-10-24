@@ -242,11 +242,25 @@ impl RotatingFile {
     /// writing: losing the record is worse than a file slightly over the bound.
     fn rotate(state: &mut RotatingState) {
         if rotate_log(&state.path, 0).is_err() {
+            // Silence here would void the size bound without a trace (S14-1).
+            tracing::warn!(
+                path = %state.path.display(),
+                "log rotation failed; the size bound no longer holds"
+            );
             return;
         }
-        if let Ok(file) = open_log_file(&state.path) {
-            state.file = file;
-            state.written = 0;
+        match open_log_file(&state.path) {
+            Ok(file) => {
+                state.file = file;
+                state.written = 0;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    path = %state.path.display(),
+                    error = %err,
+                    "cannot reopen the log after rotation"
+                );
+            }
         }
     }
 }

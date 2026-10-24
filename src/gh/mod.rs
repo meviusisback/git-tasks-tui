@@ -62,17 +62,30 @@ impl Argv {
 
 /// Flags that must never be produced by the builders (S9). Exact element
 /// match only: `--force-with-lease` and friends stay legal.
-const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto"];
+const FORBIDDEN: &[&str] = &[
+    "--admin",
+    "--force",
+    "--auto",
+    "--delete-branch",
+    "-d",
+    "-f",
+];
 
 /// The choke point: every argv passes here, whether it came from `gh()`/`git()`
 /// or from a literal `Argv` (the fields are `pub`, so a factory bypass must not
 /// be enough). Returns an error, never panics: this is a runtime refusal, not a
 /// programmer assertion.
+///
+/// Matching normalises on the `--flag=value` form: `--force=true` is refused
+/// like `--force`, and `--delete-branch` like `-d`. A short-flag cluster such as
+/// `-fd` is *not* decomposed — the long-term answer is an allowlist of the flags
+/// the app actually uses (T2-3b).
 pub fn check_argv(argv: &Argv) -> anyhow::Result<()> {
     for arg in &argv.args {
         let text = arg.to_string_lossy();
+        let flag = text.split('=').next().unwrap_or(&text);
         anyhow::ensure!(
-            !FORBIDDEN.iter().any(|flag| text == *flag),
+            !FORBIDDEN.contains(&flag),
             "refusing forbidden flag {text:?}"
         );
     }
@@ -158,6 +171,9 @@ pub struct Output {
 pub struct Timeout {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    /// True when a reader missed the deadline, so the payload is incomplete
+    /// (S12-1): a caller must not treat it as whole.
+    pub truncated: bool,
 }
 
 impl std::fmt::Display for Timeout {
@@ -338,7 +354,12 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
                 err_truncated,
                 "child timed out; output may be incomplete"
             );
-            return Err(Timeout { stdout, stderr }.into());
+            return Err(Timeout {
+                stdout,
+                stderr,
+                truncated: out_truncated || err_truncated,
+            }
+            .into());
         }
         std::thread::sleep(Duration::from_millis(10));
     }

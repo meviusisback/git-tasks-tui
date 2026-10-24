@@ -33,7 +33,19 @@ fn a_literal_argv_cannot_pass_a_forbidden_flag() {
 
 #[test]
 fn every_forbidden_flag_is_refused() {
-    for flag in ["--admin", "--force", "--auto"] {
+    // Long and short forms, plus the value-normalised spelling: `--force=true`
+    // must not slip past an exact match (T2-3b).
+    for flag in [
+        "--admin",
+        "--force",
+        "--auto",
+        "--delete-branch",
+        "-f",
+        "-d",
+        "--force=true",
+        "--admin=yes",
+        "--delete-branch=1",
+    ] {
         let argv = argv(PathBuf::from("/bin/echo"), vec![OsString::from(flag)]);
         let err = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap_err();
         assert!(

@@ -48,3 +48,11 @@ fn sanitize_composes_all_three_steps() {
     assert!(out.contains("[REDACTED]"), "token must be redacted");
     assert!(out.starts_with("title"), "prefix stays: {out}");
 }
+
+#[test]
+fn invisible_separators_are_removed() {
+    // U+2028/U+2029 break lines in some renderers and U+FEFF hides a zero-width
+    // character: neither belongs in a title or a body.
+    let text = "a\u{2028}b\u{2029}c\u{feff}d";
+    assert_eq!(strip_controls(text), "abcd");
+}

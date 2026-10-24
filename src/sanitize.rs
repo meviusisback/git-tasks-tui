@@ -15,6 +15,8 @@ pub fn strip_controls(input: &str) -> String {
                 0x0A | 0x09 => true,         // newline and tab are layout
                 0x00..=0x1F | 0x7F => false, // C0 and DEL
                 0x80..=0x9F => false,        // C1
+                0x2028 | 0x2029 => false,    // line/paragraph separators
+                0xFEFF => false,             // zero-width no-break space
                 _ => true,
             }
         })
