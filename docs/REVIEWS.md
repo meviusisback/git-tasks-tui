@@ -23,6 +23,7 @@ branch moved afterwards is stale by definition and must be re-tagged.
 | `main@c6f3559` | `c6f3559` | **FAIL** | slug ✓ (probe green); `check_argv` called from `run_pipe_with_caps` before spawn, error not panic, effective on hand-built `Argv`; `is_retryable_spawn_error` + `only_etxtbsy_is_retryable` | **B-1** and **S15-1** unchanged; **T2-3b** literal match let `-f`, `-d`, `--delete-branch`, `--force=true` through |
 | `main@77a844e` | `77a844e` | awaiting verdict | S15-1 **closed**: `SIGINT` handled — pty probe `kill -INT` → `RC=0`, `1049l` present, no leftover process. T2-3b **closed**: matching normalises on `=`, short forms and `--delete-branch` refused (`tests/choke_point.rs`, 9 spellings). S14-1 **closed**: rotation failure logs a warning. S12-1 **closed**: `Timeout` carries `truncated`. INFO closed: U+2028/U+2029/U+FEFF stripped (`tests/sanitize.rs`) | **B-1** (builders resolve at construction, `Binaries` at startup → Task 2b/10b); short-flag clusters (`-fd`) still not decomposed; Task 8 detail wired (`3cc153d`) |
 | `main@5d7cc37` | `5d7cc37` | awaiting verdict | **B-1 closed**: `Binaries { gh, git, hermes }` is resolved **once at startup** (`Binaries::detect`, verified by `binaries::verify`) and injected into `gh()`/`git()`, so no builder can emit an unverified program and no PATH lookup happens at spawn. Tests no longer overwrite `argv.program`: `tests/process.rs` and `tests/env.rs` build a `Binaries` with explicit paths. Live check: `cli/cli` renders #14689, #14716, #14727, #14781, #14783 and the detail body. 26 suites green, clippy clean | T2-3c clusters (`-fd`), `slug.replace('/','--')` not injective, `pre_exec` ignores `prctl`'s return, M-3 |
+| `main@e0cbe1d` | `e0cbe1d` | awaiting verdict | **prctl return checked**: a failed `PR_SET_PDEATHSIG` now fails the spawn instead of running without the death-signal; **worktree path de-flattened**: `owner/repo` stays two components, so `a--b/c` and `a/b--c` no longer share a directory (`distinct_slugs_can_never_flatten_into_one_directory`). S11/S12 now say out loud that the timeout bounds the child, not its readers (T2-5). 26 suites green | T2-3c clusters (`-fd`), M-3 |
 
 ## Standing rules this ledger encodes
 
@@ -41,9 +42,6 @@ branch moved afterwards is stale by definition and must be re-tagged.
 
 - **T2-3c** short-flag clusters (`-fd`) are not decomposed; the long-term answer is an allowlist of the
   flags the app actually uses.
-- **`slug.replace('/', "--")` is not injective** (`a--b/c` and `a/b--c` collide); a length-prefixed or
-  hashed component removes the ambiguity.
-- **`pre_exec`** ignores `prctl`'s return value.
 - **M-3** the render test should reuse the same hostile bytes as the model probe.
 
 ## Closed since this ledger started
@@ -55,3 +53,4 @@ branch moved afterwards is stale by definition and must be re-tagged.
 - **R5-1** in-session log rotation (`b990b65`).
 - **S15-1 / S12-1 / S14-1 / T2-3b / U+2028-29-FEFF** (`77a844e`).
 - **B-1 / T2-2** binaries resolved once at startup and injected into the builders (`5d7cc37`).
+- **prctl return** and **slug flattening** (`e0cbe1d`).

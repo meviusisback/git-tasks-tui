@@ -84,7 +84,8 @@ refresh" if it differs from what the user saw.
 
 ## S11 — Processes die as a group (pipe children only)
 For **non-interactive** children (`gh`, `git`): `kill_on_drop(true)`, `process_group(0)`,
-`kill(-pgid)` on timeout/quit, `prctl(PR_SET_PDEATHSIG, SIGTERM)` in `pre_exec`. **No retry on write
+`kill(-pgid)` on timeout/quit, `prctl(PR_SET_PDEATHSIG, SIGKILL)` in `pre_exec` — and a failed `prctl`
+**fails the spawn** instead of running without the death-signal. **No retry on write
 actions** — a killed comment or merge has an unknown outcome; surface "verify on GitHub". Writes get
 their own longer timeout. **Exception:** the interactive agent child must NOT get `process_group(0)`
 (a non-foreground pgroup reading the tty stops on SIGTTIN); see S15.
@@ -95,6 +96,12 @@ stderr). The cap **truncates and drains** instead of killing the child: a writer
 lose the diagnostic we are about to show, and the child is already bounded by the wall-clock timeout.
 `truncated` is reported. JSON is parsed only from the capped bytes; `model::parse_list` has **no cap of
 its own** — the caller's `Caps` is the single bound (M-2).
+
+**Honest limit (T2-5):** the wall-clock timeout bounds the **child**, not its readers. A grandchild that
+survives the group kill (e.g. it called `setsid`) can hold the pipe open; both readers are joined under
+one shared 2 s deadline and, if they miss it, their stream is reported as `truncated = true` and the
+thread is left detached. So a partial payload can never look whole — but nothing guarantees the reader
+stops. Closing that needs poll-based readers with their own deadline.
 
 ## S13 — Output hygiene
 `ratatui >= 0.28` filters control characters in `Buffer`; pin it and keep a regression test with an
