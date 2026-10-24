@@ -317,6 +317,13 @@ fn sanitise_line(text: &str) -> String {
 }
 
 /// A writer that never sends a newline must not grow the buffer forever.
+///
+/// Known limits of sanitising at this layer, both measured in review: a payload
+/// newline landing exactly on a `write` boundary is indistinguishable from the
+/// record terminator, so it can still split a record; and a single `write`
+/// carrying two records is merged into one, with the inner newline escaped.
+/// Both are inherent to the writer — the complete fix belongs to the formatting
+/// layer, where the message and the separator are different things.
 const MAX_PENDING: usize = 64 * 1024;
 
 impl<W: io::Write> SanitisingWriter<W> {
