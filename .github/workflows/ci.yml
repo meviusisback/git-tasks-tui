@@ -35,3 +35,9 @@ jobs:
         # its lines, so the check uses `--prefix none` to get countable
         # top-level `name vX.Y` rows.
         run: test "$(cargo tree --locked --prefix none | awk '/^crossterm v/{print $2}' | sort -u | wc -l)" = "1"
+      - name: audit-controls
+        # Threat controls: git/fs behaviour, no binary needed (16/16).
+        run: bash tests/invariants/run_all.sh --suite controls
+      - name: audit-invariants
+        # S7/S14 assertions against the freshly built binary.
+        run: bash tests/invariants/run_all.sh --suite invariants --bin target/debug/gtasks

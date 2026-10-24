@@ -4,4 +4,5 @@
 //! can import it (`use gtasks::...`). `src/main.rs` stays a thin wrapper:
 //! CLI parsing, logging init, process lifetime.
 
+pub mod agent;
 pub mod logging;

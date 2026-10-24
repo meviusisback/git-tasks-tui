@@ -245,3 +245,23 @@ fn private_dir_and_log_modes_are_0700_and_0600() {
     drop(open_log_file(&log).unwrap());
     assert_eq!(mode_of(&log), 0o600, "a fresh log must be 0600");
 }
+
+/// S5/S14: the agent runtime dir follows the same rule as the state dir.
+#[test]
+fn runtime_dir_symlink_is_not_followed() {
+    let root = tempfile::tempdir().unwrap();
+    let victim = root.path().join("victim");
+    std::fs::create_dir(&victim).unwrap();
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let link = root.path().join("gtasks");
+    symlink(&victim, &link).unwrap();
+
+    let err = gtasks::agent::ensure_runtime_dir(&link)
+        .expect_err("symlinked runtime dir must be refused");
+    assert!(
+        format!("{err:#}").contains("symlink"),
+        "error must name the symlink refusal, got: {err:#}"
+    );
+    assert_eq!(mode_of(&victim), 0o755, "victim dir mode must be unchanged");
+}
