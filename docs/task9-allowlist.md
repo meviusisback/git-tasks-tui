@@ -149,17 +149,20 @@ impl RepoSlug { pub fn parse(s: &str) -> anyhow::Result<Self> { /* config::valid
 Security-wise this is neutral (an invalid slug is refused today in `tokens_for`); design-wise it is
 positive: the decision moves into `RepoSlug::parse`, so there is **one** decision instead of four.
 
-`--repo` must **not** disappear from the check, though: if the constructor emits a flag the allowlist
-does not know, `ensure_allowlisted` refuses everything. It becomes a per-tool common list:
+`--repo` stays out of the per-action lists, but only because the **constructor** emits it from the
+typed value. That keeps the check honest: the prefix is outside the allowlist because a type with one door
+produces it, not because we trust it.
 
 ```rust
-const GH_COMMON: &[&str] = &["--repo"];
-fn allowed_for(tool: Tool, action: &Action) -> Vec<&'static str> {
-    tool_common(tool).iter().chain(flags_for(action)).copied().collect()
+fn gh_action(b: &Binaries, slug: &RepoSlug, action: &Action) -> anyhow::Result<Argv> {
+    let tokens = tokens_for(action)?;
+    ensure_allowlisted(&tokens, flags_for(action))?;   // only the action's own flags
+    let mut args: Vec<OsString> = vec!["--repo".into(), slug.as_str().into()];
+    args.extend(tokens.into_iter().map(Token::into_os));
+    Ok(gh(b, &cwd, args))
 }
 ```
 
-Three reasons this beats removal: every flag stays visible to `ensure_allowlisted`; it is per tool, so the
-first `git` action (`-C <path>`, or the cwd) does not need an exception; and four copies of the same
-decision become one.
+Fail-closed is preserved: an action token that names `--repo` is not in `flags_for(action)` and is refused.
+This replaced an earlier `GH_COMMON` constant, which kept the flag in a list and merely deduplicated it.
 
