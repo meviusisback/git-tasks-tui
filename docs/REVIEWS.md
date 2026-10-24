@@ -79,3 +79,17 @@ PR) and Task 11 (agent), neither of which has been written yet.
 - **B-1 / T2-2** binaries resolved once at startup and injected into the builders (`5d7cc37`).
 - **prctl return** and **slug flattening** (`e0cbe1d`).
 - **T2-3c** short-flag clusters and **M-3** hostile render bytes (`e6d3b0d`).
+
+## Notes on history
+
+Two commits in `main` carry a `tmp:` prefix. They are kept on purpose rather than
+rewritten (rewriting would change every SHA this ledger relies on), and this is
+what they were:
+
+| commit | what it was |
+|---|---|
+| `dc716c6` | probe: the ledger row's `key-symbol` was pointed at a symbol that does not exist, to prove `review-state.sh` refuses to report `in sync`. Reverted by `7083ac7`. |
+| `989a37e` | probe: a `key-symbol ... absent` pointing at a missing file, which exposed K-1. Fixed in `083feee5`. |
+
+Both were experiments that succeeded; the ledger records them here so `git log`
+does not have to be read as a mystery.
