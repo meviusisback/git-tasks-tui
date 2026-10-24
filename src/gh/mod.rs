@@ -149,6 +149,33 @@ impl std::fmt::Display for Timeout {
 
 impl std::error::Error for Timeout {}
 
+/// Kills the child's process group on drop unless disarmed — the synchronous
+/// equivalent of `kill_on_drop`. Any early return after `spawn` (an error from
+/// `try_wait`, a panic while collecting output) must not leave the child and
+/// its descendants running (S11).
+struct GroupGuard {
+    pid: libc::pid_t,
+    armed: bool,
+}
+
+impl GroupGuard {
+    fn new(pid: libc::pid_t) -> Self {
+        Self { pid, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            terminate_group(self.pid);
+        }
+    }
+}
+
 /// Resolve `program` (bare names through `binaries::resolve`, absolute paths
 /// through `binaries::verify`) so every spawned binary is checked (S2).
 fn resolve_program(program: &Path) -> anyhow::Result<PathBuf> {
@@ -171,7 +198,7 @@ fn spawn_retry(
     for _ in 0..10 {
         match cmd.spawn() {
             Ok(child) => return Ok(child),
-            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY as i32) => {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
                 last = Some(e);
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -199,6 +226,7 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
 
     let mut child = spawn_retry(&mut cmd, &argv.program)?;
     let pid = child.id() as libc::pid_t;
+    let mut guard = GroupGuard::new(pid);
 
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
@@ -208,6 +236,7 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait().context("cannot wait for child")? {
+            guard.disarm();
             let (stdout, out_truncated) = reader_out.join().unwrap_or_default();
             let (stderr, err_truncated) = reader_err.join().unwrap_or_default();
             return Ok(Output {
@@ -220,6 +249,7 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
         if Instant::now() >= deadline {
             terminate_group(pid);
             let _ = child.wait();
+            guard.disarm();
             let (stdout, _) = reader_out.join().unwrap_or_default();
             let (stderr, _) = reader_err.join().unwrap_or_default();
             return Err(Timeout { stdout, stderr }.into());
