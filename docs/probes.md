@@ -130,5 +130,7 @@ stops resolving; the example needs `gtasks::binaries::resolve`.
 
 Rule: **`no_run` always, `ignore` never.** `ignore` does not fail even when the
 symbol it mentions does not exist: it is not a postponed proof, it is an
-absent one. An example that cannot be made compilable is prose — take it out
+absent one. It is also the only form in which an example can **describe a
+signature that does not exist** — `gh(cwd, &args)` with two arguments while
+the real function takes three — without anyone noticing. An example that cannot be made compilable is prose — take it out
 of the code block.
