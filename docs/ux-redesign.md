@@ -235,7 +235,13 @@ elsewhere; the legend and the status line share the same palette.
 
 1. Untrusted text is displayed with escape sequences sanitised and never reaches
    argv or a shell.
-2. Actions still go through `CheckedArgv`; no new path to spawn.
+2. Actions still go through `CheckedArgv`; no new path to spawn. **The spawn
+   sites are a declared list** (`tests/invariants/`), not a judgement call: each
+   entry carries the reason it exists, an undeclared site fails, and a declared
+   site that no longer contains `Command::new` fails too (a stale exemption must
+   die with the thing that justified it). The detector also fails when it finds
+   *nothing*, because a pattern that matches nothing describes a broken pattern,
+   not a healthy repo.
 3. The agent and the worktrees do not weaken any existing test: the suite stays
    green, clippy `--all-targets -D warnings` stays at 0.
 4. Every stage is reviewed on a tagged tree before merge (`pre-push` enforces it).
