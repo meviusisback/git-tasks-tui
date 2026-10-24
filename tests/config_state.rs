@@ -31,9 +31,11 @@ fn config_roundtrip_is_private() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("gtasks/config.toml");
 
-    let mut config = Config::default();
-    config.repos = vec!["owner/repo".into()];
-    config.parallel = 2;
+    let config = Config {
+        repos: vec!["owner/repo".into()],
+        parallel: 2,
+        ..Config::default()
+    };
     config.save(&path).unwrap();
 
     assert_eq!(mode_of(&path), 0o600, "config must be 0600");
@@ -66,9 +68,11 @@ fn invalid_config_is_an_error_not_a_fallback() {
     );
 }
 
+type Mutation = Box<dyn Fn(&mut Config)>;
+
 #[test]
 fn validation_rejects_out_of_range_values() {
-    let cases: Vec<Box<dyn Fn(&mut Config)>> = vec![
+    let cases: Vec<Mutation> = vec![
         Box::new(|c| c.parallel = 0),
         Box::new(|c| c.parallel = 9),
         Box::new(|c| c.timeout_s = 0),
