@@ -44,10 +44,22 @@ This file is the contract; if the code and this file disagree, the file is the b
 | `/` | left column | filter the visible list |
 | `r` | always | refresh |
 | `?` | always | full keymap overlay |
-| `q` | always | quit (with a confirmation if the agent is running) |
+| `q` | always | **the normal exit** (with a confirmation if the agent is running) |
+| `Ctrl-C` | always | **the emergency exit** — unconditional, works even when the UI is stuck |
 
 Every destructive action keeps the existing rule: a confirmation that shows the
 **exact argv**, `y` runs it, `n`/`Esc` cancels.
+
+**`Esc` is never an exit.** It goes up one level and stops at the first. The
+property is "no `Esc`, in no state, sets `quit`" — not "Esc at the top level",
+because the states multiply (`pane`, overlay, search) and the special case is
+what rots. The test sweeps every combination, and an exhaustive `match` over
+`Pane` makes a new pane a compile error, so whoever adds one is forced to look at
+the sweep. `q` quits, `Ctrl-C` always quits, `Esc` does not.
+
+This is not cosmetic: from stage 16 an agent may be running with
+`PR_SET_PDEATHSIG`, so an extra `Esc` would kill the agent — one keystroke
+deleting the work you were watching.
 
 ## Detail box: the fields the plugin shows
 
