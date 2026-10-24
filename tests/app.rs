@@ -120,5 +120,12 @@ fn modal_swallows_keys_and_resolves() {
     app.modal = Some(Modal::Confirm("merge?"));
     press(&mut app, Key::Char('y'));
     assert!(app.modal.is_none());
-    assert_eq!(app.status, "confirmed");
+    // X-1: `y` used to answer "confirmed" while no action ran — the sentence
+    // said what did *not* happen. Until the modal is reachable and calls
+    // `execute`, it must say exactly that.
+    assert!(
+        app.status.contains("nothing ran"),
+        "y must not claim success: {:?}",
+        app.status
+    );
 }
