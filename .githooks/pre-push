@@ -48,7 +48,31 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         echo "pre-push: the push was refused." >&2
         status=1
     else
-        echo "pre-push: $local_sha carries $(echo "$tags" | tr '\n' ' ')- the tag exists; the verdict is a human step."
+        # H-4: a local tag is not a published tag. `--points-at` sees this clone
+        # only, so a second person (or a rebase that moves the tag) can push code
+        # whose tag never left the machine. Ask the remote, when it answers.
+        verified=no
+        if remote_tags=$(git ls-remote --tags --refs "$2" 2>/dev/null); then
+            for tag in $tags; do
+                # grep, not `case`: one published tag among several must be
+                # enough, and a pattern match on a multi-line string only ever
+                # looks at the end of it.
+                if printf '%s\n' "$remote_tags" | grep -q "refs/tags/$tag\$"; then
+                    verified=yes
+                    break
+                fi
+            done
+            if [ "$verified" != yes ]; then
+                echo "pre-push: $local_sha carries $(echo "$tags" | tr '\n' ' ') locally, but the remote has no such tag." >&2
+                echo "pre-push: push the tag first (git push origin <tag>) or use git push --follow-tags." >&2
+                echo "pre-push: the push was refused." >&2
+                status=1
+                continue
+            fi
+        else
+            echo "pre-push: the remote could not be reached; the tag was not verified against it." >&2
+        fi
+        echo "pre-push: $local_sha carries $(echo "$tags" | tr '\n' ' ')- the tag is published; the verdict is a human step."
     fi
 done
 exit "$status"

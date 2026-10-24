@@ -52,8 +52,11 @@ fi
 selftest_tag="review/install-selftest-$$"
 head_sha=$(git rev-parse HEAD)
 git tag -f "$selftest_tag" "$head_sha" >/dev/null 2>&1 || true
+# The remote URL is deliberately unreachable here: with the remote answering,
+# the hook also demands that the tag be *published* (H-4), and the installer must
+# not depend on the network to prove the accept-direction.
 if ! printf 'refs/heads/main %s refs/heads/main %s\n' "$head_sha" "$head_sha" \
-    | sh .githooks/pre-push >/dev/null 2>&1; then
+    | sh .githooks/pre-push origin file:///nonexistent-remote >/dev/null 2>&1; then
     git tag -d "$selftest_tag" >/dev/null 2>&1 || true
     echo "install-hooks: pre-push REFUSES a tagged commit — the guard refuses everything" >&2
     exit 1
