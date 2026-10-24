@@ -22,6 +22,7 @@ branch moved afterwards is stale by definition and must be re-tagged.
 | `main@866d7ff` | `866d7ff` | **FAIL** | S11/S12 PASS: one shared reader deadline (2 s total), `truncated = true` on an incomplete read, detached readers bounded by `Caps`, group kill intact. S13 PASS. S14/R5-1 PASS: rotation on the write that crosses the bound | **B-1**; **S15-1** SIGINT not handled; **S12-1** `Timeout` had no `truncated`; **S14-1** rotation failure swallowed; INFO: U+2028/U+2029/U+FEFF |
 | `main@c6f3559` | `c6f3559` | **FAIL** | slug ✓ (probe green); `check_argv` called from `run_pipe_with_caps` before spawn, error not panic, effective on hand-built `Argv`; `is_retryable_spawn_error` + `only_etxtbsy_is_retryable` | **B-1** and **S15-1** unchanged; **T2-3b** literal match let `-f`, `-d`, `--delete-branch`, `--force=true` through |
 | `main@77a844e` | `77a844e` | awaiting verdict | S15-1 **closed**: `SIGINT` handled — pty probe `kill -INT` → `RC=0`, `1049l` present, no leftover process. T2-3b **closed**: matching normalises on `=`, short forms and `--delete-branch` refused (`tests/choke_point.rs`, 9 spellings). S14-1 **closed**: rotation failure logs a warning. S12-1 **closed**: `Timeout` carries `truncated`. INFO closed: U+2028/U+2029/U+FEFF stripped (`tests/sanitize.rs`) | **B-1** (builders resolve at construction, `Binaries` at startup → Task 2b/10b); short-flag clusters (`-fd`) still not decomposed; Task 8 detail wired (`3cc153d`) |
+| `main@5d7cc37` | `5d7cc37` | awaiting verdict | **B-1 closed**: `Binaries { gh, git, hermes }` is resolved **once at startup** (`Binaries::detect`, verified by `binaries::verify`) and injected into `gh()`/`git()`, so no builder can emit an unverified program and no PATH lookup happens at spawn. Tests no longer overwrite `argv.program`: `tests/process.rs` and `tests/env.rs` build a `Binaries` with explicit paths. Live check: `cli/cli` renders #14689, #14716, #14727, #14781, #14783 and the detail body. 26 suites green, clippy clean | T2-3c clusters (`-fd`), `slug.replace('/','--')` not injective, `pre_exec` ignores `prctl`'s return, M-3 |
 
 ## Standing rules this ledger encodes
 
@@ -38,13 +39,8 @@ branch moved afterwards is stale by definition and must be re-tagged.
 
 ## Carried debt (not blocking any tag)
 
-- **B-1** `gh()`/`git()` must return `Result<Argv>` with the program resolved at construction (a
-  `Binaries { gh, git, hermes }` value built at startup, injected into the builders and into tests).
-  Today `fetch_one`/`fetch_detail` resolve at the call site, which works but leaves the trap for the
-  next caller. Task 2b/10b.
 - **T2-3c** short-flag clusters (`-fd`) are not decomposed; the long-term answer is an allowlist of the
   flags the app actually uses.
-- **T2-2** startup resolution — same change as B-1.
 - **`slug.replace('/', "--")` is not injective** (`a--b/c` and `a/b--c` collide); a length-prefixed or
   hashed component removes the ambiguity.
 - **`pre_exec`** ignores `prctl`'s return value.
@@ -58,3 +54,4 @@ branch moved afterwards is stale by definition and must be re-tagged.
 - **T2-5** reader join deadline (`866d7ff`).
 - **R5-1** in-session log rotation (`b990b65`).
 - **S15-1 / S12-1 / S14-1 / T2-3b / U+2028-29-FEFF** (`77a844e`).
+- **B-1 / T2-2** binaries resolved once at startup and injected into the builders (`5d7cc37`).
