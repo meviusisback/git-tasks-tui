@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use gtasks::env::git_env_from;
-use gtasks::gh::{run_pipe, Argv};
+use gtasks::gh::{Argv, run_pipe};
 
 fn sh(script: &str) -> Argv {
     Argv {
