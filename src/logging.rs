@@ -316,6 +316,13 @@ fn sanitise_line(text: &str) -> String {
     crate::sanitize::sanitize(text).replace('\n', "\\n")
 }
 
+/// Bytes kept when the cap forces an early flush. A token must never be cut in
+/// half: the longest prefix is `github_pat_` (11) and its body can run past 80,
+/// so a tail of 128 covers every case the redactor knows. Cutting exactly at the
+/// cap would leave the body in the log with no prefix to match — the same class
+/// as L-3, one layer out.
+const TOKEN_TAIL: usize = 128;
+
 /// A writer that never sends a newline must not grow the buffer forever.
 ///
 /// Known limits of sanitising at this layer, both measured in review: a payload
@@ -349,8 +356,9 @@ impl<W: io::Write> io::Write for SanitisingWriter<W> {
         // No newline in sight: emit what we have rather than buffer without bound.
         // (Taken from the auditor's PR #3; the record boundary is unchanged.)
         if self.pending.len() > MAX_PENDING {
-            let text = String::from_utf8_lossy(&self.pending).into_owned();
-            self.pending.clear();
+            let cut = self.pending.len() - TOKEN_TAIL;
+            let text = String::from_utf8_lossy(&self.pending[..cut]).into_owned();
+            self.pending.drain(..cut);
             let clean = sanitise_line(&text);
             self.inner.write_all(clean.as_bytes())?;
         }

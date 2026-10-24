@@ -91,3 +91,32 @@ fn a_token_split_across_writes_is_still_redacted() {
         "the whole token is redacted, not half of it: {written:?}"
     );
 }
+
+/// The cap is a second cut point: flushing at exactly `MAX_PENDING` would split
+/// a token that straddles it and leave the body with no prefix to match.
+#[test]
+fn the_cap_does_not_cut_through_a_token() {
+    const CAP: usize = 64 * 1024;
+    let mut sink: Vec<u8> = Vec::new();
+    {
+        let mut writer = SanitisingWriter::new(&mut sink);
+        // No newline for the whole cap, so the early flush triggers…
+        writer.write_all(&vec![b'a'; CAP - 1]).unwrap();
+        // …and the token arrives in two pieces that straddle the cut.
+        writer.write_all(b"ghp_16C7e42F").unwrap();
+        writer.write_all(b"292c6912E7710c838347Ae178B4a\n").unwrap();
+        writer.flush().unwrap();
+    }
+    let written = String::from_utf8(sink).unwrap();
+
+    assert!(
+        !written.contains("16C7e42F292c6912E7710c838347Ae178B4a"),
+        "no fragment of the token may survive the cap: …{}",
+        &written[written.len().saturating_sub(80)..]
+    );
+    assert!(
+        !written.contains("E7710c838347Ae178B4a"),
+        "the tail must not leak: …{}",
+        &written[written.len().saturating_sub(80)..]
+    );
+}
