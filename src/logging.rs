@@ -316,6 +316,9 @@ fn sanitise_line(text: &str) -> String {
     crate::sanitize::sanitize(text).replace('\n', "\\n")
 }
 
+/// A writer that never sends a newline must not grow the buffer forever.
+const MAX_PENDING: usize = 64 * 1024;
+
 impl<W: io::Write> SanitisingWriter<W> {
     /// Drain whole records. A record ends at the **last** newline in the
     /// buffer: newlines before it are untrusted content and get escaped, so
@@ -336,6 +339,14 @@ impl<W: io::Write> io::Write for SanitisingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.pending.extend_from_slice(buf);
         self.drain_complete_lines()?;
+        // No newline in sight: emit what we have rather than buffer without bound.
+        // (Taken from the auditor's PR #3; the record boundary is unchanged.)
+        if self.pending.len() > MAX_PENDING {
+            let text = String::from_utf8_lossy(&self.pending).into_owned();
+            self.pending.clear();
+            let clean = sanitise_line(&text);
+            self.inner.write_all(clean.as_bytes())?;
+        }
         // Report the whole buffer as consumed: the caller must not retry the
         // remainder, the sanitised text is not byte-for-byte identical.
         Ok(buf.len())
