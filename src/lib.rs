@@ -13,6 +13,7 @@ pub mod fetch;
 pub mod gh;
 pub mod input;
 pub mod logging;
+pub mod markdown;
 pub mod model;
 pub mod sanitize;
 pub mod state;
