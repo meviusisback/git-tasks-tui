@@ -225,6 +225,41 @@ pub fn run_pipe(argv: &Argv, timeout: Duration) -> anyhow::Result<Output> {
     run_pipe_with_caps(argv, timeout, Caps::default())
 }
 
+/// How long we wait for a reader after the child exits. A grandchild that
+/// inherited the pipe can hold it open, and a plain `join()` would hang the
+/// TUI forever (T2-5).
+const READER_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Wait on a reader through a channel, so the wait can be bounded.
+fn spawn_waiter<T: Send + 'static>(
+    handle: std::thread::JoinHandle<T>,
+) -> std::sync::mpsc::Receiver<Option<T>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join().ok());
+    });
+    rx
+}
+
+/// Collect both readers under **one** shared deadline. A reader that misses it
+/// is left detached and its stream is reported as `(empty, truncated = true)`:
+/// an incomplete payload must never look whole (T2-5).
+fn collect_readers(
+    out: std::sync::mpsc::Receiver<Option<(Vec<u8>, bool)>>,
+    err: std::sync::mpsc::Receiver<Option<(Vec<u8>, bool)>>,
+    deadline: Duration,
+) -> ((Vec<u8>, bool), (Vec<u8>, bool)) {
+    let end = Instant::now() + deadline;
+    let take = |rx: std::sync::mpsc::Receiver<Option<(Vec<u8>, bool)>>| {
+        let left = end.saturating_duration_since(Instant::now());
+        rx.recv_timeout(left)
+            .ok()
+            .flatten()
+            .unwrap_or((Vec::new(), true))
+    };
+    (take(out), take(err))
+}
+
 /// Run a pipe child with explicit caps (tests use small caps to trigger
 /// truncation without moving megabytes around).
 pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow::Result<Output> {
@@ -248,13 +283,17 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
     let stderr = child.stderr.take().expect("stderr was piped");
     let reader_out = std::thread::spawn(move || read_capped(stdout, caps.stdout));
     let reader_err = std::thread::spawn(move || read_capped(stderr, caps.stderr));
+    let wait_out = spawn_waiter(reader_out);
+    let wait_err = spawn_waiter(reader_err);
 
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait().context("cannot wait for child")? {
             guard.disarm();
-            let (stdout, out_truncated) = reader_out.join().unwrap_or_default();
-            let (stderr, err_truncated) = reader_err.join().unwrap_or_default();
+            // An incomplete read is reported as truncated: the caller must not
+            // treat a partial payload as whole (T2-5).
+            let ((stdout, out_truncated), (stderr, err_truncated)) =
+                collect_readers(wait_out, wait_err, READER_DEADLINE);
             return Ok(Output {
                 status,
                 stdout,
@@ -266,8 +305,13 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
             terminate_group(pid);
             let _ = child.wait();
             guard.disarm();
-            let (stdout, _) = reader_out.join().unwrap_or_default();
-            let (stderr, _) = reader_err.join().unwrap_or_default();
+            let ((stdout, out_truncated), (stderr, err_truncated)) =
+                collect_readers(wait_out, wait_err, READER_DEADLINE);
+            tracing::warn!(
+                out_truncated,
+                err_truncated,
+                "child timed out; output may be incomplete"
+            );
             return Err(Timeout { stdout, stderr }.into());
         }
         std::thread::sleep(Duration::from_millis(10));
