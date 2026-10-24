@@ -242,10 +242,17 @@ impl App {
     /// Build the first action for the selected row, show what it would run, and
     /// keep the pair (confirmation, argv) so `y` executes exactly that.
     fn request_action(&mut self) {
-        let Some(number) = self.selected_item().map(|item| item.number) else {
+        let Some(item) = self.selected_item() else {
             self.status = "nothing selected".into();
             return;
         };
+        // An issue has no verb here: saying nothing would be indistinguishable
+        // from a broken key, so say why (review, X-2 point 2).
+        if item.kind != crate::model::ItemKind::Pr {
+            self.status = "no action for this item — issues are not merged".into();
+            return;
+        }
+        let number = item.number;
         let Some(repo) = self.repos.get(self.repos_cursor).cloned() else {
             self.status = "no repository".into();
             return;
