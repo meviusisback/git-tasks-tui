@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gtasks::actions::{argv_for, Action, MergeMethod, RepoSlug};
+use gtasks::actions::{Action, MergeMethod, RepoSlug, argv_for};
 use gtasks::actions_ui::{confirmation_for, execute};
 use gtasks::binaries::Binaries;
 

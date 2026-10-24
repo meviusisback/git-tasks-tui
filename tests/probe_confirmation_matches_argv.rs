@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use gtasks::actions::{argv_for, Action, MergeMethod, RepoSlug};
+use gtasks::actions::{Action, MergeMethod, RepoSlug, argv_for};
 use gtasks::actions_ui::confirmation_for;
 use gtasks::binaries::Binaries;
 
@@ -73,7 +73,10 @@ fn every_effect_of_the_argv_is_named_by_the_sentence() {
             reason: Some("not planned".to_string()),
             comment: Some("closing; do not reopen".to_string()),
         },
-        Action::Checkout { repo: slug(), number: 10 },
+        Action::Checkout {
+            repo: slug(),
+            number: 10,
+        },
     ];
 
     for action in cases {

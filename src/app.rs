@@ -228,8 +228,13 @@ impl App {
             match key {
                 Key::Esc | Key::Char('n') => self.modal = None,
                 Key::Char('y') => {
+                    // X-1: the confirmation is not reachable yet (`a` does not
+                    // open it), and `y` must never claim success for an action
+                    // that did not run. When the modal becomes reachable, this
+                    // arm calls `execute` and reports the outcome from the type —
+                    // including `Unknown`, "it may have been applied".
                     self.modal = None;
-                    self.status = "confirmed".into();
+                    self.status = "no action is wired yet — nothing ran".into();
                 }
                 _ => {}
             }
@@ -302,4 +307,27 @@ fn step(cursor: usize, delta: i32, len: usize) -> usize {
     }
     let next = cursor as i32 + delta;
     next.clamp(0, len as i32 - 1) as usize
+}
+
+#[cfg(test)]
+mod x1_tests {
+    use super::*;
+
+    /// X-1: a key that runs nothing must not report success.
+    #[test]
+    fn the_confirm_key_does_not_claim_an_action_it_did_not_run() {
+        let mut app = App::default();
+        app.modal = Some(Modal::Confirm("merge PR #7?".into()));
+        app.update(Msg::Key(Key::Char('y')));
+        assert!(
+            !app.status.contains("confirmed"),
+            "y must not claim success: {:?}",
+            app.status
+        );
+        assert!(
+            app.status.contains("nothing ran"),
+            "it says what happened: {:?}",
+            app.status
+        );
+    }
 }

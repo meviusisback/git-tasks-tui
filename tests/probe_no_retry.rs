@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gtasks::actions_ui::{execute, Executed};
+use gtasks::actions_ui::{Executed, execute};
 use gtasks::env::git_env_from;
 use gtasks::gh::{Argv, CheckedArgv};
 
@@ -45,7 +45,10 @@ fn a_timed_out_write_runs_exactly_once() {
         .count();
     let _ = std::fs::remove_file(&marker);
 
-    assert_eq!(runs, 1, "a timed-out write must not be retried: {runs} processes ran");
+    assert_eq!(
+        runs, 1,
+        "a timed-out write must not be retried: {runs} processes ran"
+    );
     assert!(
         matches!(outcome, Executed::Unknown(_)),
         "a timeout must be reported as Unknown (the remote may have applied it), not as {outcome:?}"

@@ -63,8 +63,7 @@ fn a_timeout_is_not_a_refusal() {
     let outcome = execute(
         &CheckedArgv::unchecked_for_tests(sh("sleep 5")),
         Duration::from_millis(400),
-    )
-    ;
+    );
     assert!(
         !matches!(outcome, Executed::Refused(_)),
         "a timeout must not be reported as a refusal: the write may have been applied, \
