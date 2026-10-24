@@ -8,6 +8,7 @@
 > **Rev 4.5** — logged L1/L2/L3 merged (`c50ada8`: rotation tests, `try_init`, `..` pre-scan) and **Task 11a-seed merged** (`f3669d2`: `SeedFile`, `ensure_runtime_dir` → `logging::ensure_state_dir`, C1 interactive + dash negative tests, harness vendored in CI). Task 2 API (`f969fa0`) is in review.
 > **Rev 4.6** — P2 fixed (`3584d3c`: the init guard runs before any fs work, so a refused second init cannot rotate the live log) and **Task 3 merged** (`c97b316`: serde models + pure filter/sort/group, 8 tests, no panic on malformed JSON).
 > **Rev 4.7** — **Task 4 merged** (`fe8689a`: config + state on `0600` files, atomic writes, symlink refusal, repo/profile validators, plugin import of `selectedRepos`; 10 tests). A clippy failure slipped into the first merge and was fixed forward immediately.
+> **Rev 4.8** — S-1 fixed (`4044d2e`: `SeedFile::create_in` enforces the private runtime dir, so G-2 is closed by construction; the auditor's three probes pass). Task 2 fixes for r9 live on `c2997af` (T2-1 slug-keyed paths, T2-2 absolute program at spawn, T2-4 branch grammar, T2-6 `PDEATHSIG`, T2-7 name cap); **T2-5** (readers joined without a deadline) is carried to Task 5 together with the in-session log rotation.
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 

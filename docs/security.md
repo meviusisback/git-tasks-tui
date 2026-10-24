@@ -67,7 +67,9 @@ The runtime **directory** must be guaranteed private and symlink-free (same help
 write is **not** safe: unlink rights come from the directory, not the file mode, so the seed can be
 swapped between creation and the child's read — and `--query-file` would hand the attacker's text to
 the agent as its first turn (proven: `audit_seed_is_not_written_through_symlinked_dir`,
-`audit_seed_can_be_replaced_when_the_dir_is_writable`).
+`audit_seed_can_be_replaced_when_the_dir_is_writable`). `SeedFile::create_in` **enforces** this
+itself (`ensure_runtime_dir` as its first step), so a caller that forgets cannot leak the seed: the
+guarantee is structural, not disciplinary (S-1).
 
 ## S9 — Actions are typed and gated
 One `Action` enum feeds one argv builder. Forbidden forever (tested): `--admin`, `--force`,
