@@ -64,7 +64,7 @@ fn a_timeout_is_not_a_refusal() {
         &CheckedArgv::unchecked_for_tests(sh("sleep 5")),
         Duration::from_millis(400),
     )
-    .expect("no panic");
+    ;
     assert!(
         !matches!(outcome, Executed::Refused(_)),
         "a timeout must not be reported as a refusal: the write may have been applied, \
@@ -143,7 +143,7 @@ fn a_dash_word_value_is_accepted_on_the_typed_path_and_refused_hand_built() {
     );
 
     // Typed, it is a value and it runs.
-    let outcome = execute(&argv, Duration::from_secs(5)).expect("no panic");
+    let outcome = execute(&argv, Duration::from_secs(5));
     assert!(
         matches!(outcome, Executed::Finished(_)),
         "a typed value must run: {outcome:?}"

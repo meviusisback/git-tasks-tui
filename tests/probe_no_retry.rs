@@ -35,8 +35,7 @@ fn a_timed_out_write_runs_exactly_once() {
     let outcome = execute(
         &sh(&format!("echo x >> {marker}; sleep 10")),
         Duration::from_millis(500),
-    )
-    .expect("execution must not panic");
+    );
 
     // Give a hypothetical retry time to leave its own mark.
     std::thread::sleep(Duration::from_millis(1200));

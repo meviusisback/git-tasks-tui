@@ -106,9 +106,15 @@ fn summarise(action: &Action) -> String {
 pub enum Executed {
     /// The process ran to completion, whatever its exit status.
     Finished(ExitStatus),
-    /// The transport refused **before** spawning (allowlist, forbidden flag, …):
-    /// nothing ran, so nothing happened on the remote.
+    /// The caller asked for something the transport will not do — today that is
+    /// a non-absolute program, i.e. a **bug in the caller**, not a policy and not
+    /// the environment. Policy is applied earlier, by `argv_for`, so it does not
+    /// reach this outcome on the typed path.
     Refused(String),
+    /// The transport could not start the process at all (missing binary, bad
+    /// permissions). Nothing ran, but this is a broken environment, not a policy
+    /// refusal — the user must not go looking for a rule that refused nothing.
+    SpawnFailed(String),
     /// The process ran but the outcome is unknown (timeout, IO, signal): the
     /// remote **may** have applied the write, which is exactly why there is no
     /// retry. The UI must say so and must not offer one.
@@ -121,13 +127,24 @@ pub enum Executed {
 /// and its group at the deadline, and a timed-out write must surface as an
 /// error, not be repeated. `ETXTBSY` retries live inside the transport and
 /// concern `exec`, not the remote effect of the command.
-pub fn execute(argv: &CheckedArgv, timeout: Duration) -> anyhow::Result<Executed> {
+pub fn execute(argv: &CheckedArgv, timeout: Duration) -> Executed {
     match run_checked(argv, timeout) {
-        Ok(output) => Ok(Executed::Finished(output.status)),
+        Ok(output) => Executed::Finished(output.status),
         Err(err) if err.downcast_ref::<crate::gh::Timeout>().is_some() => {
-            Ok(Executed::Unknown(err.to_string()))
+            Executed::Unknown(err.to_string())
         }
-        Err(err) => Ok(Executed::Refused(err.to_string())),
+        // A missing binary, a path that is not a file, or one without the
+        // execute bit are environment failures, not policy refusals: nothing ran,
+        // and the user must not look for a rule that refused nothing (E-1).
+        Err(err)
+            if err.downcast_ref::<std::io::Error>().is_some()
+                || err
+                    .downcast_ref::<crate::binaries::ProgramNotUsable>()
+                    .is_some() =>
+        {
+            Executed::SpawnFailed(err.to_string())
+        }
+        Err(err) => Executed::Refused(err.to_string()),
     }
 }
 

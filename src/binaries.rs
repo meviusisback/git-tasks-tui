@@ -81,15 +81,50 @@ pub fn verify(path: &Path) -> anyhow::Result<PathBuf> {
     check(path)
 }
 
+/// A program that exists but cannot be used: wrong type, no execute bit, unsafe
+/// permissions. It is an **environment** failure, not a policy refusal — the
+/// caller must not go looking for a rule that refused nothing (E-1).
+#[derive(Debug)]
+pub struct ProgramNotUsable {
+    pub path: String,
+    pub why: &'static str,
+}
+
+impl std::fmt::Display for ProgramNotUsable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.why, self.path)
+    }
+}
+
+impl std::error::Error for ProgramNotUsable {}
+
 /// Canonicalise and verify a single candidate path.
 fn check(path: &Path) -> anyhow::Result<PathBuf> {
     let abs = std::fs::canonicalize(path)
         .with_context(|| format!("cannot resolve {}", path.display()))?;
     let meta = std::fs::metadata(&abs).with_context(|| format!("cannot stat {}", abs.display()))?;
-    ensure!(meta.is_file(), "not a regular file: {}", abs.display());
+    anyhow::ensure!(
+        meta.is_file(),
+        ProgramNotUsable {
+            path: abs.display().to_string(),
+            why: "not a regular file",
+        }
+    );
     let mode = meta.permissions().mode();
-    ensure!(mode & 0o111 != 0, "not executable: {}", abs.display());
-    ensure!(mode & 0o022 == 0, "group/world writable: {}", abs.display());
+    anyhow::ensure!(
+        mode & 0o111 != 0,
+        ProgramNotUsable {
+            path: abs.display().to_string(),
+            why: "not executable",
+        }
+    );
+    anyhow::ensure!(
+        mode & 0o022 == 0,
+        ProgramNotUsable {
+            path: abs.display().to_string(),
+            why: "group/world writable",
+        }
+    );
     let uid = meta.uid();
     // SAFETY: geteuid has no preconditions.
     let euid = unsafe { libc::geteuid() };
