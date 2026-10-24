@@ -142,6 +142,33 @@ if !real.starts_with(&parent) { fs::remove_dir_all(&target); refuse }
 Git accepts an existing empty directory (measured), so there is no reason to let
 git create it — and `create_dir` refuses a symlink instead of following it.
 
+### Two branches must never share a directory (W-1, measured)
+
+`branch.replace('/', "-")` is not injective: `feat/x` and `feat-x` both become
+`feat-x`, so "open the worktree of branch X" can show the tree of Y. The mapping
+has to escape the escape character first:
+
+```rust
+let flat_branch = branch.replace('-', "--").replace('/', "-");
+// feat/x -> feat-x   ·   feat-x -> feat--x   ·   item/42 -> item-42
+```
+
+And after `git worktree add`, ask git which branch that tree is — a path does not
+identify a tree, git does:
+
+```rust
+git -C <path> rev-parse --abbrev-ref HEAD   // must equal the requested branch, or undo
+```
+
+### Take types, not `&str` (W-2, measured)
+
+`resolve_in(base, clone, slug: &str, branch: &str)` accepts `"."` and produces
+`/base/./item-1`: nothing escapes the root, but a component silently removes a
+level of `owner/repo`. `RepoSlug` already exists and was built for this; the
+signature should be `(&RepoSlug, &BranchName)`, so `"."` is unrepresentable
+rather than rejected by a check. This is the only place in the project where the
+validation is duplicated by hand instead of delegated to the type.
+
 Two more rules:
 
 - **Pass `-b` with a name built from a typed value** (`item/<n>`). Without `-b`,
