@@ -70,10 +70,11 @@ shown blank — a blank field reads as "none" and that is a claim.
 
 ## Repo selection
 
-`selected_repos` is a new config key: a list of `owner/name`. `repos` stays the
-full list; `selected_repos` defaults to all of it. The menu toggles membership and
-writes the config back (0600, atomic replace). The items list only ever shows the
-selected repos.
+`repos` in `config.toml` stays the hand-edited list of candidates. The **user's
+picks** live in `state.json` (0600, atomic replace, next to the config): they are
+UI state that changes with a keystroke, not a file a person edits. Empty state
+means "all of `repos`". The menu toggles membership and writes that file; the
+items list only ever shows the picked repos.
 
 ## The agent
 
