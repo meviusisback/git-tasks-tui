@@ -206,6 +206,74 @@ pub fn rotate_log(path: &Path, max_bytes: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A log writer that rotates **in session** (R5-1): the event loop no longer has
+/// to check anything, the rotation happens on the write that would exceed the
+/// bound. Cheap because `tracing` writes a line at a time and the size is
+/// tracked in memory.
+#[derive(Clone)]
+pub struct RotatingFile {
+    inner: std::sync::Arc<std::sync::Mutex<RotatingState>>,
+}
+
+struct RotatingState {
+    path: PathBuf,
+    file: std::fs::File,
+    written: u64,
+    max_bytes: u64,
+}
+
+impl RotatingFile {
+    /// Open the log and remember its current size, so rotation triggers even
+    /// when the file was already over the bound at startup.
+    pub fn open(path: &Path, max_bytes: u64) -> anyhow::Result<Self> {
+        let file = open_log_file(path)?;
+        let written = file.metadata()?.len();
+        Ok(Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(RotatingState {
+                path: path.to_path_buf(),
+                file,
+                written,
+                max_bytes,
+            })),
+        })
+    }
+
+    /// Rotate, then reopen. If anything fails the current descriptor keeps
+    /// writing: losing the record is worse than a file slightly over the bound.
+    fn rotate(state: &mut RotatingState) {
+        if rotate_log(&state.path, 0).is_err() {
+            return;
+        }
+        if let Ok(file) = open_log_file(&state.path) {
+            state.file = file;
+            state.written = 0;
+        }
+    }
+}
+
+impl std::io::Write for RotatingFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("log lock is poisoned"))?;
+        if state.written + buf.len() as u64 > state.max_bytes {
+            Self::rotate(&mut state);
+        }
+        let written = state.file.write(buf)?;
+        state.written += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| std::io::Error::other("log lock is poisoned"))?;
+        state.file.flush()
+    }
+}
+
 /// Log level from `GTASKS_LOG` (a `tracing_subscriber::EnvFilter` directive),
 /// defaulting to `info`.
 pub fn log_filter() -> EnvFilter {
@@ -242,10 +310,10 @@ pub fn init_file_logging_at(path: &Path) -> anyhow::Result<PathBuf> {
         ensure_state_dir(parent)?;
     }
     rotate_log(path, MAX_LOG_BYTES)?;
-    let file = open_log_file(path)?;
+    let writer = RotatingFile::open(path, MAX_LOG_BYTES)?;
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
-        .with_writer(std::sync::Mutex::new(file))
+        .with_writer(move || writer.clone())
         .with_ansi(false)
         .try_init()
         .map_err(|e| anyhow::anyhow!("logging subscriber already initialised: {e}"))?;
