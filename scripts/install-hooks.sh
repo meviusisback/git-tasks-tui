@@ -13,10 +13,12 @@ top=$(git rev-parse --show-toplevel); cd "$top"
 # Absolute for clarity, not necessity: relative works, as measured.
 git config core.hooksPath "$top/.githooks"
 chmod +x .githooks/* 2>/dev/null || true
-if [ ! -x .githooks/commit-msg ]; then
-    echo "install-hooks: .githooks/commit-msg is not executable — git would skip it" >&2
-    exit 1
-fi
+for hook in commit-msg pre-push; do
+    if [ ! -x ".githooks/$hook" ]; then
+        echo "install-hooks: .githooks/$hook is not executable — git would skip it" >&2
+        exit 1
+    fi
+done
 
 # H-2b: `test -x` checks a state, and a state can be restored by the `chmod`
 # above. This checks the **behaviour**: the hook must accept a true claim and
