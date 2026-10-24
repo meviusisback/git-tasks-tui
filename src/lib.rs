@@ -14,4 +14,5 @@ pub mod logging;
 pub mod model;
 pub mod sanitize;
 pub mod state;
+pub mod ui;
 pub mod worktree;
