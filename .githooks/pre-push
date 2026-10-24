@@ -1,0 +1,23 @@
+#!/bin/sh
+# Sequence guard (L-4): a commit reaches `main` only if it already carries a
+# review tag. "Branch -> tag -> verdict -> merge" is not enforceable as a promise;
+# this makes the TAG part mechanical, which is the part a hook can see.
+#
+# Reads pre-push's stdin: <local ref> <local sha> <remote ref> <remote sha>
+set -eu
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$remote_ref" = "refs/heads/main" ] || continue
+    # Deletions (all-zero sha) are not merges.
+    case "$local_sha" in 0000000000000000000000000000000000000000) continue;; esac
+    tags=$(git tag --points-at "$local_sha" | grep '^review/' || true)
+    if [ -z "$tags" ]; then
+        echo "pre-push: $local_sha is going to main with no review tag on it." >&2
+        echo "pre-push: tag the reviewed tree first (git tag review/<name> $local_sha && git push origin review/<name>)." >&2
+        echo "pre-push: the push was refused." >&2
+        status=1
+    else
+        echo "pre-push: $local_sha carries $(echo "$tags" | tr '\n' ' ')- the tag exists; the verdict is a human step."
+    fi
+done
+exit "$status"
