@@ -137,3 +137,29 @@ impl Branch {
 Same lesson as `Span::plain` and the "permissions" field we refused to put in `Argv`: if the type has a
 public field, the check is a convention that the next caller can skip.
 
+## `RepoSlug` and the common flag list (refinement)
+
+`Action` should carry a `RepoSlug`, not a `String`:
+
+```rust
+pub struct RepoSlug(String);                  // private field: one door
+impl RepoSlug { pub fn parse(s: &str) -> anyhow::Result<Self> { /* config::validate_repo_slug */ } }
+```
+
+Security-wise this is neutral (an invalid slug is refused today in `tokens_for`); design-wise it is
+positive: the decision moves into `RepoSlug::parse`, so there is **one** decision instead of four.
+
+`--repo` must **not** disappear from the check, though: if the constructor emits a flag the allowlist
+does not know, `ensure_allowlisted` refuses everything. It becomes a per-tool common list:
+
+```rust
+const GH_COMMON: &[&str] = &["--repo"];
+fn allowed_for(tool: Tool, action: &Action) -> Vec<&'static str> {
+    tool_common(tool).iter().chain(flags_for(action)).copied().collect()
+}
+```
+
+Three reasons this beats removal: every flag stays visible to `ensure_allowlisted`; it is per tool, so the
+first `git` action (`-C <path>`, or the cwd) does not need an exception; and four copies of the same
+decision become one.
+
