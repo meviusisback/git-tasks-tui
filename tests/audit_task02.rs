@@ -10,9 +10,10 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::time::Duration;
 
+use gtasks::actions::RepoSlug;
 use gtasks::binaries::Binaries;
 use gtasks::gh::{Argv, gh, git, run_pipe};
-use gtasks::worktree::resolve_in;
+use gtasks::worktree::{BranchName, resolve_in};
 
 /// T2-1: the worktree path is keyed on the slug, so two repositories that clone
 /// into a directory with the same name cannot share a worktree.
@@ -21,8 +22,20 @@ fn slug_keys_the_worktree_path() {
     let base = Path::new("/data/worktrees");
     let clone = Path::new("/repos/widget");
 
-    let a = resolve_in(base, clone, "acme/widget", "main").unwrap();
-    let b = resolve_in(base, clone, "other-org/widget", "main").unwrap();
+    let a = resolve_in(
+        base,
+        clone,
+        &RepoSlug::parse("acme/widget").unwrap(),
+        &BranchName::parse("main").unwrap(),
+    )
+    .unwrap();
+    let b = resolve_in(
+        base,
+        clone,
+        &RepoSlug::parse("other-org/widget").unwrap(),
+        &BranchName::parse("main").unwrap(),
+    )
+    .unwrap();
 
     assert_ne!(a, b, "different slugs must give different paths");
     assert!(a.ends_with("acme/widget/main"), "got {}", a.display());
