@@ -302,3 +302,82 @@ fn builders_produce_a_runnable_argv() {
     let out = run_pipe(&gh_argv, Duration::from_secs(10)).expect("gh builder is runnable");
     assert!(out.status.success(), "gh --version failed");
 }
+
+/// The untrusted transport refuses `gh` write verbs: a probe or a test that
+/// calls `run_pipe` with a real `gh` binary must not be able to execute a
+/// write for real. This is the guard that prevents a test from posting a
+/// comment to a live repository.
+#[test]
+fn untrusted_transport_refuses_gh_write_verbs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let program = fake(tmp.path(), "gh", "printf '<%s>' \"$@\"");
+    let binaries = bins(program, PathBuf::from("/bin/false"));
+    for verb in [
+        "comment", "merge", "close", "reopen", "approve", "review", "delete",
+    ] {
+        let argv = gh(
+            &binaries,
+            Path::new("/tmp"),
+            args(&["pr", verb, "1", "--repo", "cli/cli", "--body", "-done"]),
+        );
+        let err = run_pipe(&argv, Duration::from_secs(5))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("refusing write verb"),
+            "gh pr {verb} must be refused by the untrusted transport: {err}"
+        );
+    }
+}
+
+/// The guard also catches `gh api`, which can write via `--method POST`.
+#[test]
+fn untrusted_transport_refuses_gh_api() {
+    let tmp = tempfile::tempdir().unwrap();
+    let program = fake(tmp.path(), "gh", "printf '<%s>' \"$@\"");
+    let binaries = bins(program, PathBuf::from("/bin/false"));
+    let argv = gh(
+        &binaries,
+        Path::new("/tmp"),
+        args(&["api", "/repos/cli/cli"]),
+    );
+    let err = run_pipe(&argv, Duration::from_secs(5))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("refusing write verb"),
+        "gh api must be refused: {err}"
+    );
+}
+
+/// Reads pass: the guard only fires on write verbs, so `gh pr list` and
+/// `gh issue view` still work through the untrusted transport.
+#[test]
+fn untrusted_transport_allows_gh_reads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let program = fake(tmp.path(), "gh", "printf '<%s>' \"$@\"");
+    let binaries = bins(program, PathBuf::from("/bin/false"));
+    for read in [
+        vec!["pr", "list", "--repo", "cli/cli"],
+        vec!["issue", "view", "1", "--repo", "cli/cli"],
+        vec!["repo", "list"],
+    ] {
+        let argv = gh(&binaries, tmp.path(), args(&read));
+        let out = run_pipe(&argv, Duration::from_secs(10)).expect("gh read runs");
+        assert!(out.status.success(), "gh {} must succeed", read.join(" "));
+    }
+}
+
+/// The guard is gh-only: `git checkout`, `git pull` and `git push` are local
+/// operations the app needs through the untrusted transport.
+#[test]
+fn untrusted_transport_does_not_block_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let program = fake(tmp.path(), "git", "printf '<%s>' \"$@\"");
+    let binaries = bins(PathBuf::from("/bin/false"), program);
+    for op in [vec!["checkout", "main"], vec!["pull"], vec!["push"]] {
+        let argv = git(&binaries, tmp.path(), args(&op));
+        let out = run_pipe(&argv, Duration::from_secs(10)).expect("git runs");
+        assert!(out.status.success(), "git {} must succeed", op.join(" "));
+    }
+}

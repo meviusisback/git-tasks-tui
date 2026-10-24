@@ -76,6 +76,83 @@ pub fn is_forbidden_flag(flag: &str) -> bool {
     FORBIDDEN.contains(&flag)
 }
 
+/// `gh` subcommands that change state on the server. The untrusted transport
+/// ([`run_pipe`], [`run_pipe_with_caps`]) refuses any `gh` argv whose
+/// subcommand is here; the typed path ([`run_checked`]) carries them through
+/// [`CheckedArgv`], which only this crate's builders can construct.
+///
+/// This guard exists because a probe or a test that calls the untrusted
+/// transport with a real `gh` binary would otherwise execute the write for
+/// real (a `pr comment` against a live repository is not undoable).
+const GH_WRITE_VERBS: &[&str] = &[
+    "comment",
+    "merge",
+    "close",
+    "reopen",
+    "approve",
+    "review",
+    "edit",
+    "delete",
+    "pin",
+    "lock",
+    "unlock",
+    "ready",
+    "draft",
+    "convert",
+    "set-base",
+    "set-maintainer",
+    "develop",
+    "clone",
+    "fork",
+    "archive",
+    "unarchive",
+    "transfer",
+    "create",
+    "sync",
+    "run",
+    "enable",
+    "disable",
+    "cancel",
+    "rerun",
+    "upload",
+    "publish",
+    "set",
+    "delete-asset",
+    "add",
+    "remove",
+    "rename",
+    "update",
+    "put",
+    "post",
+    "prune",
+    "checkout",
+    "apply",
+    "pull",
+    "push",
+];
+
+/// True when `program` is `gh` and the argv's subcommand changes server state.
+///
+/// The subcommand is the second non-flag token: `gh pr comment 1 …` → `comment`.
+/// `gh api` is refused wholesale — it can write via `--method POST` and the
+/// untrusted path has no reason to call it.
+fn is_gh_write_verb(program: &Path, args: &[OsString]) -> bool {
+    if program.file_name().map(|n| n != "gh").unwrap_or(true) {
+        return false;
+    }
+    let mut non_flags = args
+        .iter()
+        .filter(|a| !a.to_string_lossy().starts_with('-'));
+    let group = non_flags.next().map(|a| a.to_string_lossy().to_string());
+    if group.as_deref() == Some("api") {
+        return true;
+    }
+    match non_flags.next() {
+        Some(sub) => GH_WRITE_VERBS.contains(&sub.to_string_lossy().as_ref()),
+        None => false,
+    }
+}
+
 /// The choke point: every argv passes here, whether it came from `gh()`/`git()`
 /// or from a literal `Argv` (the fields are `pub`, so a factory bypass must not
 /// be enough). Returns an error, never panics: this is a runtime refusal, not a
@@ -399,6 +476,15 @@ fn run_pipe_inner(
     );
     if scan_forbidden {
         check_argv(argv)?;
+        // The untrusted transport refuses `gh` write verbs: a probe or a test
+        // that calls `run_pipe` with a real `gh` binary must not be able to
+        // execute a write for real. Writes travel through `run_checked`, which
+        // passes `scan_forbidden = false`.
+        anyhow::ensure!(
+            !is_gh_write_verb(&argv.program, &argv.args),
+            "refusing write verb on the untrusted path: {:?}",
+            argv.args
+        );
     }
     let mut argv = argv.clone();
     argv.program = resolve_program(&argv.program)?;
