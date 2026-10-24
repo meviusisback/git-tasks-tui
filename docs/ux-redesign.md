@@ -76,6 +76,44 @@ selected repos.
 - While the agent runs, the left column stays usable: choosing another item and
   pressing `a` asks whether to start a second agent or switch back.
 
+### The prompt cannot exist as text the argv builder can see
+
+Not "we agreed not to put it in argv" — the type system has to make it
+unrepresentable (measured constraint from @auditor, same trick as `RepoSlug`):
+
+```rust
+/// A prompt already written to a private file. The text is consumed by the
+/// writer and not kept: only the path survives. No constructor from &str.
+pub struct PromptFile(PathBuf);            // private field
+impl PromptFile {
+    pub fn write(text: &str) -> io::Result<Self>;  // 0600, create_new, $XDG_RUNTIME_DIR
+    pub fn path(&self) -> &Path;
+}
+pub struct AgentInvocation { /* private: prompt: Option<PromptFile>, cwd: Dir,
+                                session: Option<SessionName>, timeout */ }
+impl AgentInvocation { pub fn argv(&self) -> CheckedArgv; }   // "--query-file" <path>, never "-"
+```
+
+The proof that this holds is a probe, not a promise: a fake `hermes` records its
+argv, the prompt carries a unique marker, and the test asserts the marker is in
+the file, is in **no** argv, and that argv carries `--query-file` followed by a
+path that is not `-`.
+
+### The agent's output is untrusted text
+
+It carries the item title/body it just read plus whatever ANSI the model emits.
+It goes through the existing `SanitisingWriter` before it reaches the screen,
+exactly like `gh` output — otherwise the agent pane is a second injection channel
+that bypasses U-6.
+
+### The process belongs to the session, not to the pane
+
+`Esc` leaves the pane without killing the child, so the child cannot live in the
+view's state: a `Session { child, group, started }` sits in a store outside the
+UI, and the pane only draws. Reuse the group handling that already exists for
+`gh` (`kill(-pid)`); do not write a second one — the "a single `Command::new`"
+rule applies here too.
+
 ## Worktrees
 
 - Menu lists the worktrees that already exist for this repo (from `git worktree
@@ -83,6 +121,38 @@ selected repos.
   and a branch name derived from the item number.
 - Paths are built from typed components; traversal, absolute input, symlinks are
   refused. A missing clone is a message, not a crash.
+
+### Symlinks defeat component validation — the filesystem resolves them afterwards
+
+Measured: a component that is a symlink to `/outside` (or an ancestor that is)
+makes `git worktree add` succeed **outside** the root, with a perfectly clean
+name, because the string checks run before the filesystem resolves anything.
+The sequence that closes it:
+
+```rust
+let parent = fs::canonicalize(&worktree_root)?;
+if !parent.starts_with(fs::canonicalize(&clone_root)?) { refuse("outside the root") }
+let target = parent.join(format!("item-{number}"));   // components already typed
+fs::create_dir(&target)?;        // WE create it: fails on EEXIST, including a symlink
+Command::new("git").args(["-C", clone, "worktree", "add", "-b", &branch, target])?;
+let real = fs::canonicalize(&target)?;                // re-check after (TOCTOU)
+if !real.starts_with(&parent) { fs::remove_dir_all(&target); refuse }
+```
+
+Git accepts an existing empty directory (measured), so there is no reason to let
+git create it — and `create_dir` refuses a symlink instead of following it.
+
+Two more rules:
+
+- **Pass `-b` with a name built from a typed value** (`item/<n>`). Without `-b`,
+  git derives the branch from the path's basename — the filesystem would be
+  naming branches.
+- **Never `--force`.** Measured: a registered path is refused anyway, so the flag
+  buys nothing and removes a defence.
+
+`git worktree add` also runs the clone's `post-checkout` hook (measured: it fires,
+and it does not with `-c core.hooksPath=<nonexistent>`), so the S16 hardening used
+for `gh` applies here too.
 
 ## Staging (each stage is a branch, a tag, a verdict, then a merge)
 
