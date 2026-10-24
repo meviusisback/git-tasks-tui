@@ -30,6 +30,7 @@ branch moved afterwards is stale by definition and must be re-tagged.
 | `main@66ee08b` | `66ee08b` | awaiting verdict | **process**: `scripts/review-state.sh` prints the remote tip and the newest ledger row, so a review starts from the tree that exists instead of a remembered SHA. No code change | nothing outstanding |
 | `main@11811b3` | `11811b3` | awaiting verdict | `scripts/review-state.sh` now counts the commits between the newest ledger row and the remote tip; a reviewer runs it first and knows whether the SHA in hand is still the tree | nothing outstanding |
 | `main@81b14fe` | `81b14fe` | awaiting verdict | `review-state.sh` excludes docs-only commits when counting unreviewed code, so the ledger and the tip can finally agree | nothing outstanding |
+| `main@a8c7d83` | `a8c7d83` | awaiting verdict | **r21 LOW closed**: `read_private` opens with `O_NOFOLLOW`, so a symlinked config fails at `open` instead of between `symlink_metadata` and `read_to_string` (unit tests: symlinked file refused, regular file read). **r21 INFO closed**: `Span::plain` sanitises its text, so the public constructor cannot bypass S13. Audited-good from r21: fetch args, `OutputCap`, markdown spans, atomic private writes | nothing outstanding |
 
 ## Standing rules this ledger encodes
 
