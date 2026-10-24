@@ -98,11 +98,19 @@ pub fn check_argv(argv: &Argv) -> anyhow::Result<()> {
             !FORBIDDEN.contains(&flag),
             "refusing forbidden flag {text:?}"
         );
-        // A short-flag cluster such as `-fd` hides `-f` and `-d`: decompose it.
+        // A short-flag cluster such as `-fd` hides `-f`: decompose it.
+        //
+        // "Cluster" is decided by **shape**, not by the alphabet: a token whose
+        // body is ASCII letters and nothing else could be a group of short
+        // flags, so every letter in it is checked against the deny-list. This is
+        // fail-closed (D-1): `-fR`, `-fq`, `-fn` are refused even though `R`, `q`
+        // and `n` are not in the alphabet, because refusing costs nothing here.
+        // A value such as `-done: looks good` or `-admin --force` carries a
+        // space or punctuation, is not a cluster, and stays a value.
         if let Some(cluster) = flag.strip_prefix('-') {
             let is_cluster = !cluster.is_empty()
                 && !cluster.starts_with('-')
-                && cluster.chars().all(|c| SHORT_FLAGS.contains(&c));
+                && cluster.chars().all(|c| c.is_ascii_alphabetic());
             if is_cluster {
                 for short in cluster.chars() {
                     let spelling = format!("-{short}");
