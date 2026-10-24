@@ -7,8 +7,8 @@
 | `y` | in the confirmation: run the command |
 | `n` / `Esc` | in the confirmation: cancel — nothing runs |
 | `Enter` | open the detail of the selected item |
-| `Tab` | next pane (repos → list → detail) |
-| `↑` / `↓` | move the selection |
+| `Tab` | next pane: list → **repos** → detail |
+| `↑` / `↓` | move the selection; in the repos pane it **picks a repo** (row 0 = all repos) |
 | `/` | search (type to filter, `Enter` leaves the box, `Esc` closes it) |
 | `o` | open the selected item in the browser |
 | `r` | refresh |

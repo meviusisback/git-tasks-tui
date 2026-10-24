@@ -76,8 +76,11 @@ pub struct App {
     pub status: String,
     /// Data from the last successful refresh, in repo order.
     pub items: Vec<Item>,
-    /// Distinct repos, in the order they first appear.
+    /// The repos the user configured, plus a leading "all repos" entry, so a
+    /// repo with no open items is still visible and selectable.
     pub repos: Vec<String>,
+    /// The repo selected in the repos pane; `None` means "all".
+    pub repo_filter: Option<String>,
     /// A fetch is in flight: `r` must not start a second one.
     pub loading: bool,
     /// Repos whose last fetch failed.
@@ -116,6 +119,7 @@ impl Default for App {
             status: String::new(),
             items: Vec::new(),
             repos: Vec::new(),
+            repo_filter: None,
             loading: false,
             failed: 0,
             refresh_requested: false,
@@ -147,14 +151,16 @@ impl App {
         self.failed = failures.len();
         self.loading = false;
 
-        self.repos.clear();
-        for item in &self.items {
-            if !self.repos.iter().any(|repo| repo == &item.repo) {
-                self.repos.push(item.repo.clone());
+        // Keep the configured repos: a repo with no open items must still be
+        // visible, otherwise it looks like it was never configured.
+        if self.repos.is_empty() {
+            for item in &self.items {
+                if !self.repos.iter().any(|repo| repo == &item.repo) {
+                    self.repos.push(item.repo.clone());
+                }
             }
         }
-
-        self.set_lengths(self.repos.len(), self.items.len());
+        self.set_lengths(self.repos.len(), self.visible_items().len());
         self.status = match self.failed {
             0 => format!("{} items from {} repos", self.items.len(), self.repos.len()),
             failed => format!(
@@ -166,15 +172,50 @@ impl App {
         };
     }
 
+    /// Install the configured repos. Row 0 is "all repos", so the user can get
+    /// back to the unfiltered list without leaving the pane.
+    pub fn set_repos(&mut self, repos: Vec<String>) {
+        self.repos = std::iter::once("— all repos —".to_string())
+            .chain(repos)
+            .collect();
+        self.repos_cursor = 0;
+        self.repo_filter = None;
+        self.set_lengths(self.repos.len(), self.visible_items().len());
+    }
+
+    /// Row 0 means "everything"; any other row filters the list to that repo.
+    fn apply_repo_filter(&mut self) {
+        self.repo_filter = match self.repos_cursor {
+            0 => None,
+            n => self.repos.get(n).cloned(),
+        };
+        self.list_cursor = 0;
+        self.set_lengths(self.repos.len(), self.visible_items().len());
+        // The detail belonged to the previous list: showing it here would say
+        // "this is the item you are looking at" about an item that is gone.
+        self.detail.clear();
+        self.detail_for = None;
+        self.detail_requested = None;
+        let shown = self.visible_items().len();
+        self.status = match &self.repo_filter {
+            Some(repo) => format!("{shown} items in {repo}"),
+            None => format!("{shown} items in all repos"),
+        };
+    }
+
     /// Items matching the search box. Case-insensitive on the title and the
     /// number, so `/42` finds `#42`.
     pub fn visible_items(&self) -> Vec<&Item> {
+        let by_repo: Vec<&Item> = match &self.repo_filter {
+            Some(repo) => self.items.iter().filter(|i| &i.repo == repo).collect(),
+            None => self.items.iter().collect(),
+        };
         if self.query.trim().is_empty() {
-            return self.items.iter().collect();
+            return by_repo;
         }
         let needle = self.query.to_lowercase();
-        self.items
-            .iter()
+        by_repo
+            .into_iter()
             .filter(|item| {
                 item.title.to_lowercase().contains(&needle)
                     || item.number.to_string().contains(&needle)
@@ -253,10 +294,8 @@ impl App {
             return;
         }
         let number = item.number;
-        let Some(repo) = self.repos.get(self.repos_cursor).cloned() else {
-            self.status = "no repository".into();
-            return;
-        };
+        // The item knows its repo; the cursor in the repos pane does not.
+        let repo = item.repo.clone();
         let Ok(slug) = RepoSlug::parse(&repo) else {
             self.status = format!("cannot act on {repo}");
             return;
@@ -362,7 +401,10 @@ impl App {
 
     fn move_cursor(&mut self, delta: i32) {
         match self.pane {
-            Pane::Repos => self.repos_cursor = step(self.repos_cursor, delta, self.repos_len),
+            Pane::Repos => {
+                self.repos_cursor = step(self.repos_cursor, delta, self.repos_len);
+                self.apply_repo_filter();
+            }
             Pane::List => self.list_cursor = step(self.list_cursor, delta, self.list_len),
             Pane::Detail => {
                 let next = self.detail_scroll as i32 + delta;
@@ -373,10 +415,12 @@ impl App {
 }
 
 fn next_pane(pane: Pane, forward: bool) -> Pane {
+    // Order: list → repos → detail. The repos pane comes first on purpose: it is
+    // how you narrow the list, so it must be one keypress away from it.
     match (pane, forward) {
-        (Pane::Repos, true) | (Pane::Detail, false) => Pane::List,
-        (Pane::List, true) | (Pane::Repos, false) => Pane::Detail,
-        (Pane::Detail, true) | (Pane::List, false) => Pane::Repos,
+        (Pane::List, true) | (Pane::Detail, false) => Pane::Repos,
+        (Pane::Repos, true) | (Pane::List, false) => Pane::Detail,
+        (Pane::Detail, true) | (Pane::Repos, false) => Pane::List,
     }
 }
 

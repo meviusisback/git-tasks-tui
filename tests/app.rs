@@ -11,13 +11,13 @@ fn tab_cycles_panes_both_ways() {
     let mut app = App::default();
     assert_eq!(app.pane, Pane::List);
     press(&mut app, Key::Tab);
-    assert_eq!(app.pane, Pane::Detail);
-    press(&mut app, Key::Tab);
     assert_eq!(app.pane, Pane::Repos);
+    press(&mut app, Key::Tab);
+    assert_eq!(app.pane, Pane::Detail);
     press(&mut app, Key::Tab);
     assert_eq!(app.pane, Pane::List);
     press(&mut app, Key::BackTab);
-    assert_eq!(app.pane, Pane::Repos);
+    assert_eq!(app.pane, Pane::Detail);
 }
 
 #[test]
@@ -50,6 +50,7 @@ fn detail_scroll_moves_only_in_the_detail_pane() {
         "list pane moves a cursor, not the scroll"
     );
 
+    press(&mut app, Key::Tab); // Repos
     press(&mut app, Key::Tab); // Detail
     press(&mut app, Key::Down);
     press(&mut app, Key::Down);

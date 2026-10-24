@@ -205,6 +205,8 @@ fn run_tui() -> anyhow::Result<()> {
         write_timeout: timeout,
         ..App::default()
     };
+    // The pane lists what the user configured, including repos with no items.
+    app.set_repos(repos.clone());
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
         repos.clone(),
