@@ -225,7 +225,19 @@ pub fn init_file_logging() -> anyhow::Result<PathBuf> {
 /// (Task 5 suspend/restore, Task 11a spawning an agent) returns `Err` instead of
 /// panicking. The log is rotated **at startup** only (R5-1); in-session rotation
 /// belongs to the Task 5 event loop.
+/// Tracks a successful `init_file_logging_at`. The guard is taken **before**
+/// any filesystem work: a second call must not rotate the live log only to
+/// fail at `try_init` — the subscriber would keep writing into the renamed
+/// inode while `gtasks.log` became a fresh empty file (P2).
+static LOGGING_INIT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
 pub fn init_file_logging_at(path: &Path) -> anyhow::Result<PathBuf> {
+    let mut initialised = LOGGING_INIT
+        .lock()
+        .map_err(|_| anyhow::anyhow!("logging init lock is poisoned"))?;
+    if initialised.is_some() {
+        anyhow::bail!("logging subscriber already initialised");
+    }
     if let Some(parent) = path.parent() {
         ensure_state_dir(parent)?;
     }
@@ -237,6 +249,7 @@ pub fn init_file_logging_at(path: &Path) -> anyhow::Result<PathBuf> {
         .with_ansi(false)
         .try_init()
         .map_err(|e| anyhow::anyhow!("logging subscriber already initialised: {e}"))?;
+    *initialised = Some(path.to_path_buf());
     Ok(path.to_path_buf())
 }
 
