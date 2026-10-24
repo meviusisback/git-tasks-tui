@@ -4,15 +4,34 @@ on:
   push:
   pull_request:
 
+# Least privilege for all jobs (F-4).
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned SHAs (F-4); update both together with the version comment.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677623b # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42857ab84ff3319f48ac182c248f # 1.99.1
+        with:
+          components: rustfmt, clippy
       - name: fmt
         run: cargo fmt --check
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: test
-        run: cargo test
+        run: cargo test --locked
+      - name: no-duplicate-crossterm
+        # One crossterm in the whole tree (F-3). NOTE: `cargo tree -d` nests
+        # its lines, so the check uses `--prefix none` to get countable
+        # top-level `name vX.Y` rows.
+        run: test "$(cargo tree --locked --prefix none | awk '/^crossterm v/{print $2}' | sort -u | wc -l)" = "1"
