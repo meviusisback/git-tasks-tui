@@ -18,10 +18,10 @@ jobs:
     timeout-minutes: 15
     steps:
       # Pinned SHAs (F-4); update both together with the version comment.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677623b # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42857ab84ff3319f48ac182c248f # 1.99.1
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
           components: rustfmt, clippy
       - name: fmt
