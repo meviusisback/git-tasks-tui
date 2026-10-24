@@ -37,4 +37,31 @@ if sh .githooks/commit-msg "$probe" >/dev/null 2>&1; then
     exit 1
 fi
 
+# H-3: the same treatment for the tag guard. A `pre-push` that accepts
+# everything is worse than no hook at all, because its presence is taken as proof
+# that pushes are gated — and the `for` loop above only ever checked the bit.
+# Refuse-direction: a sha that is not a commit cannot carry a tag, so the hook
+# MUST refuse it. This direction does not depend on the state of the repository.
+untagged=1234567890123456789012345678901234567890
+if printf 'refs/heads/main %s refs/heads/main %s\n' "$untagged" "$untagged" \
+     | sh .githooks/pre-push >/dev/null 2>&1; then
+    echo "install-hooks: pre-push ACCEPTS an untagged commit — the tag guard is not running" >&2
+    exit 1
+fi
+# Accept-direction: a commit that does carry a review tag must pass. The tag is
+# temporary and removed again, so the installer leaves no trace in the repository.
+probe_tag="review/selftest-$$"
+git tag "$probe_tag" HEAD 2>/dev/null || true
+accepted=0
+printf 'refs/heads/main %s refs/heads/main %s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD)" \
+     | sh .githooks/pre-push >/dev/null 2>&1 && accepted=1
+git tag -d "$probe_tag" >/dev/null 2>&1 || true
+[ "$accepted" = 1 ] || {
+    echo "install-hooks: pre-push REFUSES a tagged commit — it is not the right file" >&2
+    exit 1
+}
+
+# Printed AFTER the last check that can fail: an installer that announces success
+# and then exits 1 is the same inversion it exists to prevent.
 echo "hooks installed and verified: core.hooksPath=$(git config --get core.hooksPath)"
+echo "pre-push verified: refuses an untagged commit, accepts a tagged one"
