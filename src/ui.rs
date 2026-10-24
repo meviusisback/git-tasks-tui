@@ -34,9 +34,9 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(25),
-            Constraint::Percentage(40),
-            Constraint::Min(10),
+            Constraint::Percentage(30),
+            Constraint::Percentage(38),
+            Constraint::Min(20),
         ])
         .split(outer[1]);
 

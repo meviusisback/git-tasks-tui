@@ -10,6 +10,7 @@ pub mod binaries;
 pub mod config;
 pub mod env;
 pub mod gh;
+pub mod input;
 pub mod logging;
 pub mod model;
 pub mod sanitize;

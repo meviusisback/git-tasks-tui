@@ -21,6 +21,8 @@ pub enum Key {
     Tab,
     BackTab,
     Backspace,
+    /// Ctrl-C always quits, whatever mode we are in.
+    CtrlC,
 }
 
 /// Everything that can change the state.
@@ -88,6 +90,10 @@ impl App {
     }
 
     fn on_key(&mut self, key: Key) {
+        if key == Key::CtrlC {
+            self.quit = true;
+            return;
+        }
         if self.modal.is_some() {
             match key {
                 Key::Esc | Key::Char('n') => self.modal = None,
@@ -112,7 +118,7 @@ impl App {
                     self.query.pop();
                 }
                 Key::Char(c) => self.query.push(c),
-                Key::Up | Key::Down | Key::Tab | Key::BackTab => {}
+                Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::CtrlC => {}
             }
             return;
         }
@@ -129,6 +135,8 @@ impl App {
             Key::Enter => {
                 self.status = format!("open {:?}", self.pane);
             }
+            // Handled at the top; repeated here because the match must be total.
+            Key::CtrlC => {}
         }
     }
 

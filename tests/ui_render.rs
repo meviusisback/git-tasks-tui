@@ -95,8 +95,9 @@ fn the_focused_list_highlights_its_selected_row() {
     terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
 
     // Row 1 is the header; the first item sits at y=2, the second at y=3.
-    let first = terminal.backend().buffer()[(21, 2)].modifier;
-    let second = terminal.backend().buffer()[(21, 3)].modifier;
+    // The repos column is 30% of 80 = 24 cells, so x=25 is inside the list.
+    let first = terminal.backend().buffer()[(25, 2)].modifier;
+    let second = terminal.backend().buffer()[(25, 3)].modifier;
     assert!(
         second.contains(Modifier::REVERSED),
         "selected row is reversed"
