@@ -2,10 +2,6 @@
 
 use gtasks::markdown::{Style, line_text, render};
 
-fn text(markdown: &str, width: usize) -> Vec<String> {
-    render(markdown, width).iter().map(line_text).collect()
-}
-
 #[test]
 fn headings_become_bold_text_without_the_hashes() {
     let lines = render("## Summary", 40);
