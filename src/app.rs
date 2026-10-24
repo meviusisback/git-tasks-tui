@@ -428,13 +428,13 @@ impl App {
                 self.refresh_requested = true;
                 self.status = "refreshing…".to_string();
             }
-            Key::Esc => {
-                if self.pane == Pane::Detail {
-                    self.pane = Pane::List;
-                } else {
-                    self.quit = true;
-                }
-            }
+            // Esc climbs one level and stops at the first: it never quits.
+            // The match is exhaustive on purpose, so a new pane is a compile
+            // error here instead of silently inheriting an exit.
+            Key::Esc => match self.pane {
+                Pane::Detail => self.pane = Pane::List,
+                Pane::List | Pane::Repos => {}
+            },
             Key::Char('q') => self.quit = true,
             Key::Char('?') => self.show_help = true,
             Key::Left => {

@@ -79,7 +79,7 @@ fn typing_builds_and_erases_the_query() {
 }
 
 #[test]
-fn esc_leaves_the_search_then_quits() {
+fn esc_leaves_the_search_then_stays() {
     let mut app = App::default();
     press(&mut app, Key::Char('/'));
     press(&mut app, Key::Char('a'));
@@ -88,7 +88,52 @@ fn esc_leaves_the_search_then_quits() {
     assert!(!app.searching);
     assert!(app.query.is_empty());
     press(&mut app, Key::Esc);
-    assert!(app.quit, "second Esc quits");
+    assert!(!app.quit, "Esc is never an exit");
+}
+
+#[test]
+fn esc_never_quits_in_any_state() {
+    // The property from the spec: no Esc, in no state, sets quit. The
+    // exhaustive match on Pane in `on_key` makes a new pane a compile
+    // error, so whoever adds one must extend this sweep.
+    for pane in [Pane::List, Pane::Repos, Pane::Detail] {
+        for modal in [false, true] {
+            for searching in [false, true] {
+                for help in [false, true] {
+                    let mut app = App {
+                        pane,
+                        modal: modal.then(|| Modal::Confirm("x?".to_string())),
+                        searching,
+                        query: if searching {
+                            "ab".to_string()
+                        } else {
+                            String::new()
+                        },
+                        show_help: help,
+                        ..App::default()
+                    };
+                    press(&mut app, Key::Esc);
+                    assert!(
+                        !app.quit,
+                        "Esc must never quit (pane={pane:?}, modal={modal}, searching={searching}, help={help})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn esc_climbs_one_level_and_stops() {
+    let mut app = App {
+        pane: Pane::Detail,
+        ..App::default()
+    };
+    press(&mut app, Key::Esc);
+    assert_eq!(app.pane, Pane::List, "Detail goes back to the list");
+    press(&mut app, Key::Esc);
+    assert_eq!(app.pane, Pane::List, "already at the first level: stays");
+    assert!(!app.quit);
 }
 
 #[test]
