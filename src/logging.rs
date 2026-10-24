@@ -296,25 +296,58 @@ impl std::io::Write for RotatingFile {
 /// would not — that only protects the call sites that remember to use it.
 pub struct SanitisingWriter<W> {
     inner: W,
+    /// Bytes of an incomplete line. The unit of sanitising is the **line**, not
+    /// the `write` call: a token split across two writes must not slip through
+    /// (L-3), and a newline from untrusted text must not forge a record (L-2).
+    pending: Vec<u8>,
 }
 
 impl<W> SanitisingWriter<W> {
     pub fn new(inner: W) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            pending: Vec::new(),
+        }
+    }
+}
+
+/// Sanitise one line of log text: the escape that keeps a record a record.
+fn sanitise_line(text: &str) -> String {
+    crate::sanitize::sanitize(text).replace('\n', "\\n")
+}
+
+impl<W: io::Write> SanitisingWriter<W> {
+    /// Drain whole records. A record ends at the **last** newline in the
+    /// buffer: newlines before it are untrusted content and get escaped, so
+    /// text such as `"a\nFAKE …\n"` stays one record instead of forging one.
+    fn drain_complete_lines(&mut self) -> io::Result<()> {
+        while let Some(at) = self.pending.iter().rposition(|&byte| byte == b'\n') {
+            let record: Vec<u8> = self.pending.drain(..=at).collect();
+            let text = String::from_utf8_lossy(&record[..record.len() - 1]);
+            let clean = sanitise_line(&text);
+            self.inner.write_all(clean.as_bytes())?;
+            self.inner.write_all(b"\n")?;
+        }
+        Ok(())
     }
 }
 
 impl<W: io::Write> io::Write for SanitisingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let text = String::from_utf8_lossy(buf);
-        let clean = crate::sanitize::sanitize(&text);
-        self.inner.write_all(clean.as_bytes())?;
+        self.pending.extend_from_slice(buf);
+        self.drain_complete_lines()?;
         // Report the whole buffer as consumed: the caller must not retry the
         // remainder, the sanitised text is not byte-for-byte identical.
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        if !self.pending.is_empty() {
+            let text = String::from_utf8_lossy(&self.pending).into_owned();
+            self.pending.clear();
+            let clean = sanitise_line(&text);
+            self.inner.write_all(clean.as_bytes())?;
+        }
         self.inner.flush()
     }
 }
