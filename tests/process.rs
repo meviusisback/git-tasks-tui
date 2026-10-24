@@ -281,3 +281,23 @@ fn relative_program_is_refused() {
         "error must explain the refusal, got: {err:#}"
     );
 }
+
+/// The other side of `relative_program_is_refused`: the builders must produce
+/// an argv that the spawn accepts. Without this, a broken builder and a strict
+/// spawn cancel each other out and every other test stays green.
+#[test]
+fn builders_produce_a_runnable_argv() {
+    let binaries = Binaries::detect().expect("git and gh are on PATH here");
+
+    let git_argv = git(&binaries, Path::new("/tmp"), vec!["--version".into()]);
+    let out = run_pipe(&git_argv, Duration::from_secs(10)).expect("git builder is runnable");
+    assert!(out.status.success(), "git --version failed");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).starts_with("git version"),
+        "unexpected output"
+    );
+
+    let gh_argv = gh(&binaries, Path::new("/tmp"), vec!["--version".into()]);
+    let out = run_pipe(&gh_argv, Duration::from_secs(10)).expect("gh builder is runnable");
+    assert!(out.status.success(), "gh --version failed");
+}
