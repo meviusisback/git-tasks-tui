@@ -40,3 +40,54 @@ fn ordinary_lines_are_untouched() {
     let line = "2026-10-24T10:00:00Z INFO gtasks: gtasks starting version=\"0.1.0\"\n";
     assert_eq!(through(line), line);
 }
+
+/// L-2 (CWE-117): a newline in untrusted text must not start a new record.
+#[test]
+fn a_newline_in_a_message_cannot_forge_a_record() {
+    let forged =
+        "gh failed\n2026-10-24T12:00:00Z  INFO gtasks: action merge committed successfully\n";
+    let written = through(forged);
+
+    let lines: Vec<&str> = written.lines().collect();
+    assert_eq!(lines.len(), 1, "one write, one record: {written:?}");
+    assert!(
+        lines[0].contains("action merge committed successfully"),
+        "the forged text stays on the first line: {written:?}"
+    );
+    assert!(
+        !lines[0].contains('\n') && written.matches('\n').count() == 1,
+        "exactly one real newline: {written:?}"
+    );
+}
+
+/// L-3: `Display` and `write_fmt` may split a token across two `write` calls,
+/// so sanitising per write would let half of it through.
+#[test]
+fn a_token_split_across_writes_is_still_redacted() {
+    let mut sink: Vec<u8> = Vec::new();
+    {
+        let mut writer = SanitisingWriter::new(&mut sink);
+        writer.write_all(b"token: ghp_").unwrap();
+        writer
+            .write_all(b"16C7e42F292c6912E7710c838347Ae178B4a\n")
+            .unwrap();
+        writer.flush().unwrap();
+    }
+    let written = String::from_utf8(sink).unwrap();
+
+    assert!(
+        !written.contains("ghp_16C7e"),
+        "the split token must not survive: {written:?}"
+    );
+    // The tail matters as much as the prefix: sanitising per write redacts the
+    // first fragment and leaves the rest, which is the (L-3) leak.
+    assert!(
+        !written.contains("16C7e42F292c6912E7710c838347Ae178B4a"),
+        "no fragment of the token may survive: {written:?}"
+    );
+    assert!(written.contains("[REDACTED]"), "got {written:?}");
+    assert!(
+        written.trim_end().ends_with("[REDACTED]"),
+        "the whole token is redacted, not half of it: {written:?}"
+    );
+}
