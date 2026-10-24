@@ -122,3 +122,47 @@ fn the_view_shows_the_selected_item_detail() {
     );
     assert!(view.detail.contains("acme/two"));
 }
+
+#[test]
+fn enter_requests_the_selected_body_and_does_not_repeat_it() {
+    let mut app = App::default();
+    app.apply_outcome(outcome());
+
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(
+        app.detail_requested,
+        Some(("acme/one".to_string(), 2)),
+        "the item under the cursor is requested"
+    );
+    assert!(app.status.contains("loading #2"), "status: {}", app.status);
+
+    // A second Enter while the body is on its way changes nothing.
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.detail_requested, Some(("acme/one".to_string(), 2)));
+
+    app.apply_detail("acme/one", 2, "## Body".to_string());
+    assert!(app.detail_requested.is_none(), "request settled");
+    assert_eq!(app.detail, "## Body");
+    assert_eq!(app.detail_for, Some(("acme/one".to_string(), 2)));
+
+    // Already loaded: no new request.
+    app.update(Msg::Key(Key::Enter));
+    assert!(app.detail_requested.is_none(), "cached body is reused");
+}
+
+#[test]
+fn a_late_body_for_a_previous_selection_is_ignored() {
+    let mut app = App::default();
+    app.apply_outcome(outcome());
+    app.list_cursor = 2;
+    app.update(Msg::Key(Key::Enter)); // asks for #9
+    assert_eq!(app.detail_requested, Some(("acme/two".to_string(), 9)));
+
+    // The answer for the earlier item arrives late.
+    app.apply_detail("acme/one", 2, "stale body".to_string());
+    assert_eq!(app.detail, "", "stale body must not be shown");
+    assert_eq!(app.detail_for, None);
+
+    app.apply_detail("acme/two", 9, "fresh body".to_string());
+    assert_eq!(app.detail, "fresh body");
+}

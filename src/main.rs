@@ -145,6 +145,25 @@ fn spawn_fetch(
     rx
 }
 
+/// Start one body fetch in the background.
+fn spawn_detail(
+    repo: String,
+    number: u64,
+    kind: ItemKind,
+    timeout: Duration,
+) -> Receiver<DetailResult> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = fetch::fetch_detail(&repo, kind, number, timeout);
+        let _ = tx.send(result);
+    });
+    rx
+}
+
+/// What a body fetch returns, and the tuple kept while it is in flight.
+type DetailResult = Result<String, fetch::FetchError>;
+type PendingDetail = (String, u64, Receiver<DetailResult>);
+
 fn run_tui() -> anyhow::Result<()> {
     install_signal_handlers();
 
@@ -177,6 +196,7 @@ fn run_tui() -> anyhow::Result<()> {
         timeout,
         parallel,
     ));
+    let mut pending_detail: Option<PendingDetail> = None;
 
     while !app.quit && !TERMINATE.load(Ordering::SeqCst) {
         // Take a finished fetch, if any.
@@ -185,6 +205,8 @@ fn run_tui() -> anyhow::Result<()> {
                 Ok(outcome) => {
                     app.apply_outcome(outcome);
                     pending = None;
+                    // Show something useful straight away: the first item.
+                    app.request_detail();
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
@@ -192,6 +214,45 @@ fn run_tui() -> anyhow::Result<()> {
                     app.status = "fetch ended unexpectedly".to_string();
                     pending = None;
                 }
+            }
+        }
+
+        // A body fetch that finished.
+        let mut detail_result: Option<DetailResult> = None;
+        let mut detail_gone = false;
+        if let Some((_, _, rx)) = &pending_detail {
+            match rx.try_recv() {
+                Ok(result) => detail_result = Some(result),
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => detail_gone = true,
+            }
+        }
+        if detail_gone {
+            pending_detail = None;
+            app.detail_requested = None;
+        }
+        if let Some(result) = detail_result {
+            if let Some((repo, number, _)) = pending_detail.take() {
+                match result {
+                    Ok(body) => app.apply_detail(&repo, number, body),
+                    Err(err) => {
+                        // Do not leave the request pending: it would be retried
+                        // on every loop iteration.
+                        app.detail_requested = None;
+                        app.status = format!("detail failed: {err}");
+                    }
+                }
+            }
+        }
+
+        // A request from the key handler.
+        if pending_detail.is_none() {
+            if let Some((repo, number)) = app.detail_requested.clone() {
+                pending_detail = Some((
+                    repo.clone(),
+                    number,
+                    spawn_detail(repo, number, ItemKind::Pr, timeout),
+                ));
             }
         }
 

@@ -6,9 +6,10 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::app::{App, Modal, Pane};
+use crate::markdown::{self as md};
 use crate::sanitize::sanitize;
 
 /// What the UI needs to draw a frame. Owned strings keep the borrow simple.
@@ -46,7 +47,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     let (items, mut items_state) = list_widget(app, &view.items, app.list_cursor, Pane::List);
     frame.render_stateful_widget(items, columns[1], &mut items_state);
 
-    frame.render_widget(detail(app, view), columns[2]);
+    frame.render_widget(detail(app, view, columns[2].width), columns[2]);
     frame.render_widget(Paragraph::new(footer(app)), outer[2]);
 }
 
@@ -58,15 +59,19 @@ pub fn view_for(app: &App) -> ViewModel {
         .iter()
         .map(|item| format!("#{} {}", item.number, item.title))
         .collect();
-    let detail = visible
-        .get(app.list_cursor)
-        .map(|item| {
-            format!(
-                "#{} {}\n\nstate: {}\nrepo: {}\nurl: {}",
-                item.number, item.title, item.state, item.repo, item.url
-            )
-        })
-        .unwrap_or_default();
+    let detail = if app.detail.trim().is_empty() {
+        visible
+            .get(app.list_cursor)
+            .map(|item| {
+                format!(
+                    "#{} {}\n\nstate: {}\nrepo: {}\nurl: {}",
+                    item.number, item.title, item.state, item.repo, item.url
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        app.detail.clone()
+    };
     ViewModel {
         repos: app.repos.clone(),
         items,
@@ -121,9 +126,29 @@ fn list_widget<'a>(
     (widget, ListState::default().with_selected(selected))
 }
 
-fn detail(app: &App, view: &ViewModel) -> Paragraph<'static> {
-    Paragraph::new(sanitize(&view.detail))
+fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
+    // Markdown is rendered at the column width, so the wrapping is real: the
+    // paragraph must not wrap again.
+    let lines = md::render(&view.detail, width.saturating_sub(2).max(1) as usize);
+    let text: Vec<ratatui::text::Line<'static>> = lines
+        .into_iter()
+        .map(|line| {
+            let spans: Vec<ratatui::text::Span<'static>> = line
+                .into_iter()
+                .map(|span| {
+                    let style = match span.style {
+                        md::Style::Plain => Style::default(),
+                        md::Style::Bold => Style::default().add_modifier(Modifier::BOLD),
+                        md::Style::Italic => Style::default().add_modifier(Modifier::ITALIC),
+                        md::Style::Code => Style::default().add_modifier(Modifier::DIM),
+                    };
+                    ratatui::text::Span::styled(span.text, style)
+                })
+                .collect();
+            ratatui::text::Line::from(spans)
+        })
+        .collect();
+    Paragraph::new(text)
         .block(Block::default().borders(Borders::ALL).title("detail"))
-        .wrap(Wrap { trim: false })
         .scroll((app.detail_scroll, 0))
 }

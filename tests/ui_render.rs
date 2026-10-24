@@ -104,3 +104,18 @@ fn the_focused_list_highlights_its_selected_row() {
     );
     assert!(!first.contains(Modifier::REVERSED), "other rows are not");
 }
+
+#[test]
+fn the_detail_renders_markdown_instead_of_raw_markers() {
+    let (app, mut view) = sample();
+    view.detail = "## Summary\n\nUse **bold** and `code`.".to_string();
+
+    let screen = render(&app, &view);
+    assert!(screen.contains("Summary"), "heading text is shown");
+    assert!(
+        !screen.contains("##"),
+        "markdown markers are gone: {screen}"
+    );
+    assert!(screen.contains("bold"));
+    assert!(screen.contains("code"));
+}

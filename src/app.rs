@@ -66,6 +66,12 @@ pub struct App {
     pub failed: usize,
     /// Set by the key handler, consumed by the event loop that owns the thread.
     pub refresh_requested: bool,
+    /// Markdown body of the selected item.
+    pub detail: String,
+    /// Which item `detail` belongs to, so the same body is not fetched twice.
+    pub detail_for: Option<(String, u64)>,
+    /// Set by the key handler: the loop fetches this body.
+    pub detail_requested: Option<(String, u64)>,
 }
 
 impl Default for App {
@@ -87,6 +93,9 @@ impl Default for App {
             loading: false,
             failed: 0,
             refresh_requested: false,
+            detail: String::new(),
+            detail_for: None,
+            detail_requested: None,
         }
     }
 }
@@ -141,6 +150,45 @@ impl App {
                     || item.number.to_string().contains(&needle)
             })
             .collect()
+    }
+
+    /// The item under the cursor, if any.
+    pub fn selected_item(&self) -> Option<&Item> {
+        self.visible_items().get(self.list_cursor).copied()
+    }
+
+    /// Ask for the selected item's body, unless it is already loaded.
+    pub fn request_detail(&mut self) {
+        let Some(item) = self.selected_item() else {
+            return;
+        };
+        let key = (item.repo.clone(), item.number);
+        let number = item.number;
+        if self.detail_for.as_ref() == Some(&key) {
+            return;
+        }
+        if self.detail_requested.as_ref() == Some(&key) {
+            return;
+        }
+        self.detail_requested = Some(key);
+        self.status = format!("loading #{number}…");
+    }
+
+    /// Store a body that arrived for `(repo, number)`; a late answer for a
+    /// previous selection is dropped instead of overwriting the current one.
+    pub fn apply_detail(&mut self, repo: &str, number: u64, body: String) {
+        let key = (repo.to_string(), number);
+        // A late answer for a previous selection must not overwrite the one the
+        // user is looking at now.
+        if let Some(pending) = &self.detail_requested {
+            if pending != &key {
+                return;
+            }
+        }
+        self.detail_requested = None;
+        self.detail = body;
+        self.detail_for = Some(key);
+        self.detail_scroll = 0;
     }
 
     pub fn update(&mut self, msg: Msg) {
@@ -199,9 +247,7 @@ impl App {
             Key::Down => self.move_cursor(1),
             Key::Backspace => {}
             Key::Char(_) => {}
-            Key::Enter => {
-                self.status = format!("open {:?}", self.pane);
-            }
+            Key::Enter => self.request_detail(),
             // Handled at the top; repeated here because the match must be total.
             Key::CtrlC => {}
         }
