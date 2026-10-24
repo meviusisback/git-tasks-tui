@@ -6,3 +6,4 @@
 
 pub mod agent;
 pub mod logging;
+pub mod model;
