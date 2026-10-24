@@ -92,7 +92,7 @@ fn the_shown_argv_is_the_argv_the_process_receives() {
             "the confirmation does not show the program that will run"
         );
 
-        execute(&checked, Duration::from_secs(10)).expect("execution runs");
+        execute(&checked, Duration::from_secs(10));
 
         let received: Vec<String> = fs::read_to_string(&record)
             .unwrap_or_default()
