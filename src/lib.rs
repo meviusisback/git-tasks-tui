@@ -9,6 +9,7 @@ pub mod app;
 pub mod binaries;
 pub mod config;
 pub mod env;
+pub mod fetch;
 pub mod gh;
 pub mod input;
 pub mod logging;
