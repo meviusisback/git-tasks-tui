@@ -220,8 +220,8 @@ for `gh` applies here too.
 | # | Branch | Deliverable | Done when |
 |---|---|---|---|
 | 1 | `task/10-shell` | layout, panes, `←/→`, legend line, `?` overlay, theme module | a live run shows the layout above; resize does not break it |
-| 2 | `task/11-repo-menu` | `selected_repos` in config, `R` multi-select menu, list filtered | toggling a repo changes the list after restart |
-| 3 | `task/12-drilldown` | repo → items, `Esc` back, items keep the repo filter | drill in/out with arrows only |
+| 2 | `task/11-drilldown` | repo → items, `Esc` back, filter kept on the way out | drill in/out with arrows (`Tab` until the shell lands) |
+| 3 | `task/12-repo-menu` | `selected_repos` in config, `R` multi-select menu, list filtered | toggling a repo changes the list after restart |
 | 4 | `task/13-detail` | structured detail box with the fields above | every field is either true or absent |
 | 5 | `task/14-actions` | `m` actions menu on `CheckedArgv` (merge method, delete branch, comment, close) | the confirmation still shows the exact argv |
 | 6 | `task/15-worktree` | `w` menu, create/switch, path safety | traversal tests green |
