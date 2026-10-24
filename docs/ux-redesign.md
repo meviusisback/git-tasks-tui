@@ -169,6 +169,28 @@ signature should be `(&RepoSlug, &BranchName)`, so `"."` is unrepresentable
 rather than rejected by a check. This is the only place in the project where the
 validation is duplicated by hand instead of delegated to the type.
 
+**The type change is enforced by the compiler, not by a review** — a doctest with
+the error code pinned, measured red today and green against a typed signature:
+
+```rust
+/// ```compile_fail,E0308
+/// let _ = resolve_in(Path::new("/base"), Path::new("/clones/o/r"), ".", "x");
+/// ```
+```
+
+`compile_fail` alone would pass on *any* error, including a typo in the example,
+so the code is pinned: the failure must be "incompatible types". It also needs a
+positive twin — `RepoSlug::parse("o/r")` must still compile — otherwise a function
+that accepts nothing would satisfy the negative test.
+
+`BranchName` does not exist yet: built like `RepoSlug` (one door, private field,
+`parse`), it takes over the 13 traversal checks that live inside `resolve_in`
+today, leaving it a pure path mapper.
+
+The gate must run `cargo test --doc` (or plain `cargo test`): `cargo test --tests`
+skips doctests and `cargo nextest` never runs them — a control that disappears in
+silence without ever producing a red.
+
 Two more rules:
 
 - **Pass `-b` with a name built from a typed value** (`item/<n>`). Without `-b`,
