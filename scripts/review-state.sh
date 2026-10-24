@@ -20,19 +20,34 @@ ledger=$(git show origin/main:docs/REVIEWS.md 2>/dev/null || true)
 
 field() { printf '%s' "$1" | cut -d'|' -f"$2" | tr -d '`' | sed 's/^ *//; s/ *$//'; }
 
-last_row=$(printf '%s\n' "$ledger" | grep '^| `main@' | tail -1 || true)
-# Match the verdict *column*, not the whole line: a row describing a PASS fix
-# is not itself a PASS.
-last_pass=$(printf '%s\n' "$ledger" | grep '^| `main@' \
-            | awk -F'|' 'NF > 4 && $4 ~ /PASS/ { last = $0 } END { print last }')
+# Every verdict row counts, whatever its label: `main@<sha>` and `review/<tag>`
+# are both ledgers entries, and the sha column is what places them in history.
+# For each row whose sha is an ancestor of origin/main, the distance to the tip
+# decides which row describes the tree most closely.
+tips="$(
+    printf '%s\n' "$ledger" | grep '^| `' | while IFS= read -r line; do
+        sha=$(printf '%s' "$line" | cut -d'|' -f3 | tr -d '` ' | sed 's/^main@//')
+        verdict=$(printf '%s' "$line" | cut -d'|' -f4 | tr -d '*' | sed 's/^ *//; s/ *$//')
+        case "$sha" in
+            ???????*) ;;
+            *) continue ;;
+        esac
+        git cat-file -e "$sha^{commit}" 2>/dev/null || continue
+        git merge-base --is-ancestor "$sha" origin/main 2>/dev/null || continue
+        ahead=$(git rev-list --count "$sha..origin/main" -- . ':(exclude)docs' 2>/dev/null || echo 999999)
+        printf '%s|%s|%s\n' "$ahead" "$sha" "$verdict"
+    done | sort -n -t'|' -k1,1
+)"
 
-row_tag=$(field "$last_row" 2)
-row_verdict=$(field "$last_row" 4)
-pass_tag=$(field "$last_pass" 2)
-pass_sha=${pass_tag#main@}
+last_row=$(printf '%s\n' "$tips" | grep -v '^$' | head -1 || true)
+last_pass=$(printf '%s\n' "$tips" | grep -v '^$' | awk -F'|' '$3 ~ /PASS/ { print; exit }')
+
+row_sha=$(printf '%s' "$last_row" | cut -d'|' -f2)
+row_verdict=$(printf '%s' "$last_row" | cut -d'|' -f3)
+pass_sha=$(printf '%s' "$last_pass" | cut -d'|' -f2)
 
 printf 'remote main    : %s\n' "$main"
-printf 'newest row     : %s (%s)\n' "${row_tag#main@}" "${row_verdict:-<none>}"
+printf 'newest row     : %s (%s)\n' "${row_sha:-<none>}" "${row_verdict:-<none>}"
 printf 'newest PASS    : %s\n' "${pass_sha:-<none>}"
 
 if [ -n "$pass_sha" ] && git cat-file -e "$pass_sha^{commit}" 2>/dev/null; then
