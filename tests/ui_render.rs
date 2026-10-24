@@ -225,6 +225,20 @@ fn recovery_keys_survive_narrow_widths() {
 }
 
 #[test]
+fn status_messages_survive_at_80_columns() {
+    // S-6a repro: at 80 columns the status used to drown behind a ~100-cell
+    // legend. `r` is the honest path — it sets a real message, no fields.
+    let (mut app, view) = sample();
+    app.update(Msg::Key(Key::Char('r')));
+    assert_eq!(app.status, "refreshing…");
+    let screen = render(&app, &view);
+    assert!(
+        screen.contains("refreshing…"),
+        "80 cols must show the status: {screen}"
+    );
+}
+
+#[test]
 fn coming_next_keys_produce_no_screen_change() {
     // The auditor's proof: every key in the overlay's "coming in the next
     // stages" section must be a no-op today. When a later stage binds one
@@ -238,12 +252,23 @@ fn coming_next_keys_produce_no_screen_change() {
     ] {
         let (mut app, view) = sample();
         let before = render(&app, &view);
+        let before_wide = render_sized(&app, &view, 120, 30);
+        let before_status = app.status.clone();
         app.update(Msg::Key(key));
         assert!(!app.quit, "{key:?} must not quit");
         assert!(app.modal.is_none(), "{key:?} must not open anything");
         assert!(!app.show_help, "{key:?} must not open the overlay");
+        assert_eq!(
+            app.status, before_status,
+            "{key:?} must not touch the status"
+        );
         let after = render(&app, &view);
         assert_eq!(before, after, "{key:?} must not change the screen");
+        let after_wide = render_sized(&app, &view, 120, 30);
+        assert_eq!(
+            before_wide, after_wide,
+            "{key:?} must not change the screen at full width either"
+        );
     }
 }
 
@@ -252,7 +277,7 @@ fn no_colour_literal_outside_the_theme_module() {
     // Task 10 invariant: `grep -rn 'Color::' src/ | grep -v theme.rs` is empty.
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
-    let mut stack = vec![root];
+    let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
@@ -271,6 +296,13 @@ fn no_colour_literal_outside_the_theme_module() {
     assert!(
         offenders.is_empty(),
         "colour literals must live in src/theme.rs only: {offenders:?}"
+    );
+    // Anti-vacuity: the scan must find the literals where they belong, or a
+    // rename would make every direction above pass in silence.
+    let theme = std::fs::read_to_string(root.join("theme.rs")).unwrap();
+    assert!(
+        theme.contains("Color::"),
+        "the scan found no colour literals even in theme.rs — the pattern is wrong"
     );
     // The token itself resolves to the Mocha base colour.
     assert_eq!(theme::BASE, Color::Rgb(0x1e, 0x1e, 0x2e));
