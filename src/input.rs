@@ -1,7 +1,7 @@
 //! Translating terminal events into [`Msg`]: a pure function, so the key map
 //! is testable without a terminal.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{Key, Msg};
 
@@ -25,6 +25,8 @@ pub fn map_key_code(code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
         KeyCode::Esc => Key::Esc,
         KeyCode::Up => Key::Up,
         KeyCode::Down => Key::Down,
+        KeyCode::Left => Key::Left,
+        KeyCode::Right => Key::Right,
         KeyCode::Tab => Key::Tab,
         KeyCode::BackTab => Key::BackTab,
         KeyCode::Backspace => Key::Backspace,

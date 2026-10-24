@@ -13,11 +13,6 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use clap::Parser;
-use crossterm::event::{self, Event};
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use crossterm::{cursor, execute};
 use gtasks::actions;
 use gtasks::app::{App, Msg};
 use gtasks::binaries::Binaries;
@@ -29,6 +24,11 @@ use gtasks::model::ItemKind;
 use gtasks::ui;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::crossterm::{cursor, execute};
 
 /// gtasks: GitHub issues & PRs across repos, in the terminal.
 #[derive(Debug, Parser)]

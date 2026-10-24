@@ -8,6 +8,7 @@ use crate::binaries::Binaries;
 use crate::fetch::FetchOutcome;
 use crate::gh::CheckedArgv;
 use crate::model::Item;
+use crate::sanitize::sanitize;
 
 /// Which pane has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,8 @@ pub enum Key {
     Esc,
     Up,
     Down,
+    Left,
+    Right,
     Tab,
     BackTab,
     Backspace,
@@ -101,6 +104,8 @@ pub struct App {
     pub detail_requested: Option<(String, u64)>,
     /// Set by `o`: the loop launches the browser.
     pub open_requested: Option<String>,
+    /// The `?` overlay with the full keymap is on screen.
+    pub show_help: bool,
 }
 
 impl Default for App {
@@ -130,6 +135,7 @@ impl Default for App {
             detail_for: None,
             detail_requested: None,
             open_requested: None,
+            show_help: false,
         }
     }
 }
@@ -223,6 +229,27 @@ impl App {
                     || item.number.to_string().contains(&needle)
             })
             .collect()
+    }
+
+    /// The bottom legend: the keys available right now, never the full keymap
+    /// (that lives behind `?`). Untrusted text (query, status) is sanitised.
+    pub fn legend(&self) -> String {
+        if let Some(Modal::Confirm(question)) = &self.modal {
+            return format!("{}  —  y confirm · n/Esc cancel", sanitize(question));
+        }
+        if self.searching {
+            return format!(
+                "/{query} — Esc done · Enter keep",
+                query = sanitize(&self.query)
+            );
+        }
+        let mut line =
+            String::from("←/→ panes · ↑/↓ move · Enter open · R repos · m actions · ? help · q");
+        if !self.status.is_empty() {
+            line.push_str(" │ ");
+            line.push_str(&sanitize(&self.status));
+        }
+        line
     }
 
     /// Ask the loop to open the selected item, after checking its URL (S10).
@@ -371,8 +398,21 @@ impl App {
                     self.query.pop();
                 }
                 Key::Char(c) => self.query.push(c),
-                Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::CtrlC => {}
+                Key::Up
+                | Key::Down
+                | Key::Tab
+                | Key::BackTab
+                | Key::Left
+                | Key::Right
+                | Key::CtrlC => {}
             }
+            return;
+        }
+
+        // The help overlay eats every key except the quit chord: any other key
+        // just closes it and is otherwise ignored.
+        if self.show_help && key != Key::CtrlC {
+            self.show_help = false;
             return;
         }
 
@@ -388,7 +428,25 @@ impl App {
                 self.refresh_requested = true;
                 self.status = "refreshing…".to_string();
             }
-            Key::Esc | Key::Char('q') => self.quit = true,
+            Key::Esc => {
+                if self.pane == Pane::Detail {
+                    self.pane = Pane::List;
+                } else {
+                    self.quit = true;
+                }
+            }
+            Key::Char('q') => self.quit = true,
+            Key::Char('?') => self.show_help = true,
+            Key::Left => {
+                if self.pane == Pane::Detail {
+                    self.pane = Pane::List;
+                }
+            }
+            Key::Right => {
+                if self.pane != Pane::Detail {
+                    self.pane = Pane::Detail;
+                }
+            }
             Key::Tab => self.pane = next_pane(self.pane, true),
             Key::BackTab => self.pane = next_pane(self.pane, false),
             Key::Up => self.move_cursor(-1),
