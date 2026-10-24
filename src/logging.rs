@@ -50,6 +50,12 @@ fn fchmod(fd: std::os::unix::io::RawFd, mode: u32, what: &str) -> anyhow::Result
 /// at a time with mode 0700. A `..` component is refused outright. Final
 /// permissions go on an `O_DIRECTORY | O_NOFOLLOW` fd, never on the path.
 pub fn ensure_state_dir(dir: &Path) -> anyhow::Result<()> {
+    // Refuse `..` before creating anything: otherwise a trailing `..` after a
+    // missing component creates that component and only then bails, leaving a
+    // half-built tree behind.
+    if dir.components().any(|c| c == Component::ParentDir) {
+        anyhow::bail!("refusing state dir with `..`: {}", dir.display());
+    }
     let mut prefix = PathBuf::new();
     for comp in dir.components() {
         match comp {
@@ -157,13 +163,14 @@ pub fn open_log_file(path: &Path) -> anyhow::Result<std::fs::File> {
     Ok(file)
 }
 
-/// Rotate `gtasks.log` → `gtasks.log.1` once it reaches [`MAX_LOG_BYTES`]
+/// Rotate `gtasks.log` → `gtasks.log.1` once it reaches `max_bytes`
 /// (F-5, a single backup). Symlinks and non-files are refused before any
 /// rename; a missing file is a no-op.
 ///
-/// Public so the rotation contract (refuse links, replace the old backup,
-/// keep one generation) is testable without spawning the binary.
-pub fn rotate_log(path: &Path) -> anyhow::Result<()> {
+/// Public and threshold-parameterised so the rotation contract (refuse links,
+/// replace the old backup, keep one generation) is testable with a few bytes
+/// instead of 5 MiB. Production callers pass [`MAX_LOG_BYTES`].
+pub fn rotate_log(path: &Path, max_bytes: u64) -> anyhow::Result<()> {
     let meta = match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => {
@@ -181,7 +188,7 @@ pub fn rotate_log(path: &Path) -> anyhow::Result<()> {
         "log path {} is not a regular file",
         path.display()
     );
-    if meta.len() < MAX_LOG_BYTES {
+    if meta.len() < max_bytes {
         return Ok(());
     }
     let backup = path.with_extension("log.1");
@@ -222,7 +229,7 @@ pub fn init_file_logging_at(path: &Path) -> anyhow::Result<PathBuf> {
     if let Some(parent) = path.parent() {
         ensure_state_dir(parent)?;
     }
-    rotate_log(path)?;
+    rotate_log(path, MAX_LOG_BYTES)?;
     let file = open_log_file(path)?;
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
