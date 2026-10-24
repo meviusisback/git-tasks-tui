@@ -53,7 +53,13 @@ impl Argv {
         // only async-signal-safe calls belong here.
         unsafe {
             cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                // If the parent dies before this child, the kernel kills the
+                // child. `prctl` can fail (seccomp, old kernels): surface it as
+                // a spawn error instead of silently running without the
+                // death-signal — a missing one is only noticed in an incident.
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }

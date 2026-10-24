@@ -71,7 +71,7 @@ fn worktree_resolve_rejects_escapes() {
     assert_ne!(acme, other, "different repos must not collide");
     assert_eq!(
         acme,
-        PathBuf::from("/data/worktrees/acme--widget/main"),
+        PathBuf::from("/data/worktrees/acme/widget/main"),
         "the slug owns the directory"
     );
 
@@ -85,4 +85,20 @@ fn worktree_resolve_rejects_escapes() {
 
     assert!(resolve_in(base, Path::new("/"), "r", "b").is_err());
     assert!(resolve_in(Path::new(""), clone, "r", "b").is_err());
+}
+
+/// The old flattening (`/` -> `--`) mapped two legal slugs to one directory:
+/// `a--b/c` and `a/b--c` both became `a--b--c`. Keeping the owner as a real
+/// component removes the ambiguity.
+#[test]
+fn distinct_slugs_can_never_flatten_into_one_directory() {
+    let base = std::path::Path::new("/data/worktrees");
+    let clone = std::path::Path::new("/src/widget");
+
+    let one = resolve_in(base, clone, "a--b/c", "main").unwrap();
+    let two = resolve_in(base, clone, "a/b--c", "main").unwrap();
+
+    assert_ne!(one, two, "two different repos must not share a path");
+    assert!(one.ends_with("a--b/c/main"), "got {one:?}");
+    assert!(two.ends_with("a/b--c/main"), "got {two:?}");
 }

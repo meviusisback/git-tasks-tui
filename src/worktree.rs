@@ -109,11 +109,17 @@ pub fn resolve_in(base: &Path, clone: &Path, slug: &str, branch: &str) -> anyhow
         repo.len()
     );
 
-    // The path is keyed by the **slug**, not by the clone directory name:
-    // `acme/widget` and `other-org/widget` clone into `widget` and would
-    // otherwise share a worktree (T2-1). `/` is flattened so the slug stays a
-    // single component.
-    let flat_slug = slug.replace('/', "--");
+    // The path keeps the slug's structure: `owner/repo` becomes two
+    // components, so two different repos can never flatten into the same
+    // directory (`a--b/c` vs `a/b--c` collided when `/` was replaced by `--`).
     let flat_branch = branch.replace('/', "-");
-    Ok(base.join(flat_slug).join(flat_branch))
+    let mut path = base.to_path_buf();
+    match slug.split_once('/') {
+        Some((owner, name)) => {
+            path.push(owner);
+            path.push(name);
+        }
+        None => path.push(slug),
+    }
+    Ok(path.join(flat_branch))
 }
