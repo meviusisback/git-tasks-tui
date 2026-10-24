@@ -60,4 +60,7 @@ if ! printf 'refs/heads/main %s refs/heads/main %s\n' "$head_sha" "$head_sha" \
 fi
 git tag -d "$selftest_tag" >/dev/null 2>&1 || true
 
-echo "hooks installed and verified: commit-msg answers both ways, pre-push refuses an untagged commit and accepts a tagged one"
+# Printed AFTER the last check that can fail: an installer that announces success
+# and then exits 1 is the same inversion it exists to prevent.
+echo "hooks installed and verified: core.hooksPath=$(git config --get core.hooksPath)"
+echo "pre-push verified: refuses an untagged commit, accepts a tagged one"
