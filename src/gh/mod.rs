@@ -64,6 +64,21 @@ impl Argv {
 /// match only: `--force-with-lease` and friends stay legal.
 const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto"];
 
+/// The choke point: every argv passes here, whether it came from `gh()`/`git()`
+/// or from a literal `Argv` (the fields are `pub`, so a factory bypass must not
+/// be enough). Returns an error, never panics: this is a runtime refusal, not a
+/// programmer assertion.
+pub fn check_argv(argv: &Argv) -> anyhow::Result<()> {
+    for arg in &argv.args {
+        let text = arg.to_string_lossy();
+        anyhow::ensure!(
+            !FORBIDDEN.iter().any(|flag| text == *flag),
+            "refusing forbidden flag {text:?}"
+        );
+    }
+    Ok(())
+}
+
 fn forbid_admin_force_auto(args: &[OsString], tool: &str) {
     for arg in args {
         let text = arg.to_string_lossy();
@@ -203,11 +218,15 @@ fn spawn_retry(
     cmd: &mut std::process::Command,
     program: &Path,
 ) -> anyhow::Result<std::process::Child> {
+    // Invariant: retrying is safe **only** because `ETXTBSY` comes from a failed
+    // `execve` — the program never ran, so no effect can be duplicated. Never
+    // retry a spawn that might have started (that is why writes are never
+    // retried).
     let mut last = None;
     for _ in 0..10 {
         match cmd.spawn() {
             Ok(child) => return Ok(child),
-            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+            Err(e) if is_retryable_spawn_error(&e) => {
                 last = Some(e);
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -218,6 +237,12 @@ fn spawn_retry(
     }
     Err(last.expect("retry loop ran"))
         .with_context(|| format!("cannot spawn {} (still busy)", program.display()))
+}
+
+/// Only `ETXTBSY` is retryable: it comes from a failed `execve`, so nothing ran.
+/// Every other error (missing file, permissions, bad format) fails immediately.
+fn is_retryable_spawn_error(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(libc::ETXTBSY)
 }
 
 /// Run a pipe child to completion, bounded by `timeout` and the default caps.
@@ -270,6 +295,7 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
         "refusing a non-absolute program: {}",
         argv.program.display()
     );
+    check_argv(argv)?;
     let mut argv = argv.clone();
     argv.program = resolve_program(&argv.program)?;
     let mut cmd = argv.command();
@@ -371,4 +397,26 @@ pub fn json_fields(fields: &[&str]) -> anyhow::Result<String> {
         );
     }
     Ok(fields.join(","))
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::is_retryable_spawn_error;
+
+    #[test]
+    fn only_etxtbsy_is_retryable() {
+        let etxtbsy = std::io::Error::from_raw_os_error(libc::ETXTBSY);
+        assert!(
+            is_retryable_spawn_error(&etxtbsy),
+            "ETXTBSY is the one case"
+        );
+
+        for code in [libc::EACCES, libc::ENOENT, libc::ENOEXEC, libc::EPERM] {
+            let err = std::io::Error::from_raw_os_error(code);
+            assert!(
+                !is_retryable_spawn_error(&err),
+                "errno {code} must not be retried"
+            );
+        }
+    }
 }
