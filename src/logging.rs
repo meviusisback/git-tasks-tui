@@ -160,7 +160,10 @@ pub fn open_log_file(path: &Path) -> anyhow::Result<std::fs::File> {
 /// Rotate `gtasks.log` → `gtasks.log.1` once it reaches [`MAX_LOG_BYTES`]
 /// (F-5, a single backup). Symlinks and non-files are refused before any
 /// rename; a missing file is a no-op.
-fn rotate_log(path: &Path) -> anyhow::Result<()> {
+///
+/// Public so the rotation contract (refuse links, replace the old backup,
+/// keep one generation) is testable without spawning the binary.
+pub fn rotate_log(path: &Path) -> anyhow::Result<()> {
     let meta = match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => {
@@ -205,18 +208,29 @@ pub fn log_filter() -> EnvFilter {
 /// Initialise `tracing` to append to the state-dir log file (no ANSI codes).
 /// Returns the log path so `main` can report it.
 pub fn init_file_logging() -> anyhow::Result<PathBuf> {
-    let path = log_file_path()?;
+    init_file_logging_at(&log_file_path()?)
+}
+
+/// Same as [`init_file_logging`], for an explicit path (tests and callers that
+/// already resolved it).
+///
+/// Uses `try_init`, **not** `init`: a second initialisation in the same process
+/// (Task 5 suspend/restore, Task 11a spawning an agent) returns `Err` instead of
+/// panicking. The log is rotated **at startup** only (R5-1); in-session rotation
+/// belongs to the Task 5 event loop.
+pub fn init_file_logging_at(path: &Path) -> anyhow::Result<PathBuf> {
     if let Some(parent) = path.parent() {
         ensure_state_dir(parent)?;
     }
-    rotate_log(&path)?;
-    let file = open_log_file(&path)?;
+    rotate_log(path)?;
+    let file = open_log_file(path)?;
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
         .with_writer(std::sync::Mutex::new(file))
         .with_ansi(false)
-        .init();
-    Ok(path)
+        .try_init()
+        .map_err(|e| anyhow::anyhow!("logging subscriber already initialised: {e}"))?;
+    Ok(path.to_path_buf())
 }
 
 /// Fallback when the log file cannot be opened: log to stderr instead of
