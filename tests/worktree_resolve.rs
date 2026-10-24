@@ -48,7 +48,7 @@ fn worktree_resolve_rejects_escapes() {
     let base = Path::new("/data/worktrees");
     let clone = Path::new("/repos/git-tasks-tui");
 
-    for bad_slug in ["", "..", "a b", "../x", "-repo", "a/b", "r..e"] {
+    for bad_slug in ["", "..", "a b", "../x", "-repo", "a/b/c", "r..e", "a//b"] {
         assert!(
             resolve_in(base, clone, bad_slug, "main").is_err(),
             "slug {bad_slug:?} must be refused"
@@ -62,7 +62,26 @@ fn worktree_resolve_rejects_escapes() {
     }
     // Slashes are flattened, never preserved as subdirectories.
     let flat = resolve_in(base, clone, "repo", "a/b/c").unwrap();
-    assert_eq!(flat, PathBuf::from("/data/worktrees/git-tasks-tui/a-b-c"));
+    assert_eq!(flat, PathBuf::from("/data/worktrees/repo/a-b-c"));
+
+    // T2-1: the path is keyed by the slug, so two repos that clone into the
+    // same directory name never share a worktree.
+    let acme = resolve_in(base, Path::new("/repos/widget"), "acme/widget", "main").unwrap();
+    let other = resolve_in(base, Path::new("/repos/widget"), "other-org/widget", "main").unwrap();
+    assert_ne!(acme, other, "different repos must not collide");
+    assert_eq!(
+        acme,
+        PathBuf::from("/data/worktrees/acme--widget/main"),
+        "the slug owns the directory"
+    );
+
+    // git's own branch rules (T2-4), beyond the charset.
+    for bad in ["feat/.hidden", "release/a.lock", "release/v1."] {
+        assert!(
+            resolve_in(base, clone, "repo", bad).is_err(),
+            "branch {bad:?} must be refused"
+        );
+    }
 
     assert!(resolve_in(base, Path::new("/"), "r", "b").is_err());
     assert!(resolve_in(Path::new(""), clone, "r", "b").is_err());

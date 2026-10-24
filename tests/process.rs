@@ -240,3 +240,22 @@ fn both_pipes_drained_no_deadlock() {
     assert_eq!(out.stderr.len(), 30_000);
     assert!(!out.truncated, "nothing should be truncated here");
 }
+
+/// S2/T2-2: a relative program is refused at the single spawn point — the
+/// caller resolves binaries, never `run_pipe`.
+#[test]
+fn relative_program_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let argv = Argv {
+        program: "true".into(),
+        args: Vec::new(),
+        env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+        cwd: tmp.path().to_path_buf(),
+    };
+    let err =
+        run_pipe(&argv, Duration::from_secs(1)).expect_err("a relative program must be refused");
+    assert!(
+        format!("{err:#}").contains("non-absolute"),
+        "error must explain the refusal, got: {err:#}"
+    );
+}

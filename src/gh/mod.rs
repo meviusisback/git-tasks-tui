@@ -47,6 +47,15 @@ impl Argv {
             cmd.env(key, value);
         }
         cmd.process_group(0);
+        // S11/T2-6: if gtasks dies (even with SIGKILL) the child must not
+        // outlive it. `pre_exec` runs in the child between fork and exec, so
+        // only async-signal-safe calls belong here.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                Ok(())
+            });
+        }
         cmd
     }
 }
@@ -219,6 +228,13 @@ pub fn run_pipe(argv: &Argv, timeout: Duration) -> anyhow::Result<Output> {
 /// Run a pipe child with explicit caps (tests use small caps to trigger
 /// truncation without moving megabytes around).
 pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow::Result<Output> {
+    // S2: the program is resolved once, by the caller. At spawn there is no
+    // PATH lookup — a relative program is a bug, not a convenience (T2-2).
+    anyhow::ensure!(
+        argv.program.is_absolute(),
+        "refusing a non-absolute program: {}",
+        argv.program.display()
+    );
     let mut argv = argv.clone();
     argv.program = resolve_program(&argv.program)?;
     let mut cmd = argv.command();
