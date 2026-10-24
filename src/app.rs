@@ -18,6 +18,15 @@ pub enum Pane {
     Detail,
 }
 
+/// The repo filter as a type, not a string: either everything or one valid
+/// slug. There is no representation for "one invalid slug", so no check has
+/// to remember to refuse it — the same lesson as the worktree paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoFilter {
+    All,
+    One(RepoSlug),
+}
+
 /// The keys the app cares about, independent of the terminal backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -82,8 +91,8 @@ pub struct App {
     /// The repos the user configured, plus a leading "all repos" entry, so a
     /// repo with no open items is still visible and selectable.
     pub repos: Vec<String>,
-    /// The repo selected in the repos pane; `None` means "all".
-    pub repo_filter: Option<String>,
+    /// The repo selected in the repos pane; `All` means "all".
+    pub repo_filter: RepoFilter,
     /// A fetch is in flight: `r` must not start a second one.
     pub loading: bool,
     /// Repos whose last fetch failed.
@@ -124,7 +133,7 @@ impl Default for App {
             status: String::new(),
             items: Vec::new(),
             repos: Vec::new(),
-            repo_filter: None,
+            repo_filter: RepoFilter::All,
             loading: false,
             failed: 0,
             refresh_requested: false,
@@ -187,15 +196,23 @@ impl App {
             .chain(repos)
             .collect();
         self.repos_cursor = 0;
-        self.repo_filter = None;
+        self.repo_filter = RepoFilter::All;
         self.set_lengths(self.repos.len(), self.visible_items().len());
     }
 
     /// Row 0 means "everything"; any other row filters the list to that repo.
+    /// The row text becomes a `RepoSlug` here, once: downstream only ever
+    /// sees `All` or a valid slug. Configured repos are validated at import
+    /// (`config`), so a failure here is a bug, not user input.
     fn apply_repo_filter(&mut self) {
         self.repo_filter = match self.repos_cursor {
-            0 => None,
-            n => self.repos.get(n).cloned(),
+            0 => RepoFilter::All,
+            n => match self.repos.get(n) {
+                Some(row) => RepoFilter::One(
+                    RepoSlug::parse(row).expect("configured repos are validated at import"),
+                ),
+                None => RepoFilter::All,
+            },
         };
         self.list_cursor = 0;
         self.set_lengths(self.repos.len(), self.visible_items().len());
@@ -206,8 +223,8 @@ impl App {
         self.detail_requested = None;
         let shown = self.visible_items().len();
         self.status = match &self.repo_filter {
-            Some(repo) => format!("{shown} items in {repo}"),
-            None => format!("{shown} items in all repos"),
+            RepoFilter::One(slug) => format!("{shown} items in {slug}"),
+            RepoFilter::All => format!("— all repos — · {shown} items"),
         };
     }
 
@@ -215,8 +232,12 @@ impl App {
     /// number, so `/42` finds `#42`.
     pub fn visible_items(&self) -> Vec<&Item> {
         let by_repo: Vec<&Item> = match &self.repo_filter {
-            Some(repo) => self.items.iter().filter(|i| &i.repo == repo).collect(),
-            None => self.items.iter().collect(),
+            RepoFilter::One(slug) => self
+                .items
+                .iter()
+                .filter(|i| i.repo == slug.as_str())
+                .collect(),
+            RepoFilter::All => self.items.iter().collect(),
         };
         if self.query.trim().is_empty() {
             return by_repo;
@@ -243,15 +264,24 @@ impl App {
                 query = sanitize(&self.query)
             );
         }
+        // The legend names what the keys do *here*: the repos pane drills
+        // in, a filtered list drills back out, anywhere else Esc has
+        // nothing to close.
         let mut line = if self.pane == Pane::Detail {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
-        } else {
+        } else if self.pane == Pane::Repos {
+            String::from("q quit · ? help · Enter drill in · ↑/↓ move · Esc — nothing to close")
+        } else if self.repo_filter == RepoFilter::All {
             // Nothing to close: say so, right after the recovery keys, so
             // the note survives truncation at narrow widths.
             String::from(
                 "q quit · ? help · Esc — nothing to close · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+            )
+        } else {
+            String::from(
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
         };
         if !self.status.is_empty() {
@@ -442,6 +472,20 @@ impl App {
             // error here instead of silently inheriting an exit.
             Key::Esc => match self.pane {
                 Pane::Detail => self.pane = Pane::List,
+                // Drilled in (a repo filter is active): back to the repos
+                // pane, keeping the filter — the cursor did not move, so
+                // coming back shows the same list.
+                Pane::List if matches!(self.repo_filter, RepoFilter::One(_)) => {
+                    self.pane = Pane::Repos
+                }
+                // Second Esc, in the repos pane with a filter: clear it and
+                // go home to row 0. The filter follows the cursor, so moving
+                // the cursor is enough — `apply_repo_filter` resets the list
+                // cursor, the stale detail and the status line too.
+                Pane::Repos if matches!(self.repo_filter, RepoFilter::One(_)) => {
+                    self.repos_cursor = 0;
+                    self.apply_repo_filter();
+                }
                 Pane::List | Pane::Repos => {}
             },
             Key::Char('q') => self.quit = true,
@@ -462,6 +506,12 @@ impl App {
             Key::Down => self.move_cursor(1),
             Key::Backspace => {}
             Key::Char(_) => {}
+            // In the repos pane Enter drills in: the filter is already live
+            // (it follows the cursor), so reaching the list shows the repo's
+            // items. Anywhere else Enter opens the detail box.
+            Key::Enter if self.pane == Pane::Repos => {
+                self.pane = Pane::List;
+            }
             Key::Enter => self.request_detail(),
             // Handled at the top; repeated here because the match must be total.
             Key::CtrlC => {}

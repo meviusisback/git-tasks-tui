@@ -82,7 +82,115 @@ fn picking_a_repo_filters_the_list_and_an_empty_one_empties_it() {
     app.update(Msg::Key(Key::Up)); // back to me/empty
     app.update(Msg::Key(Key::Up)); // row 0: all
     assert_eq!(app.visible_items().len(), 1);
-    assert!(app.repo_filter.is_none(), "row 0 must clear the filter");
+    assert!(
+        matches!(app.repo_filter, gtasks::app::RepoFilter::All),
+        "row 0 must clear the filter"
+    );
+}
+
+#[test]
+fn enter_in_the_repos_pane_drills_into_the_filtered_list() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    app.update(Msg::Key(Key::Down)); // row 1: me/empty
+    app.update(Msg::Key(Key::Down)); // row 2: me/busy
+    assert_eq!(app.visible_items().len(), 1);
+
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(
+        app.pane,
+        gtasks::app::Pane::List,
+        "Enter in the repos pane drills in"
+    );
+    assert_eq!(app.visible_items().len(), 1, "the filter came along");
+    assert_eq!(app.visible_items()[0].repo, "me/busy");
+}
+
+#[test]
+fn esc_in_a_filtered_list_climbs_back_to_the_repos_pane() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, filter live
+    app.update(Msg::Key(Key::Enter)); // drill in
+    assert_eq!(app.pane, gtasks::app::Pane::List);
+
+    app.update(Msg::Key(Key::Esc));
+    assert!(!app.quit, "drilling out is not quitting");
+    assert_eq!(app.pane, gtasks::app::Pane::Repos, "Esc drills out");
+    assert_eq!(
+        app.repos_cursor, 2,
+        "drilling out keeps the repo position: no re-searching"
+    );
+    assert_eq!(
+        app.visible_items().len(),
+        1,
+        "the filter survived the round trip"
+    );
+
+    // Row 0 clears the filter: Esc at the top level does nothing (the shell
+    // rule: Esc climbs and stops, only q quits).
+    app.update(Msg::Key(Key::Up)); // me/empty
+    app.update(Msg::Key(Key::Up)); // row 0: all
+    app.update(Msg::Key(Key::Enter)); // drill in, no filter
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::All));
+    app.update(Msg::Key(Key::Esc));
+    assert!(!app.quit, "nothing to climb back to: Esc stays");
+    assert_eq!(app.pane, gtasks::app::Pane::List);
+}
+
+#[test]
+fn status_says_where_you_are() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab)); // repos pane
+    app.update(Msg::Key(Key::Down)); // row 1: me/empty
+    assert_eq!(app.status, "0 items in me/empty");
+    app.update(Msg::Key(Key::Up)); // row 0: all
+    assert_eq!(app.status, "— all repos — · 1 items");
+}
+
+#[test]
+fn legend_follows_the_drill_mode() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab)); // repos pane
+    let repos_legend = app.legend();
+    assert!(repos_legend.contains("Enter drill in"), "{repos_legend}");
+    assert!(repos_legend.contains("nothing to close"), "{repos_legend}");
+    assert!(!repos_legend.contains("Esc back"), "{repos_legend}");
+
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, filter live
+    app.update(Msg::Key(Key::Enter)); // drill in
+    let drilled_legend = app.legend();
+    assert!(drilled_legend.contains("Esc back"), "{drilled_legend}");
+    assert!(
+        !drilled_legend.contains("nothing to close"),
+        "{drilled_legend}"
+    );
+}
+
+#[test]
+fn esc_in_the_repos_pane_with_a_filter_clears_it() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, filter live
+    app.update(Msg::Key(Key::Enter)); // drill in
+    app.update(Msg::Key(Key::Esc)); // drill out: Repos, cursor kept
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    assert_eq!(app.repos_cursor, 2);
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::One(_)));
+
+    app.update(Msg::Key(Key::Esc)); // second Esc: clear
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    assert_eq!(app.repos_cursor, 0, "Esc goes home to row 0");
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::All));
+    assert_eq!(app.status, "— all repos — · 1 items");
+
+    app.update(Msg::Key(Key::Esc)); // no filter: no-op, no quit
+    assert!(!app.quit);
+    assert_eq!(app.repos_cursor, 0);
 }
 
 #[test]
