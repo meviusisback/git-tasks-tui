@@ -82,7 +82,10 @@ fn picking_a_repo_filters_the_list_and_an_empty_one_empties_it() {
     app.update(Msg::Key(Key::Up)); // back to me/empty
     app.update(Msg::Key(Key::Up)); // row 0: all
     assert_eq!(app.visible_items().len(), 1);
-    assert!(app.repo_filter.is_none(), "row 0 must clear the filter");
+    assert!(
+        matches!(app.repo_filter, gtasks::app::RepoFilter::All),
+        "row 0 must clear the filter"
+    );
 }
 
 #[test]
@@ -117,6 +120,10 @@ fn esc_in_a_filtered_list_climbs_back_to_the_repos_pane() {
     assert!(!app.quit, "drilling out is not quitting");
     assert_eq!(app.pane, gtasks::app::Pane::Repos, "Esc drills out");
     assert_eq!(
+        app.repos_cursor, 2,
+        "drilling out keeps the repo position: no re-searching"
+    );
+    assert_eq!(
         app.visible_items().len(),
         1,
         "the filter survived the round trip"
@@ -127,7 +134,7 @@ fn esc_in_a_filtered_list_climbs_back_to_the_repos_pane() {
     app.update(Msg::Key(Key::Up)); // me/empty
     app.update(Msg::Key(Key::Up)); // row 0: all
     app.update(Msg::Key(Key::Enter)); // drill in, no filter
-    assert!(app.repo_filter.is_none());
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::All));
     app.update(Msg::Key(Key::Esc));
     assert!(!app.quit, "nothing to climb back to: Esc stays");
     assert_eq!(app.pane, gtasks::app::Pane::List);
