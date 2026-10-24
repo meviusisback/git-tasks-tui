@@ -21,7 +21,10 @@ ledger=$(git show origin/main:docs/REVIEWS.md 2>/dev/null || true)
 field() { printf '%s' "$1" | cut -d'|' -f"$2" | tr -d '`' | sed 's/^ *//; s/ *$//'; }
 
 last_row=$(printf '%s\n' "$ledger" | grep '^| `main@' | tail -1 || true)
-last_pass=$(printf '%s\n' "$ledger" | grep '^| `main@' | grep 'PASS' | tail -1 || true)
+# Match the verdict *column*, not the whole line: a row describing a PASS fix
+# is not itself a PASS.
+last_pass=$(printf '%s\n' "$ledger" | grep '^| `main@' \
+            | awk -F'|' 'NF > 4 && $4 ~ /PASS/ { last = $0 } END { print last }')
 
 row_tag=$(field "$last_row" 2)
 row_verdict=$(field "$last_row" 4)
