@@ -1,20 +1,22 @@
 # Probes for the execution block (auditor)
 
-Four probes, in the order of importance you set. All of them pass on `main@4481268`
+Five files, in the order of importance you set. All of them pass on `main@4481268`
 (the tree where `CheckedArgv` and the UI are in), and **each one has been seen red**
 under its own mutation — that is the only reason to trust the green.
 
 | # | file | vendored as | what it asserts |
 |---|---|---|---|
-| 1 | `gtt-probe-1-confirmation.rs` | `tests/probe_confirmation_matches_argv.rs` | the confirmation shows **the argv that will run**, and the sentence names **every effect** the argv carries |
+| 1 | `gtt-probe-1-confirmation.rs` | `tests/probe_confirmation_matches_argv.rs` | **weak version**: the confirmation, as a data structure, carries the argv and the sentence names every effect. It compares what the function returns — it would pass even if the *process* received something else |
 | 2 | `gtt-probe-2-no-retry.rs` | `tests/probe_no_retry.rs` | a timed-out write runs **exactly once**, and the outcome is `Unknown`, not `Refused` |
 | 3 | `gtt-probe-3-terminal.py` | `scripts/probe-terminal.py` | after exit the terminal is **byte-identical** to before (termios), and raw mode was actually observable |
+| 1b | `gtt-probe-1b-shown-argv-is-spawned.rs` | `tests/probe_shown_argv_is_the_spawned_argv.rs` | **the strong version of 1**: the argv the process *receives* (a fake `gh` records it) is byte-identical to the one shown, so the test cannot pass by copying a vector |
 | 4 | `gtt-probe-4-process-group.rs` | `tests/timeout_group.rs` (already in) | a timeout leaves **no grandchild** alive, and does not stretch the wait |
 
 ## Running them
 
 ```sh
 cargo test --test probe_confirmation_matches_argv
+cargo test --test probe_shown_argv_is_the_spawned_argv
 cargo test --test probe_no_retry
 cargo test --test timeout_group
 cargo build && GTASKS_BIN=./target/debug/gtasks python3 scripts/probe-terminal.py
@@ -27,9 +29,15 @@ cannot observe raw mode — **2 is not a pass**, it means the probe could not ru
 
 ## The mutations that prove each one bites
 
+**1 is the weak version of 1b**: it verifies the pair `(sentence, argv)` the code
+produces, not that the process receives that argv. Keep both — 1 costs nothing —
+but when you want to know whether what the user approved is what runs, 1b is the
+one that answers, and it is the one that was mutated below.
+
 | probe | mutation | observed |
 |---|---|---|
 | 1 | drop `", then delete the branch"` from `summarise` | `FAILED — the sentence hides an effect of the argv (--delete-branch)` |
+| 1b | make the confirmation hide `--squash` | `FAILED — the process received a different argv from the one shown to the user` |
 | 2 | wrap `run_pipe_with_caps` in a retry loop | (to apply) — the probe counts invocations through a file, so a second process is visible |
 | 3 | empty `impl Drop for TuiGuard` + neutralise every `disable_raw_mode()` | `after exit: ECHO False, ICANON False` → `FAIL`, exit 1 |
 | 4 | `kill(-pid, …)` → `kill(pid, …)` | `left the grandchild alive`, and the timeout goes 1.0 s → 3.0 s |
