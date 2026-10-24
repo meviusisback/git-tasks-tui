@@ -403,8 +403,10 @@ mod x1_tests {
     /// X-1: a key that runs nothing must not report success.
     #[test]
     fn the_confirm_key_does_not_claim_an_action_it_did_not_run() {
-        let mut app = App::default();
-        app.modal = Some(Modal::Confirm("merge PR #7?".into()));
+        let mut app = App {
+            modal: Some(Modal::Confirm("merge PR #7?".into())),
+            ..App::default()
+        };
         app.update(Msg::Key(Key::Char('y')));
         assert!(
             !app.status.contains("confirmed"),
