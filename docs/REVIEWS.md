@@ -28,6 +28,7 @@ branch moved afterwards is stale by definition and must be re-tagged.
 | `main@d64978f` | `d64978f` | awaiting verdict | **auditor probe vendored** as `tests/audit_task02.rs`, adapted to the current API: slug keys the path, a relative program is refused, and the builders' argv is actually spawnable (`git --version`, `gh --version` through `run_pipe`). 3/3 green — the third assertion is the one whose absence let B-1 merge | T2-3c clusters, M-3 |
 | `main@e6d3b0d` | `e6d3b0d` | awaiting verdict | **T2-3c closed**: `check_argv` decomposes short-flag clusters (`-fd`, `-df`, `-af` refused; `-n` legal). **M-3 closed**: the render test now uses the same hostile bytes as the model probe (OSC-52 clipboard write + RLO), asserting the visible text survives and nothing else does | nothing outstanding in this ledger |
 | `main@66ee08b` | `66ee08b` | awaiting verdict | **process**: `scripts/review-state.sh` prints the remote tip and the newest ledger row, so a review starts from the tree that exists instead of a remembered SHA. No code change | nothing outstanding |
+| `main@11811b3` | `11811b3` | awaiting verdict | `scripts/review-state.sh` now counts the commits between the newest ledger row and the remote tip; a reviewer runs it first and knows whether the SHA in hand is still the tree | nothing outstanding |
 
 ## Standing rules this ledger encodes
 
