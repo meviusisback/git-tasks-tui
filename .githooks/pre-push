@@ -62,10 +62,13 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         # (exactly the rebase case that motivated H-4), and `grep` read `.` in a
         # name as "any character". awk compares sha and ref exactly.
         #
-        # The `else` below is unreachable while url == pushurl: git itself fails
-        # the push (exit 128) before the hook's verdict matters. It becomes
-        # reachable only with a pushurl different from url (push over pushurl,
-        # ls-remote over url), so it stays as a loud fallback, not a choice.
+        # The `else` below is unreachable in a *real* push while url == pushurl:
+        # git itself fails (exit 128) before the hook's verdict matters. It is
+        # reachable (a) with a pushurl different from url, and (b) whenever the
+        # hook is invoked directly — which is what scripts/install-hooks.sh does
+        # with file:///nonexistent-remote. So it is a live fallback, not dead
+        # code, and it must stay loud: a silent pass here would hide the fact
+        # that the tag was never checked against anything.
         verified=no
         if remote_tags=$(git ls-remote --tags --refs "$2" 2>/dev/null); then
             for tag in $tags; do
