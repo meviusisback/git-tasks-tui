@@ -6,7 +6,6 @@ use gtasks::theme;
 use gtasks::ui::{ViewModel, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::style::Color;
 
 fn render(app: &App, view: &ViewModel) -> String {
     render_sized(app, view, 80, 12)
