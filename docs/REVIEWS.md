@@ -9,6 +9,11 @@ the row of the tree that was measured. A tag is `PASS` only if its row carries t
 reviewed; a row whose branch moved afterwards is stale by definition. "Not reviewed yet" is not a row: it is
 the `commits since` number printed by `scripts/review-state.sh`.
 
+Folded into the rows below, so nothing is lost: `e0cbe1d` (prctl + de-flattened paths) into `625b7e9`;
+`b470a86` (the `o` key) into `648f2e8`; `d64978f` (the vendored Task 2 probe) into `96c28ee`; `e6d3b0d`
+(`T2-3c` clusters + `M-3`) into `625b7e9` and `d957556`; `66ee08b`, `11811b3`, `81b14fe`, `c7b7daf`,
+`de7e29f` (five iterations of `review-state.sh`) into `c84633a`.
+
 | Tag | Commit | Verdict | What was verified | Open at verdict time |
 |---|---|---|---|---|
 | `review/task01-r3` | `32f2a71` | **PASS** | F-1…F-8 closed; `invariants` 4/4 → **8/0** vs the 4 failures on `d96ed17`; controls 16/16; gate rc 0; both action SHAs resolved at the GitHub API | none |
