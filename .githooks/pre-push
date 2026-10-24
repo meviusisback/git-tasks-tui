@@ -13,6 +13,18 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # A documentation-only push needs no tag: the rule exists to stop *code*
     # from reaching main without a measured tree. A new branch (zero remote sha)
     # has no diff to inspect, so it keeps the strict path.
+    #
+    # "docs-only" means **not compiled**, not "not executable by a person": an
+    # executable script created under docs/ passes without a tag. That is
+    # accepted because nothing builds or CI-invokes docs/ (no build.rs, and
+    # Cargo.toml has zero references to it) — if that ever changes, the prefix
+    # must grow to cover the invoking path too.
+    #
+    # Adversarial cases measured: docs/ + code in one push → strict; a path like
+    # src/docs/x.rs → strict (the prefix is ^docs/, anchored); deleting a code
+    # file → strict; a newline in the filename → strict (git quotes it, so it
+    # does not start with docs/); modifying .githooks/pre-push itself → strict.
+    # An exemption that covered the guard would be a door that opens from inside.
     docs_only=no
     case "$remote_sha" in
         0000000000000000000000000000000000000000) ;;
