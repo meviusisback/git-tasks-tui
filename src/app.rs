@@ -2,10 +2,10 @@
 //! no async. The event loop only translates crossterm events into [`Msg`] and
 //! calls [`App::update`], so every transition is unit-testable.
 
-use crate::fetch::FetchOutcome;
 use crate::actions::{Action, MergeMethod, RepoSlug, argv_for};
 use crate::actions_ui::{Confirmation, Executed, confirmation_for, execute};
 use crate::binaries::Binaries;
+use crate::fetch::FetchOutcome;
 use crate::gh::CheckedArgv;
 use crate::model::Item;
 
@@ -273,7 +273,10 @@ impl App {
         };
         match argv_for(&binaries, &action) {
             Ok(argv) => {
-                let Confirmation { summary, argv: shown } = confirmation_for(&action, &argv);
+                let Confirmation {
+                    summary,
+                    argv: shown,
+                } = confirmation_for(&action, &argv);
                 self.status = shown.join(" ");
                 self.modal = Some(Modal::Confirm(summary));
                 self.pending_action = Some(PendingAction { action, argv });
