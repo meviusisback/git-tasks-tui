@@ -70,13 +70,14 @@ pub fn open_in_browser(program: &Path, url: &str) -> anyhow::Result<u32> {
         program.display()
     );
     let args = open_args(url)?;
-    let mut child = Command::new(program)
-        .args(&args)
+    let mut cmd = Command::new(program);
+    cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|err| anyhow::anyhow!("cannot run {}: {err}", program.display()))?;
+        .stderr(Stdio::null());
+    // Same ETXTBSY window `run_pipe` handles (F-1): harmless in production, but
+    // a test that writes a launcher and runs it immediately hits it.
+    let mut child = crate::gh::spawn_retry(&mut cmd, program)?;
     let pid = child.id();
     // Reap it. `xdg-open` exits immediately and nothing else waits for it, so
     // without this thread every `o` would leave a zombie until the app exits.

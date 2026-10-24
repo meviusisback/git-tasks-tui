@@ -255,7 +255,7 @@ fn resolve_program(program: &Path) -> anyhow::Result<PathBuf> {
 /// Spawn with a bounded retry on `ETXTBSY` ("Text file busy"): executing a
 /// file that was *just* written can transiently fail on a loaded machine
 /// (measured flakes under parallel test load). Anything else fails fast.
-fn spawn_retry(
+pub(crate) fn spawn_retry(
     cmd: &mut std::process::Command,
     program: &Path,
 ) -> anyhow::Result<std::process::Child> {
