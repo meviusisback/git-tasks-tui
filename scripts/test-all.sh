@@ -29,6 +29,14 @@ printf 'doc-tests    : %s\n' "$docs"
 printf 'suites ok    : %s\n' "$ok"
 printf 'suites failed: %s\n' "$failed"
 printf 'empty suites : %s (ok, 0 passed and 0 ignored — a suite that declares nothing)\n' "$empty"
+# The number alone hides which suites it counts, and the explanation then lives
+# in whoever wrote the script. Print the names: a count without its object is a
+# claim nobody can check.
+awk '
+    /^     Running |^   Doc-tests / { name = $0; sub(/^ +/, "", name) }
+    /^test result: ok\. 0 passed; 0 failed; 0 ignored/ { print "  empty:   " name }
+    /^test result: ok\. 0 passed; 0 failed; [1-9][0-9]* ignored/ { print "  skipped: " name }
+' "$log"
 
 if [ "$failed" != "0" ]; then
     printf '\nfailures:\n'
