@@ -90,7 +90,7 @@ fn header(app: &App) -> String {
 }
 
 fn footer(app: &App) -> String {
-    if let Some(Modal::Confirm(question)) = app.modal {
+    if let Some(Modal::Confirm(question)) = &app.modal {
         return format!("{}  —  y confirm · n/Esc cancel", sanitize(question));
     }
     if app.status.is_empty() {

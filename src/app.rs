@@ -3,6 +3,10 @@
 //! calls [`App::update`], so every transition is unit-testable.
 
 use crate::fetch::FetchOutcome;
+use crate::actions::{Action, MergeMethod, RepoSlug, argv_for};
+use crate::actions_ui::{Confirmation, Executed, confirmation_for, execute};
+use crate::binaries::Binaries;
+use crate::gh::CheckedArgv;
 use crate::model::Item;
 
 /// Which pane has focus.
@@ -28,6 +32,20 @@ pub enum Key {
     CtrlC,
 }
 
+/// The first action the program offers, as a **parameter**: when the product
+/// decision changes (merge commit, rebase), it changes here and nowhere else.
+const FIRST_ACTION_METHOD: MergeMethod = MergeMethod::Squash;
+/// S9: a destructive bit needs a second confirmation, so branch deletion stays
+/// out of the first version whatever the method is.
+const FIRST_ACTION_DELETES_BRANCH: bool = false;
+
+/// The confirmation and the argv travel together: what is shown is what runs.
+#[derive(Debug, Clone)]
+pub struct PendingAction {
+    pub action: Action,
+    pub argv: CheckedArgv,
+}
+
 /// Everything that can change the state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Msg {
@@ -37,9 +55,9 @@ pub enum Msg {
 
 /// A confirmation dialog. The payload is the question key, resolved to text by
 /// the UI layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Modal {
-    Confirm(&'static str),
+    Confirm(String),
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +84,12 @@ pub struct App {
     pub failed: usize,
     /// Set by the key handler, consumed by the event loop that owns the thread.
     pub refresh_requested: bool,
+    /// Resolved once at startup; `None` in tests that do not execute.
+    pub binaries: Option<Binaries>,
+    /// Limit for a write started from the UI.
+    pub write_timeout: std::time::Duration,
+    /// The action awaiting `y`: confirmation and argv are the same object.
+    pub pending_action: Option<PendingAction>,
     /// Markdown body of the selected item.
     pub detail: String,
     /// Which item `detail` belongs to, so the same body is not fetched twice.
@@ -95,6 +119,9 @@ impl Default for App {
             loading: false,
             failed: 0,
             refresh_requested: false,
+            binaries: None,
+            write_timeout: std::time::Duration::from_secs(30),
+            pending_action: None,
             detail: String::new(),
             detail_for: None,
             detail_requested: None,
@@ -212,6 +239,42 @@ impl App {
         self.detail_scroll = 0;
     }
 
+    /// Build the first action for the selected row, show what it would run, and
+    /// keep the pair (confirmation, argv) so `y` executes exactly that.
+    fn request_action(&mut self) {
+        let Some(number) = self.selected_item().map(|item| item.number) else {
+            self.status = "nothing selected".into();
+            return;
+        };
+        let Some(repo) = self.repos.get(self.repos_cursor).cloned() else {
+            self.status = "no repository".into();
+            return;
+        };
+        let Ok(slug) = RepoSlug::parse(&repo) else {
+            self.status = format!("cannot act on {repo}");
+            return;
+        };
+        let Some(binaries) = self.binaries.clone() else {
+            self.status = "no binaries resolved".into();
+            return;
+        };
+        let action = Action::Merge {
+            repo: slug,
+            number,
+            method: FIRST_ACTION_METHOD,
+            delete_branch: FIRST_ACTION_DELETES_BRANCH,
+        };
+        match argv_for(&binaries, &action) {
+            Ok(argv) => {
+                let Confirmation { summary, argv: shown } = confirmation_for(&action, &argv);
+                self.status = shown.join(" ");
+                self.modal = Some(Modal::Confirm(summary));
+                self.pending_action = Some(PendingAction { action, argv });
+            }
+            Err(err) => self.status = format!("cannot build the action: {err}"),
+        }
+    }
+
     pub fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Tick => {}
@@ -228,13 +291,17 @@ impl App {
             match key {
                 Key::Esc | Key::Char('n') => self.modal = None,
                 Key::Char('y') => {
-                    // X-1: the confirmation is not reachable yet (`a` does not
-                    // open it), and `y` must never claim success for an action
-                    // that did not run. When the modal becomes reachable, this
-                    // arm calls `execute` and reports the outcome from the type —
-                    // including `Unknown`, "it may have been applied".
                     self.modal = None;
-                    self.status = "no action is wired yet — nothing ran".into();
+                    match self.pending_action.take() {
+                        // X-1: the message comes from the type, never invented.
+                        // `Unknown` says "it may have been applied", which is the
+                        // only honest sentence when a write times out.
+                        Some(pending) => {
+                            self.status = describe(execute(&pending.argv, self.write_timeout));
+                        }
+                        // Nothing was asked: never claim success for it.
+                        None => self.status = "nothing to run".into(),
+                    }
                 }
                 _ => {}
             }
@@ -259,6 +326,8 @@ impl App {
         }
 
         match key {
+            // `a` asks to run the first action on the selected row.
+            Key::Char('a') => self.request_action(),
             Key::Char('/') => self.searching = true,
             // `o` opens the selected item in the browser, if the URL is safe.
             Key::Char('o') => self.request_open(),
@@ -309,6 +378,17 @@ fn step(cursor: usize, delta: i32, len: usize) -> usize {
     next.clamp(0, len as i32 - 1) as usize
 }
 
+/// One sentence per outcome, taken from the type: the UI never guesses what
+/// happened to a write.
+fn describe(outcome: Executed) -> String {
+    match outcome {
+        Executed::Finished(status) => format!("done ({status})"),
+        Executed::Refused(why) => format!("refused: {why}"),
+        Executed::SpawnFailed(why) => format!("cannot run: {why}"),
+        Executed::Unknown(why) => format!("unknown — it may have been applied: {why}"),
+    }
+}
+
 #[cfg(test)]
 mod x1_tests {
     use super::*;
@@ -325,7 +405,7 @@ mod x1_tests {
             app.status
         );
         assert!(
-            app.status.contains("nothing ran"),
+            app.status.contains("nothing to run"),
             "it says what happened: {:?}",
             app.status
         );

@@ -200,6 +200,9 @@ fn run_tui() -> anyhow::Result<()> {
     let mut app = App {
         loading: true,
         status: "loading…".to_string(),
+        // Resolved once at startup: the same paths the fetch uses.
+        binaries: Some(binaries.clone()),
+        write_timeout: timeout,
         ..App::default()
     };
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(

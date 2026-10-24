@@ -106,7 +106,7 @@ fn q_is_text_while_searching_and_quits_outside() {
 #[test]
 fn modal_swallows_keys_and_resolves() {
     let mut app = App {
-        modal: Some(Modal::Confirm("close issue?")),
+        modal: Some(Modal::Confirm("close issue?".to_string())),
         ..App::default()
     };
 
@@ -117,14 +117,14 @@ fn modal_swallows_keys_and_resolves() {
     assert!(app.modal.is_none(), "Esc cancels");
     assert_eq!(app.status, "");
 
-    app.modal = Some(Modal::Confirm("merge?"));
+    app.modal = Some(Modal::Confirm("merge?".to_string()));
     press(&mut app, Key::Char('y'));
     assert!(app.modal.is_none());
     // X-1: `y` used to answer "confirmed" while no action ran — the sentence
     // said what did *not* happen. Until the modal is reachable and calls
     // `execute`, it must say exactly that.
     assert!(
-        app.status.contains("nothing ran"),
+        app.status.contains("nothing to run"),
         "y must not claim success: {:?}",
         app.status
     );
