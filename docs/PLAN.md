@@ -5,6 +5,7 @@
 > **Rev 4.2** — r2 review of Task 1: **FAIL** on two S5/S14 blockers (F-1/F-2, both reproduced with the binary) plus 6 findings. Added **Task 1b (hardening)** and settled F-3: one `crossterm`, 0.28 via `ratatui::crossterm`.
 > **Rev 4.3** — Task 1b merged to `main` (linear cherry-pick; CI action SHAs corrected). Review r4 measured **G-2** (a `0600` seed in an attacker-writable dir is swappable → instruction injection) and folded it into S8/S14 + Task 11a, together with G-3 (dash negative control) and G-4 (PTY child leak). `portable-pty` stays: the duplicate gate is dev-aware.
 > **Rev 4.4** — r5b matrix PASS. **R5-1**: rotation is startup-only, so S14 now says exactly that and Task 5 owns in-session rotation. Task 2 carries the three harness API hooks verbatim (inspectable `Argv`+`env`, pure `resolve`, single `git` composition point).
+> **Rev 4.5** — logged L1/L2/L3 merged (`c50ada8`: rotation tests, `try_init`, `..` pre-scan) and **Task 11a-seed merged** (`f3669d2`: `SeedFile`, `ensure_runtime_dir` → `logging::ensure_state_dir`, C1 interactive + dash negative tests, harness vendored in CI). Task 2 API (`f969fa0`) is in review.
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -200,6 +201,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 **Verify:** `cargo test worktree_create`.
 
 ### Task 11a — Agent command + seed (pure)
+**Status: seed half DONE on main (`f3669d2`)** — `SeedFile` (`create_new`, `0600`, post-check, `Drop` unlink), `ensure_runtime_dir` delegating to `logging::ensure_state_dir` (single implementation; closes G-1 and, with the guaranteed private dir, G-2), the live PTY test and the negative control `agent_query_file_dash_exits_2_empty` (verified against v0.22.5: exit 2, "is empty"), harness vendored under `tests/invariants/` with CI steps. **Remaining:** `build_seed_message`, `build_command` (argv, `--query-file <file>`, no `--oneshot`, profile regex), `isatty` precondition, agent env (no `GH_TOKEN`, no `GIT_*`), and `tests/agent_argv.rs`.
 **Files:** `src/agent.rs`, `tests/agent_argv.rs`.
 **Work:** `build_seed_message` (minimal + fenced, S8); `build_command` → `--query-file <seed-file>` (never `-`), absolute `hermes`, per-child env (no `GH_TOKEN`), `--ignore-rules` per config, profile regex; `isatty` precondition.
 **Tests:** `agent_argv_has_no_yolo_no_accept_hooks`, `agent_launch_uses_ignore_rules`, `seed_uses_0600_file_never_dash_or_argv`, seed never contains body/title, `agent_env_has_no_gh_token` (shared with harness B).
