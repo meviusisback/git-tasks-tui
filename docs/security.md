@@ -108,8 +108,9 @@ log file, or at any file we open is refused (`symlink_metadata`, `openat(O_NOFOL
 (proven on the Task 1 scaffold: a symlinked state dir turned a foreign directory into `0700` and
 received `gtasks.log`; a symlinked log file rewrote a foreign file and chmodded it `0600`). Files are
 opened with `mode(0o600)` at creation time, not chmodded afterwards; `set_permissions` stays only as
-a belt for pre-existing **regular** files. The log rotates at 5 MiB (`gtasks.log` → `gtasks.log.1`,
-one generation) so a long-running TUI cannot fill the disk.
+a belt for pre-existing **regular** files. The log is rotated **at startup** at 5 MiB (`gtasks.log` →
+`gtasks.log.1`, one generation): a long-running session does not rotate yet, so the bound is
+per-launch until the Task 5 event loop re-checks the size (R5-1).
 `xdg-open` is called only for `https://` URLs on `github.com` / `www.github.com`. `gh repo clone`
 requires a **non-existing** target checked with `symlink_metadata`, under a configured root.
 Tests: `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed`,

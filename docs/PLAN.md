@@ -4,6 +4,7 @@
 > **Rev 4.1** — Task 1 accepted (scaffold + spike evidence). Its automated seed-file/PTY tests move to Task 11a, with the negative control. Coordination protocol added (ref-only ops, per-agent worktrees, auditors read `origin/*`).
 > **Rev 4.2** — r2 review of Task 1: **FAIL** on two S5/S14 blockers (F-1/F-2, both reproduced with the binary) plus 6 findings. Added **Task 1b (hardening)** and settled F-3: one `crossterm`, 0.28 via `ratatui::crossterm`.
 > **Rev 4.3** — Task 1b merged to `main` (linear cherry-pick; CI action SHAs corrected). Review r4 measured **G-2** (a `0600` seed in an attacker-writable dir is swappable → instruction injection) and folded it into S8/S14 + Task 11a, together with G-3 (dash negative control) and G-4 (PTY child leak). `portable-pty` stays: the duplicate gate is dev-aware.
+> **Rev 4.4** — r5b matrix PASS. **R5-1**: rotation is startup-only, so S14 now says exactly that and Task 5 owns in-session rotation. Task 2 carries the three harness API hooks verbatim (inspectable `Argv`+`env`, pure `resolve`, single `git` composition point).
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -127,6 +128,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 ### Task 2 — `gh` wrapper (argv-only, bounded, group-killed) + env/binaries
 **Files:** `src/gh/mod.rs`, `src/binaries.rs`, `src/env.rs`, `tests/gh_args.rs`, `tests/gh_process.rs`, `tests/env_harness.rs`.
 **Work:** S2, S3 (per child), S4, S11, S12. **S16 git flags** live in the git builder (shared with Task 10).
+**API hooks required by the harness (review r5b, verbatim):** (a) the `gh` wrapper exposes the built `Argv` **and** the child `env` as inspectable values, so tests assert without spawning; (b) `resolve(clone, slug, branch) -> Result<PathBuf>` as a **pure** function (the Task 10b resolver); (c) a single function where the `git` invocation is composed, so the `-c core.hooksPath=… -c core.fsmonitor=false -c core.pager=cat` assertion has exactly one home.
 **Tests:** `argv_never_shell_metachars`, `argv_forbids_admin_force_auto`, `binaries_are_absolute_and_not_group_writable`, `child_env_has_no_git_vars`, `hung_gh_kills_process_group`, `stderr_flood_capped`, `huge_json_capped_before_parse`, `both_pipes_drained_no_deadlock`, **harness B** (`git_config_count_is_stripped` + control, `git_dir_does_not_hijack_c_flag` + control, `agent_env_has_no_gh_token`, `gh_env_knobs_present`).
 **Verify:** `cargo test gh_args gh_process env_harness`.
 
@@ -145,6 +147,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 ### Task 5 — `App::update` skeleton (no fetch)
 **Files:** `src/app.rs`, `src/msg.rs`, `src/sanitize.rs`, `src/ui/{mod,layout,status}.rs`.
 **Work:** `Msg`, `App::update`, pane focus, modal stack, status line; `TuiGuard`; sanitize helpers.
+**Carried over (R5-1):** the log currently rotates only at startup; the event loop must re-check the size (interval or a `MakeWriter` that reopens) so a long-running TUI keeps the 5 MiB bound.
 **Tests:** key→state transitions; one `TestBackend` golden; `TuiGuard` restores after `Child` exit 1; `bidi_chars_stripped_from_labels`; `terminal_escape_in_title_is_inert`.
 **Verify:** `cargo test app sanitize`.
 
