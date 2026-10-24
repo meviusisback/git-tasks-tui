@@ -1,23 +1,24 @@
 # git-tasks TUI (Rust) — Implementation Plan
 
-> **Rev 3** — folded @coder's architecture review **and** @auditor's security review (3 HIGH / 5 MEDIUM folded as frozen invariants). Full audit: `~/.hermes/cache/scratch/git-tasks-tui-security-review.md`.
+> **Rev 4** — folded @coder's architecture review, @auditor's security review (r0), and @auditor's doc re-review r1 (**C1 blocking: `--query-file -` cannot seed an interactive session; C2 terminal ownership; C3 per-child env; C4 new invariant S16; C5 five point fixes**).
+> **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
 **Goal:** a terminal app in Rust that reproduces the `git-tasks` Hermes Desktop plugin — pick repos via `gh`, list open PRs/issues, expand details, act on them, create git worktrees and start agentic work (Hermes only in the MVP) in the same UI.
 
-**Architecture:** one binary TUI (ratatui + crossterm, Elm-style `Msg`/`update`) on tokio. GitHub access is `gh` spawned with **argv arrays** (never a shell) and `--json` parsed by serde. Worktrees live **outside the clone** under `$XDG_DATA_HOME/gtasks/worktrees/`, and "does this worktree exist" is answered **only** by `git worktree list --porcelain`. Agentic work runs `hermes -p <profile> chat --query-file -` with the TUI synchronously suspended.
+**Architecture:** one binary TUI (ratatui + crossterm, Elm-style `Msg`/`update`) on tokio. GitHub access is `gh` spawned with **argv arrays** (never a shell) and `--json` parsed by serde. Worktrees live **outside the clone** under `$XDG_DATA_HOME/gtasks/worktrees/`, and "does this worktree exist" is answered **only** by `git worktree list --porcelain`. Agentic work runs `hermes -p <profile> chat --query-file <seed-file>` (a `0600` file, **not** `-`) with the TUI synchronously suspended and the child owning the terminal.
 
 **Tech stack:** Rust stable (edition 2021), `ratatui >= 0.28`, `crossterm` (`event-stream`), `tokio` (with `process`, `signal`), `serde`/`serde_json`, `toml`, `clap`, `directories`, `pulldown-cmark`, `tracing` + `tracing-subscriber`, `anyhow`, `thiserror`, `shell-words`.
 
-**Repo:** new `~/repo/git-tasks-tui` → `meviusisback/git-tasks-tui`, MIT. Binary `gtasks`.
+**Repo:** `~/repo/git-tasks-tui` → `meviusisback/git-tasks-tui` (public, MIT). Binary `gtasks`.
 
 ---
 
-## Current context (corrected)
+## Current context
 
-- Plugin reference (live, 2418 lines, sha `9c475df2…`): `~/.hermes/desktop-plugins/git-tasks/plugin.js`. Source repo: `~/repo/git-tasks/desktop/plugin.js` (plus `test/`, `scripts/`, `docs/`).
-- Host: Omarchy/Arch, Fish, `gh` 2.103.0 authenticated as `meviusisback`, Hermes v0.22.5 at `~/.local/bin/hermes`, profiles in `~/.hermes/profiles/*`.
-- **Rust toolchain installed** (2026-10-24): `rustup 1.29.1` from pacman, toolchain `stable 1.99.1`, `clippy` + `rustfmt` present. `cargo` is at `/usr/sbin/cargo`. → Task 0 done.
+- Plugin reference (live, 2418 lines, sha `9c475df2…`): `~/.hermes/desktop-plugins/git-tasks/plugin.js`. Source repo: `~/repo/git-tasks/desktop/plugin.js`.
+- Host: Omarchy/Arch, Fish, `gh` 2.103.0, Hermes v0.22.5 at `~/.local/bin/hermes`, profiles in `~/.hermes/profiles/*`.
+- **Rust toolchain installed** (2026-10-24): `rustup 1.29.1` (pacman), toolchain `stable 1.99.1`, `clippy` + `rustfmt`. `cargo` at `/usr/sbin/cargo`. → Task 0 done.
 - Linux only in the MVP.
 
 ## Non-goals (MVP)
@@ -54,97 +55,68 @@ src/app.rs             -- App { data: DataStore, ui: UiState }, update()
 src/msg.rs             -- enum Msg { Key, Tick, FetchDone, DetailDone, ActionDone, Refresh, ... }
 src/model.rs           -- serde types + PURE fns: filter_items, sort_items, group_by_repo
 src/config.rs          -- TOML config (0600)
-src/state.rs           -- JSON state (0600): selected repos, worktree→session map
+src/state.rs           -- JSON state (0600)
 src/fetch.rs           -- orchestration: semaphore, per-repo isolation, single-flight refresh
-src/gh/mod.rs          -- Gh: argv-only spawn, timeout, process-group kill, streaming caps
+src/gh/mod.rs          -- Gh: argv-only spawn, timeout, group kill, streaming caps
 src/gh/repos.rs        -- repo list / repo view
 src/gh/items.rs        -- pr list + issue list
 src/gh/detail.rs       -- pr/issue view
 src/actions.rs         -- typed Action enum → argv; confirmations; no retry on writes
 src/binaries.rs        -- resolve+verify gh/git/hermes (absolute, owner, mode)
-src/env.rs             -- child env allowlist (env_clear + explicit vars, never GIT_*)
+src/env.rs             -- per-child env allowlists (never GIT_*)
 src/sanitize.rs        -- control/bidi stripping, redaction for logs/errors/UI
 src/open.rs            -- xdg-open (https + host allowlist) + clipboard chain
 src/editor.rs          -- $EDITOR via shell-words → argv, tempfile
-src/worktree.rs        -- discover, path policy, create/remove, reuse from porcelain
-src/agent.rs           -- build_command(), build_seed_message(), run_suspended()
+src/worktree.rs        -- discover, path policy, create/remove, reuse from porcelain, repo trust (S16)
+src/agent.rs           -- build_command(), build_seed_message(), seed file, run_suspended()
 src/presence.rs        -- trait PresenceSource + PidPresence (pid + /proc starttime)
 src/ui/{mod,layout,repos,list,detail,confirm,settings,status}.rs
 ```
 
-**State split:** `DataStore` (domain, no crossterm) / `UiState` (pane, selection, scroll, modals, filters) / `App::update(Msg)` unit-testable without terminal or tokio.
+**State split:** `DataStore` (domain) / `UiState` (pane, selection, scroll, modals, filters) / `App::update(Msg)` unit-testable without terminal or tokio.
 **Effects split:** every external effect = pure `build_*()` (argv/cwd/env) + thin `run_*()`.
 
 ---
 
-## Security invariants (frozen — each has a named test)
+## Security invariants (summary; canonical text in `docs/security.md`)
 
-**S1 — Never a shell.** No `sh -c`, no `Command::new("sh")`, no command *strings*. A function returning a command string is a review failure; the plugin's `sq()` must not be ported.
-
-**S2 — Absolute, verified binaries.** `gh`, `git`, `hermes` resolved at startup (config override or fixed trusted list); verify `symlink_metadata` is a regular file, `mode & 0o022 == 0`, `uid == geteuid() || uid == 0`. Never rely on `PATH` per launch.
-
-**S3 — Child env is chosen, not inherited.** `env_clear()` + allowlist (`PATH`, `HOME`, `TERM`, `LANG`/`LC_*`, `TZ`, intentional `GH_*`). **Never** `GIT_*` (`GIT_CONFIG_COUNT/KEY_n/VALUE_n` = arbitrary config → hook RCE; `GIT_DIR` overrides `git -C`; `GIT_ASKPASS`/`GIT_SSH_COMMAND`/`GIT_EXTERNAL_DIFF` same class). `gh`: `GH_PROMPT_DISABLED=1`, `GH_NO_UPDATE_NOTIFIER=1`, `GH_PAGER=cat`; read commands `stdin(Stdio::null())`.
-
-**S4 — Argument injection controls.** `owner/repo` matches `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; branch via `git check-ref-format --branch`; number as `u64`; `--repo` always explicit. `--` only where the tool accepts it (`git worktree add --` is rc 129 — not there).
-
-**S5 — Worktree paths.** Root `$XDG_DATA_HOME/gtasks/worktrees` (outside the clone: a repo cannot pre-empt a path). Canonicalize the **root** once; slug `^[A-Za-z0-9._-]{1,64}$` (no `.`/`..`); lexical `starts_with(root)`; create **stepwise** with `create_dir` + `symlink_metadata` (never `create_dir_all`/`metadata`); after creation verify `symlink_metadata().is_dir() && !is_symlink()`. Residual same-user TOCTOU documented (or `openat(O_NOFOLLOW|O_DIRECTORY)`).
-
-**S6 — Reuse decided by git, not the filesystem.** `git -C <clone> worktree list --porcelain` is the only source of "exists"; match path AND branch. A committed symlink at a would-be path is never adopted (H-2 proven). Plugin worktrees are adopted only when registered and inside a canonical clone root.
-
-**S7 — Agent launch policy.** Never `--yolo`, `--accept-hooks`, `--tui`. Default `--ignore-rules` (skips `AGENTS.md`/`.cursorrules`/`SOUL.md`/memory/skills — repo-committed instructions cannot steer the agent); settings toggle "trust worktree instructions" re-enables with a warning; `--safe-mode` offered for a first run in a fresh clone. Approvals stay ON.
-
-**S8 — Seed is data, not instructions.** Seed = `repo#N` + URL + the user's own note, fenced `<<<UNTRUSTED … >>>`. **No title/body** (the agent has `gh`; a 40 KB body also breaks `ARG_MAX`). Delivered via **stdin** `--query-file -`, never positional (ps-visible).
-
-**S9 — Actions typed and gated.** One `Action` enum → one argv builder. Forbidden forever, by test: `--admin`, `--force`, `--auto`. Merge = typed confirm; approve and close/reopen = modal; `--delete-branch` is a **separate** action, off by default, second confirm naming the branch (deletes the local branch too). `git worktree remove` never gets `--force`.
-
-**S10 — Stale state re-checked.** Before merge/approve re-fetch `headRefOid` (+ `mergeable`); abort "PR changed, refresh" on mismatch.
-
-**S11 — Processes die as a group.** `kill_on_drop(true)`; `process_group(0)`; timeout/quit → `kill(-pgid)`; `pre_exec` → `prctl(PR_SET_PDEATHSIG, SIGTERM)`. **No retry on writes** (unknown outcome — surface "verify on GitHub"); writes get their own longer timeout.
-
-**S12 — Bounded, streamed I/O.** Two concurrent readers with independent caps (16 MiB stdout / 256 KiB stderr), kill on overflow + `truncated`; parse JSON only from capped bytes. Never check caps after `wait_with_output()`.
-
-**S13 — Output hygiene.** `ratatui >= 0.28` (filters control chars in `Buffer`); pin + test with `"\x1b]52;c;ZXZpbA==\x07"` in a title. Everything printed **outside** the buffer (panic, toast, log) goes through `sanitize::strip_control`. Strip bidi/Cf (U+202E etc., keep `\n`/`\t`) from labels. Redact `gh[pousr]_[A-Za-z0-9]{36,}` and `github_pat_[A-Za-z0-9_]{22,}` from `gh` stderr; never log argv of comment/merge.
-
-**S14 — Files and URLs.** Config/state `0600`, dir `0700`. `xdg-open` only `https://` on `github.com`/`www.github.com`. `gh repo clone` requires a **non-existing** target checked with `symlink_metadata`, under a configured root.
-
-**S15 — Signals.** SIGINT/SIGTERM/SIGHUP → restore terminal, kill child group, exit non-zero. `TuiGuard` on `Drop`; teardown uses `let _ =`, never `unwrap`.
+**S1** never a shell (no command strings; `sq()` not ported). **S2** absolute verified binaries (owner/mode). **S3** per-child env allowlist: gh gets `GH_TOKEN`/`GITHUB_TOKEN`, git and the agent never do; never `GIT_*`. **S4** repo/branch/number validation; `--json`/`--limit` constants. **S5** worktrees outside the clone, stepwise `create_dir` + `symlink_metadata`, dirs `0700`. **S6** reuse only from `git worktree list --porcelain` (path AND branch). **S7** agent flags: never `--yolo`/`--accept-hooks`/`--tui`/`--oneshot`/`--worktree`/`-c`/`-r`; default `--ignore-rules`; profile `^[a-z0-9][a-z0-9_-]{0,63}$`. **S8** seed = repo#N + URL + user note, fenced, **`0600` file via `--query-file <path>`** (never `-`, never argv). **S9** typed actions; `--admin`/`--force`/`--auto` forbidden; delete-branch (merge **and** close) separate + second confirm. **S10** re-check `headRefOid`/`mergeable` before merge/approve. **S11** pipe children: `kill_on_drop`, `process_group(0)`, `kill(-pgid)`, `PDEATHSIG`; no retry on writes. **S12** two streaming readers with caps. **S13** sanitize everything outside the Buffer; strip bidi; redact tokens; **never log argv or the seed**. **S14** `0600`/`0700` files, https+host allowlist, non-existing clone target. **S15** two spawn profiles — pipe children vs interactive child (`tcsetpgrp`, SIGINT forwarded). **S16** repository trust: every git call `-c core.hooksPath=<nonexistent> -c core.fsmonitor=false -c core.pager=cat` + `GIT_TERMINAL_PROMPT=0`; a dir is a clone only if `canonicalize(rev-parse --absolute-git-dir) == canonicalize(<dir>/.git)`; `.git` file redirects rejected.
 
 ---
 
-## Agent CLI contract (verified v0.22.5)
+## Agent CLI contract (v0.22.5; full text in `docs/agent-cli.md`)
 
 ```
-hermes -p <profile> chat --query-file - --in <worktree> [--ignore-rules]
-# stdin: the fenced seed
+hermes -p <profile> chat --query-file <seed-file> --in <worktree> [--ignore-rules]
 ```
 
-- `-p, --profile` — global flag.
-- `chat --query-file -` — seed from stdin (mutually exclusive with `-q`); confirm in the Task 1 spike that a TTY session is seeded (not one-shot) and record it in `docs/agent-cli.md`.
-- `--in DIR` — working directory.
-- `--ignore-rules` — skip `AGENTS.md`/`SOUL.md`/`.cursorrules`/memory/skills injection (S7).
-- Never `--yolo` ("Bypass all dangerous command approval prompts"), `--accept-hooks`, `--tui`.
+- `<seed-file>`: regular file `0600` under `$XDG_RUNTIME_DIR/gtasks` (dir `0700`), unlinked after exit.
+- **`--query-file -` is forbidden** (C1): with `-` the CLI does `stdin.read()` to EOF, and a non-TTY stdin forces `oneshot` (`gateway_chat.py:377-378`, `:170-171`) — no interaction, no approvals.
+- Assert `stdin.isatty() && stdout.isatty()` before spawning; never `--oneshot`.
+- Never `--yolo`, `--accept-hooks`, `--tui`, `--worktree`/`-w`, `-c`/`--continue`, `-r`/`--resume`.
+- The child owns the terminal while it runs (S15).
 
 ---
 
 ## Task list (vertical; after Task 8 the app is usable read-only)
 
 ### Task 0 — Toolchain — DONE (2026-10-24)
-`rustup 1.29.1` (pacman) + toolchain `stable 1.99.1` + `clippy`/`rustfmt`. Verified `cargo/rustc/clippy/fmt --version`.
+`rustup 1.29.1` + `stable 1.99.1` + `clippy`/`rustfmt`, verified.
 
-### Task 1 — Scaffold + logging + CLI spike
+### Task 1 — Scaffold + logging + seed-file PTY test
 **Files:** `Cargo.toml`, `src/main.rs`, `.gitignore`, `rust-toolchain.toml`, `.github/workflows/ci.yml`, `docs/agent-cli.md`.
-**Work:** `cargo init --name gtasks`; deps; `tracing` → `$XDG_STATE_HOME/gtasks/gtasks.log`; CI fmt/clippy/test. Spike: paste real `hermes --help`/`chat --help`; prove `chat --query-file -` seeds a TTY session.
-**Verify:** `cargo run -- --version`; log file created; CI green.
+**Work:** `cargo init --name gtasks`; deps; `tracing` → `$XDG_STATE_HOME/gtasks/gtasks.log`; CI fmt/clippy/test. **Seed-file + PTY test:** implement the seed-file helper (0600 in 0700, unlink on Drop) and a PTY test proving the launched `hermes` **stays alive after the first turn** (interactive), plus `agent_seed_file_0600_and_unlinked`. Record the observed CLI behaviour in `docs/agent-cli.md` (the C1 references are already there).
+**Verify:** `cargo run -- --version`; log file created; CI green; PTY test green.
 
-### Task 2 — `gh` wrapper (argv-only, bounded, group-killed)
-**Files:** `src/gh/mod.rs`, `src/binaries.rs`, `src/env.rs`, `tests/gh_args.rs`, `tests/gh_process.rs`.
-**Work:** S2, S3, S4, S11, S12 in the wrapper.
-**Tests:** `argv_never_shell_metachars`, `argv_forbids_admin_force_auto`, `binaries_are_absolute_and_not_group_writable`, `child_env_has_no_git_vars`, `hung_gh_kills_process_group`, `stderr_flood_capped`, `huge_json_capped_before_parse`, `both_pipes_drained_no_deadlock`.
-**Verify:** `cargo test gh_args gh_process`.
+### Task 2 — `gh` wrapper (argv-only, bounded, group-killed) + env/binaries
+**Files:** `src/gh/mod.rs`, `src/binaries.rs`, `src/env.rs`, `tests/gh_args.rs`, `tests/gh_process.rs`, `tests/env_harness.rs`.
+**Work:** S2, S3 (per child), S4, S11, S12. **S16 git flags** live in the git builder (shared with Task 10).
+**Tests:** `argv_never_shell_metachars`, `argv_forbids_admin_force_auto`, `binaries_are_absolute_and_not_group_writable`, `child_env_has_no_git_vars`, `hung_gh_kills_process_group`, `stderr_flood_capped`, `huge_json_capped_before_parse`, `both_pipes_drained_no_deadlock`, **harness B** (`git_config_count_is_stripped` + control, `git_dir_does_not_hijack_c_flag` + control, `agent_env_has_no_gh_token`, `gh_env_knobs_present`).
+**Verify:** `cargo test gh_args gh_process env_harness`.
 
 ### Task 3 — Models + pure list fns
 **Files:** `src/model.rs`, `tests/fixtures/*.json`, `tests/parse.rs`.
-**Work:** serde types (camelCase, unknown fields tolerated) + `filter_items`/`sort_items`/`group_by_repo`.
+**Work:** serde types + `filter_items`/`sort_items`/`group_by_repo`.
 **Tests:** fixtures; invalid types error, no panic; truth tables.
 **Verify:** `cargo test parse`.
 
@@ -162,13 +134,13 @@ hermes -p <profile> chat --query-file - --in <worktree> [--ignore-rules]
 
 ### Task 6 — Repo selector
 **Files:** `src/ui/repos.rs`, `src/gh/repos.rs`, `tests/repo_select.rs`.
-**Work:** `gh repo list --limit 200 --json nameWithOwner,isPrivate`; multi-select; manual add validated (S4); persist; max 50.
+**Work:** `gh repo list --limit 200 --json nameWithOwner,isPrivate`; multi-select; manual add validated; persist; max 50.
 **Tests:** reject ``, `../x`, `a b/c`, `a/b/c`, `-x/y`; dedupe; cap.
 **Verify:** `cargo test repo_select`.
 
 ### Task 7a — Fetch a single repo
 **Files:** `src/fetch.rs`, `tests/fetch_one.rs`.
-**Work:** `fetch_one(repo, filters)` with the plugin's field lists; `FetchError::{Timeout,OutputCap,Parse}`.
+**Work:** `fetch_one(repo, filters)` with constant field lists; `FetchError::{Timeout,OutputCap,Parse}`.
 **Tests:** fixture success; timeout; malformed JSON; no panic.
 **Verify:** `cargo test fetch_one`.
 
@@ -186,38 +158,38 @@ hermes -p <profile> chat --query-file - --in <worktree> [--ignore-rules]
 
 ### Task 9 — Actions (typed, gated, no retry)
 **Files:** `src/actions.rs`, `src/ui/confirm.rs`, `tests/actions_args.rs`.
-**Work:** `enum Action { Comment, Approve, Close, Reopen, Merge{method}, MergeAndDeleteBranch{method}, OpenUrl, CopyLink }` → one argv builder; approve/close/reopen modal; merge typed confirm; delete-branch separate + second confirm; re-fetch `headRefOid`/`mergeable`; no retry on writes.
-**Tests:** `merge_and_approve_require_confirm`, `merge_aborts_on_head_sha_change`, `delete_branch_needs_second_confirm_and_defaults_off`, `no_retry_on_write_actions`, forbidden flags across all actions.
+**Work:** `enum Action { Comment, Approve, Close, Reopen, CloseAndDeleteBranch, Merge{method}, MergeAndDeleteBranch{method}, OpenUrl, CopyLink }` → one argv builder; approve/close/reopen modal; merge typed confirm; delete-branch separate + second confirm; re-fetch `headRefOid`/`mergeable`; no retry on writes.
+**Tests:** `merge_and_approve_require_confirm`, `merge_aborts_on_head_sha_change`, `delete_branch_needs_second_confirm_and_defaults_off` (merge **and** close), `no_retry_on_write_actions`, forbidden flags across all actions.
 **Verify:** `cargo test actions_args`.
 
 ### Task 9.5 — Open / clipboard / `$EDITOR`
 **Files:** `src/open.rs`, `src/editor.rs`, `tests/open_editor.rs`.
-**Work:** `xdg-open` https+host allowlist (S14); clipboard `wl-copy → xclip → xsel` (stdin); editor via `shell-words` on `$EDITOR` (fallback `vi`), tempfile, abort on empty/unchanged.
+**Work:** `xdg-open` https+host allowlist; clipboard chain (stdin); editor via `shell-words` on `$EDITOR`, tempfile, abort on empty/unchanged; interactive child profile (S15).
 **Tests:** URL allowlist rejects `file://`, `javascript:`, other hosts; editor non-zero → no comment; argv construction.
 **Verify:** `cargo test open_editor`.
 
-### Task 10a — Worktree discovery (read-only)
-**Files:** `src/worktree.rs`, `tests/worktree_discover.rs`.
-**Work:** scan `clone_roots` for `.git`; `remoteToRepo`; **`git worktree list --porcelain`** as the only truth (S6); adopt plugin worktrees only if registered and inside a canonical root.
-**Tests:** remote parsing (`git@`, `https://`, `.git`, `ssh://`); non-git dirs ignored; symlinked root refused.
-**Verify:** `cargo test worktree_discover`.
+### Task 10a — Worktree discovery + repo trust (read-only)
+**Files:** `src/worktree.rs`, `tests/worktree_discover.rs`, `tests/repo_trust.rs`.
+**Work:** scan `clone_roots`; `remoteToRepo`; **S16** identity check (`--absolute-git-dir` vs `<dir>/.git`, `.git` file redirect rejected) and git flags; **`git worktree list --porcelain`** as the only truth (S6); adopt plugin worktrees only when registered and canonical inside a clone root.
+**Tests:** remote parsing; non-git dirs ignored; symlinked root refused; `repo_hook_does_not_run_on_worktree_add` (+ control without `-c`), `dot_git_file_redirect_is_rejected`.
+**Verify:** `cargo test worktree_discover repo_trust`.
 
 ### Task 10b — Worktree create/remove
 **Files:** `src/worktree.rs`, `tests/worktree_create.rs`.
-**Work:** S5 + S6 + S9: paths under `$XDG_DATA_HOME/gtasks/worktrees`; stepwise creation; post-create verification; remove without `--force` (dirty → show reason, stop).
-**Tests:** `committed_symlink_cannot_preempt_worktree_path`, `reuse_only_from_worktree_list_porcelain`, `create_dir_does_not_follow_symlinks`, `worktree_remove_never_force`, `worktree_path_stays_under_root`, collision `-2`; `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_AUTHOR_*` pinned.
+**Work:** S5 + S6 + S9: paths under `$XDG_DATA_HOME/gtasks/worktrees` (`0700` dirs); stepwise creation; post-create verification; remove without `--force` (dirty → show reason, stop).
+**Tests:** **harness A** (`committed_symlink_at_in_clone_path_is_never_adopted`, `outside_root_symlink_blocks_creation`, `worktree_branch_mismatch_is_not_reused`), `reuse_only_from_worktree_list_porcelain`, `create_dir_does_not_follow_symlinks`, `worktree_remove_never_force`, `worktree_path_stays_under_root`, collision `-2`; `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_AUTHOR_*` pinned.
 **Verify:** `cargo test worktree_create`.
 
 ### Task 11a — Agent command + seed (pure)
 **Files:** `src/agent.rs`, `tests/agent_argv.rs`.
-**Work:** `build_seed_message` (minimal + fenced, S8); `build_command` (S2/S3/S7/S8: absolute `hermes`, env allowlist, `--ignore-rules` per config, stdin seed); profile name `^[a-z0-9_-]+$`.
-**Tests:** `agent_argv_has_no_yolo_no_accept_hooks`, `agent_launch_uses_ignore_rules`, `seed_fences_untrusted_text_and_prefers_stdin`, seed never contains body/title.
+**Work:** `build_seed_message` (minimal + fenced, S8); `build_command` → `--query-file <seed-file>` (never `-`), absolute `hermes`, per-child env (no `GH_TOKEN`), `--ignore-rules` per config, profile regex; `isatty` precondition.
+**Tests:** `agent_argv_has_no_yolo_no_accept_hooks`, `agent_launch_uses_ignore_rules`, `seed_uses_0600_file_never_dash_or_argv`, seed never contains body/title, `agent_env_has_no_gh_token` (shared with harness B).
 **Verify:** `cargo test agent_argv`.
 
-### Task 11b — Suspend / run / resume (+ signals)
+### Task 11b — Suspend / run / resume (+ terminal ownership)
 **Files:** `src/agent.rs`, `src/main.rs`.
-**Work:** synchronous suspend window (decision 5), stop tick/fetch, blocking child, unconditional `clear()` + redraw; `TuiGuard`; signal handlers (S15).
-**Tests:** stub `hermes` recording cwd/argv exits 1 → TUI restored; `tui_restored_on_signal`.
+**Work:** synchronous suspend window; stop tick/fetch; blocking child; `tcsetpgrp(child)` + SIGINT forwarding; on return `tcsetpgrp(self)` + termios + `clear()` + redraw; `TuiGuard`; signal handlers per S15 (never kill the interactive child on a Ctrl-C aimed at it).
+**Tests:** stub `hermes` recording cwd/argv exits 1 → TUI restored; `tui_restored_on_signal`; `interactive_child_is_not_group_killed`.
 **Verify:** manual run on a scratch repo.
 
 ### Task 12 — Presence behind a trait
@@ -228,7 +200,7 @@ hermes -p <profile> chat --query-file - --in <worktree> [--ignore-rules]
 
 ### Task 13 — Settings
 **Files:** `src/ui/settings.rs`, `tests/settings.rs`.
-**Work:** clone roots, worktree root, parallel, timeouts, limit, refresh, default profile, `trust_worktree_rules` (with warning).
+**Work:** clone roots, worktree root, parallel, timeouts, limit, refresh, default profile, `trust_worktree_rules` (warning).
 **Tests:** interval 0 rejected; `~` expanded; parallel clamped; toggling trust updates the launch argv.
 **Verify:** `cargo test settings`.
 
@@ -252,11 +224,12 @@ hermes -p <profile> chat --query-file - --in <worktree> [--ignore-rules]
 
 ## Risks and tradeoffs
 
-- **`--ignore-rules` also drops SOUL.md/memory** for the session (security vs persona). Default: ignored, toggle available. Documented.
-- Two worktree conventions exist (plugin: `.worktrees/<branch-slug>` inside the clone; ours: XDG data dir). Reuse works through `git worktree list`, not path guessing.
+- `--ignore-rules` also drops SOUL.md/memory (security vs persona). Default: ignored, toggle available.
+- Two worktree conventions (plugin inside the clone, ours in XDG data). Reuse via `git worktree list`.
 - `gh` JSON is the contract; pin a minimum version, keep fixtures.
 - PID presence is best-effort; gateway source is v2.
 - Same-user TOCTOU on worktree creation accepted and documented (or closed with `openat(O_NOFOLLOW)`).
+- `tcsetpgrp` semantics are declared from POSIX reasoning; the Task 1 PTY spike must confirm them.
 
 ## Decisions
 
@@ -266,16 +239,18 @@ hermes -p <profile> chat --query-file - --in <worktree> [--ignore-rules]
 4. No API/token backend in the MVP.
 5. Presence via PID+starttime behind a trait; no `state.db` reads.
 6. Worktrees outside the clone; reuse only from `git worktree list --porcelain`.
+7. Seed via a `0600` file (`--query-file <path>`), never `-` and never argv (C1).
+8. Two spawn profiles: pipe children vs interactive child (terminal ownership, S15).
 
 ## Remaining questions
 
 - `--json`/headless output mode for scripting?
 - PR-head worktree: default or always ask?
-- Accept @auditor's offer of ready-made harnesses for the two proven cases (committed-symlink pre-emption, `GIT_CONFIG_COUNT`) once Task 2/10 exist?
 
 ---
 
 ## Review status
 
-- **@coder (folded):** stack confirmed; module map; DataStore/UiState; pure list fns; `open.rs`/`editor.rs`; presence trait; synchronous suspend; `/proc` starttime; worktree reuse rules; Elm `Msg`; build/run split; security tests moved into tasks; vertical order; `tracing`; markdown; CLI verified.
-- **@auditor (folded):** 3 HIGH (agent launch policy, worktree reuse hijack, destructive flags), 5 MEDIUM (path containment, child env/binaries, ungated approve + stale state, process-group kill, streaming caps), 6 LOW (escape/bidi, file modes, redaction, xdg-open, clone target), 4 INFO (keep `sq()` out, `--` caveats, missing toolchain, corrected plugin path). All folded into S1–S15 and per-task tests.
+- **@coder (folded):** stack, module map, DataStore/UiState, pure list fns, `open.rs`/`editor.rs`, presence trait, synchronous suspend, `/proc` starttime, worktree rules, Elm `Msg`, build/run split, tests moved into tasks, vertical order, `tracing`, markdown, CLI verified.
+- **@auditor r0 (folded):** 3 HIGH, 5 MEDIUM, 6 LOW, 4 INFO → S1–S15.
+- **@auditor r1 (folded):** C1 `--query-file -` blocker (seed file, isatty, PTY test), C2/S15 terminal ownership (two spawn profiles, `tcsetpgrp`), C3/S3 per-child env (gh keeps its token, agent does not), C4 new **S16** repository trust (hooks flags + git-dir identity, both proven), C5 five point fixes (close `-d`, worktree dirs `0700`, extra forbidden agent flags + profile regex, constant `--json`/`--limit`, no seed in logs + sanitize agent output). Harnesses A and B are specified; @auditor will deliver them as files on an `audit/harness-*` branch for Task 2 and 10b.
