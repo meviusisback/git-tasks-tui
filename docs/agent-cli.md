@@ -70,15 +70,20 @@ The child owns the terminal: `gtasks` calls `tcsetpgrp(child)` after suspending,
 the child, and on return calls `tcsetpgrp(self)` + restores termios + `clear()` + full redraw.
 See S11/S15.
 
-## Verification kept in the suite (Task 1)
+## Verification kept in the suite (Task 11a, where `agent.rs` exists)
 
 - `agent_seed_file_0600_and_unlinked`
 - a **PTY test** `agent_stays_interactive_after_first_turn`: spawn with a PTY, write the seed file,
   assert the process is still alive after the first turn, and that the seed file is gone after exit.
+- **negative control** in the same test: the same launch with `--query-file -` must exit **2**
+  (`--query-file - is empty`, `gateway_chat.py:379-380`). Without it, the test would also pass on the
+  broken contract.
 
 ## Task 1 spike evidence (2026-10-24, Hermes v0.22.5, profile `coder`)
 
-Seed file `/tmp/gtasks-spike-seed.txt` (one line, then deleted after the run):
+Seed file `/tmp/gtasks-spike-seed.txt` (one line, then deleted after the run). **Spike convenience
+only** — `/tmp` is world-readable and the file was not `0600`: the production path is a `0600` file
+inside `$XDG_RUNTIME_DIR/gtasks` (dir `0700`), as specified above.
 
 ```text
 Reply with exactly: SPIKE-SEED-OK and nothing else. (Task 1 TTY spike; no tools needed.)

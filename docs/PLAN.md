@@ -1,6 +1,7 @@
 # git-tasks TUI (Rust) — Implementation Plan
 
 > **Rev 4** — folded @coder's architecture review, @auditor's security review (r0), and @auditor's doc re-review r1 (**C1 blocking: `--query-file -` cannot seed an interactive session; C2 terminal ownership; C3 per-child env; C4 new invariant S16; C5 five point fixes**).
+> **Rev 4.1** — Task 1 accepted (scaffold + spike evidence). Its automated seed-file/PTY tests move to Task 11a, with the negative control. Coordination protocol added (ref-only ops, per-agent worktrees, auditors read `origin/*`).
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -103,10 +104,10 @@ hermes -p <profile> chat --query-file <seed-file> --in <worktree> [--ignore-rule
 ### Task 0 — Toolchain — DONE (2026-10-24)
 `rustup 1.29.1` + `stable 1.99.1` + `clippy`/`rustfmt`, verified.
 
-### Task 1 — Scaffold + logging + seed-file PTY test
-**Files:** `Cargo.toml`, `src/main.rs`, `.gitignore`, `rust-toolchain.toml`, `.github/workflows/ci.yml`, `docs/agent-cli.md`.
-**Work:** `cargo init --name gtasks`; deps; `tracing` → `$XDG_STATE_HOME/gtasks/gtasks.log`; CI fmt/clippy/test. **Seed-file + PTY test:** implement the seed-file helper (0600 in 0700, unlink on Drop) and a PTY test proving the launched `hermes` **stays alive after the first turn** (interactive), plus `agent_seed_file_0600_and_unlinked`. Record the observed CLI behaviour in `docs/agent-cli.md` (the C1 references are already there).
-**Verify:** `cargo run -- --version`; log file created; CI green; PTY test green.
+### Task 1 — Scaffold + logging + CLI spike — DONE (d96ed17, verified)
+**Delivered:** `cargo init --name gtasks` (lib + thin bin), deps, `tracing` → `$XDG_STATE_HOME/gtasks/gtasks.log` (dir 0700 / file 0600), CI fmt+clippy+test, `rust-toolchain.toml`. Verified by the coordinator: `cargo fmt --check`, `clippy -D warnings` clean, `cargo build`, `gtasks 0.1.0`, log line present. PTY spike (`script -qec … --query-file <file>`) shows the session stays interactive (exit 124) — recorded in `docs/agent-cli.md`.
+**Deferred to Task 11a** (where `agent.rs` exists): `agent_seed_file_0600_and_unlinked`, the PTY test `agent_stays_interactive_after_first_turn`, **and its negative control** (`--query-file -` must exit 2 — a test that also passes with the bug has no teeth).
+**Accepted deviations:** `edition = "2024"` (cargo default on 1.99), `tracing-subscriber` with `env-filter`.
 
 ### Task 2 — `gh` wrapper (argv-only, bounded, group-killed) + env/binaries
 **Files:** `src/gh/mod.rs`, `src/binaries.rs`, `src/env.rs`, `tests/gh_args.rs`, `tests/gh_process.rs`, `tests/env_harness.rs`.
@@ -215,6 +216,14 @@ hermes -p <profile> chat --query-file <seed-file> --in <worktree> [--ignore-rule
 **Verify:** audit PASS, clippy clean, full suite green.
 
 ---
+
+## Coordination protocol (multiple agents in one repo)
+
+- **Coordinator is ref-only**: no `checkout` in the shared tree; move branches with `git branch -f` / `git worktree`, push refs (`git push origin <branch>:main`), and **always read the remote back** (`git ls-remote`, `gh api …/commits`) after a push — "push said OK" is not evidence it landed. (Learned the hard way: a docs commit sat only in the local ref while main stayed behind.)
+- **One dedicated worktree per coding agent** (`../git-tasks-tui-coder`), never the same checkout. Shared trees caused a docs commit to swallow someone else's scaffold.
+- **Auditors never touch a working tree**: review from `origin/*` (`git show origin/main:path`), deliver harness files on an `audit/*` branch.
+- **Docs are the coordinator's**: agents propose text, the coordinator commits it.
+- Every phase ends with a remote read-back (SHA + file content) before it is reported as done.
 
 ## Validation
 
