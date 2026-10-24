@@ -3,6 +3,15 @@
 //!
 //! `Argv` is the inspectable contract the audit harness asserts on: `program`,
 //! `args`, `env` and `cwd` are plain values, so tests never spawn to check them.
+//!
+//! Production pattern (S2): builders take no program — the caller resolves it:
+//! ```ignore
+//! let mut argv = gh(cwd, &args);
+//! argv.program = binaries::resolve("gh")?;
+//! ```
+//! Tests override `argv.program` with an absolute fake (verified by
+//! `run_pipe` through `binaries::verify`, so every spawned binary is
+//! checked).
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -13,9 +22,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, ensure};
 
-use crate::env::{Child, env_for};
+use crate::env::{gh_env, git_env};
 
-/// A fully-resolved child invocation. Nothing is looked up at spawn time.
+/// A fully-resolved child invocation. Nothing is looked up at spawn time
+/// except a bare `program` name, resolved through `binaries::resolve`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Argv {
     pub program: PathBuf,
@@ -41,19 +51,37 @@ impl Argv {
     }
 }
 
+/// Flags that must never be produced by the builders (S9). Exact element
+/// match only: `--force-with-lease` and friends stay legal.
+const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto"];
+
+fn forbid_admin_force_auto(args: &[OsString], tool: &str) {
+    for arg in args {
+        let text = arg.to_string_lossy();
+        assert!(
+            !FORBIDDEN.iter().any(|flag| text == *flag),
+            "{tool}: forbidden flag {text:?} must never be constructed"
+        );
+    }
+}
+
 /// `gh` invocation: argv only, `gh` environment (token + non-interactive knobs).
-pub fn gh(cwd: &Path, program: &Path, args: Vec<OsString>, path: &Path) -> Argv {
+/// The caller fills in `program` with `binaries::resolve("gh")`.
+pub fn gh(cwd: &Path, args: Vec<OsString>) -> Argv {
+    forbid_admin_force_auto(&args, "gh");
     Argv {
-        program: program.to_path_buf(),
+        program: PathBuf::from("gh"),
         args,
-        env: env_for(Child::Gh, path),
+        env: gh_env(),
         cwd: cwd.to_path_buf(),
     }
 }
 
 /// The **single** place where a `git` invocation is composed. Every call gets
 /// the S16 overrides, so no repository hook, fsmonitor or pager can run.
-pub fn git(cwd: &Path, program: &Path, args: Vec<OsString>, path: &Path) -> Argv {
+/// The caller fills in `program` with `binaries::resolve("git")`.
+pub fn git(cwd: &Path, args: Vec<OsString>) -> Argv {
+    forbid_admin_force_auto(&args, "git");
     let mut full: Vec<OsString> = Vec::with_capacity(args.len() + 6);
     for value in [
         "-c",
@@ -67,9 +95,9 @@ pub fn git(cwd: &Path, program: &Path, args: Vec<OsString>, path: &Path) -> Argv
     }
     full.extend(args);
     Argv {
-        program: program.to_path_buf(),
+        program: PathBuf::from("git"),
         args: full,
-        env: env_for(Child::Git, path),
+        env: git_env(),
         cwd: cwd.to_path_buf(),
     }
 }
@@ -121,17 +149,55 @@ impl std::fmt::Display for Timeout {
 
 impl std::error::Error for Timeout {}
 
-/// Run a pipe child to completion, bounded by `timeout` and `caps`.
-///
-/// On timeout the **process group** gets SIGTERM, then SIGKILL after a short
-/// grace period; the readers are joined so no thread outlives the call.
-pub fn run_pipe(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow::Result<Output> {
+/// Resolve `program` (bare names through `binaries::resolve`, absolute paths
+/// through `binaries::verify`) so every spawned binary is checked (S2).
+fn resolve_program(program: &Path) -> anyhow::Result<PathBuf> {
+    if program.is_absolute() {
+        crate::binaries::verify(program)
+    } else {
+        let name = program.to_string_lossy();
+        crate::binaries::resolve(&name)
+    }
+}
+
+/// Spawn with a bounded retry on `ETXTBSY` ("Text file busy"): executing a
+/// file that was *just* written can transiently fail on a loaded machine
+/// (measured flakes under parallel test load). Anything else fails fast.
+fn spawn_retry(
+    cmd: &mut std::process::Command,
+    program: &Path,
+) -> anyhow::Result<std::process::Child> {
+    let mut last = None;
+    for _ in 0..10 {
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY as i32) => {
+                last = Some(e);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("cannot spawn {}", program.display()));
+            }
+        }
+    }
+    Err(last.expect("retry loop ran"))
+        .with_context(|| format!("cannot spawn {} (still busy)", program.display()))
+}
+
+/// Run a pipe child to completion, bounded by `timeout` and the default caps.
+pub fn run_pipe(argv: &Argv, timeout: Duration) -> anyhow::Result<Output> {
+    run_pipe_with_caps(argv, timeout, Caps::default())
+}
+
+/// Run a pipe child with explicit caps (tests use small caps to trigger
+/// truncation without moving megabytes around).
+pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow::Result<Output> {
+    let mut argv = argv.clone();
+    argv.program = resolve_program(&argv.program)?;
     let mut cmd = argv.command();
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("cannot spawn {}", argv.program.display()))?;
+    let mut child = spawn_retry(&mut cmd, &argv.program)?;
     let pid = child.id() as libc::pid_t;
 
     let stdout = child.stdout.take().expect("stdout was piped");
