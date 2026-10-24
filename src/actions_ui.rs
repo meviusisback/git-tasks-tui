@@ -44,8 +44,21 @@ pub fn confirmation_for(action: &Action, argv: &Argv) -> Confirmation {
 
 /// One sanitised, escaped line: faithful and impossible to mistake for a
 /// second record.
+///
+/// The three characters with a **layout effect** are escaped, not removed —
+/// `\n`, `\r` and `\t` — because removing them fuses fragments the user never
+/// wrote together (`"ok\rAPPROVED"` would become `"okAPPROVED"`). Everything
+/// else (BEL, ESC, BS, bidi, BOM) is still removed by `sanitize`: it has no
+/// faithful rendering, so losing it is the honest option.
+///
+/// Escaping happens **before** `sanitize`, otherwise `\r` would be stripped and
+/// could no longer be escaped.
 fn shown(text: &str) -> String {
-    crate::sanitize::sanitize(text).replace('\n', "\\n")
+    let escaped = text
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    crate::sanitize::sanitize(&escaped)
 }
 
 fn summarise(action: &Action) -> String {
@@ -148,5 +161,24 @@ mod tests {
             "the argv is shown verbatim: {:?}",
             shown.argv
         );
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::shown;
+
+    #[test]
+    fn layout_characters_are_escaped_not_removed() {
+        assert_eq!(shown("a\nb"), "a\\nb", "newline");
+        assert_eq!(shown("a\rb"), "a\\rb", "carriage return");
+        assert_eq!(shown("a\tb"), "a\\tb", "tab");
+    }
+
+    #[test]
+    fn control_characters_without_a_rendering_are_removed() {
+        assert_eq!(shown("a\u{7}b"), "ab", "BEL");
+        assert_eq!(shown("a\u{8}b"), "ab", "backspace");
+        assert_eq!(shown("a\u{1b}[2Kb"), "a[2Kb", "ESC goes, the rest is text");
     }
 }
