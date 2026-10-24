@@ -120,7 +120,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 - **Tests** (must fail on the old code): `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed` — victim mode/size/content unchanged, `Err` returned. They must exercise the real init path: `--version` exits inside clap **before** logging starts (this is why the manual repro initially looked clean).
 - **F-3 (MEDIUM)** two `crossterm` in the tree (0.28.1 via ratatui, 0.29.0 direct). **Decision: option A** — `crossterm = "0.28"`, imports via `ratatui::crossterm::*`; a CI step fails if a duplicate reappears.
 - **F-4 (MEDIUM)** CI: pinned action SHAs, `permissions: contents: read`, `--locked`, `components: rustfmt, clippy`, `timeout-minutes: 15`, `concurrency`.
-- **F-5 (LOW)** log rotates at 5 MiB (`gtasks.log.1`, one generation); S14 updated.
+- **F-5 (LOW)** log rotates **at startup** at 5 MiB (`gtasks.log.1`, one generation); in-session re-check carried to Task 5 (R5-1). S14 updated.
 - **F-6 (LOW)** toolchain channel `1.99.1`, `rust-version = "1.85"`.
 - **F-7 (INFO)** `#![deny(clippy::print_stdout)]`, allow only on the stderr fallback.
 - **F-8 (INFO)** `[lints.clippy] all = "deny"`; `cargo machete` once the deps are in use.
