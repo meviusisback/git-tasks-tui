@@ -10,6 +10,37 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 
+/// The external programs, resolved **once at startup** (S2). Building an argv
+/// through `gh()`/`git()` cannot perform a PATH lookup: the resolved paths are
+/// already here, so no factory can produce an unverified program.
+#[derive(Debug, Clone)]
+pub struct Binaries {
+    pub gh: PathBuf,
+    pub git: PathBuf,
+    /// Optional until the agent integration lands.
+    pub hermes: Option<PathBuf>,
+}
+
+impl Binaries {
+    /// Resolve from `PATH` once. `gh` and `git` are required.
+    pub fn detect() -> anyhow::Result<Self> {
+        Ok(Self {
+            gh: resolve("gh")?,
+            git: resolve("git")?,
+            hermes: resolve("hermes").ok(),
+        })
+    }
+
+    /// Explicit paths, for tests: no `PATH` involved, nothing to overwrite.
+    pub fn new(gh: PathBuf, git: PathBuf) -> Self {
+        Self {
+            gh,
+            git,
+            hermes: None,
+        }
+    }
+}
+
 /// Resolve a bare tool name against `PATH` (production entry point).
 pub fn resolve(name: &str) -> anyhow::Result<PathBuf> {
     let owned: Vec<PathBuf> = std::env::var_os("PATH")

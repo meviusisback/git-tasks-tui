@@ -8,6 +8,7 @@
 use std::ffi::OsString;
 use std::time::Duration;
 
+use crate::binaries::Binaries;
 use crate::gh::{self, Argv, Caps, gh};
 use crate::model::{Item, ItemKind, parse_list};
 
@@ -54,6 +55,7 @@ pub fn fetch_args(repo: &str, kind: ItemKind, limit: usize) -> Vec<OsString> {
 }
 
 pub fn fetch_one(
+    binaries: &Binaries,
     repo: &str,
     kind: ItemKind,
     limit: usize,
@@ -63,13 +65,8 @@ pub fn fetch_one(
         repo: repo.to_owned(),
         source: source.into(),
     })?;
-    // `gh()` composes the argv; resolving the program is the caller's job (S2),
-    // and the spawn refuses anything that is not absolute.
-    let mut argv = gh(&cwd, fetch_args(repo, kind, limit));
-    argv.program = crate::binaries::resolve("gh").map_err(|source| FetchError::Run {
-        repo: repo.to_owned(),
-        source,
-    })?;
+    // `gh()` takes the resolved binary: no PATH lookup, nothing to overwrite.
+    let argv = gh(binaries, &cwd, fetch_args(repo, kind, limit));
     fetch_with_caps(&argv, repo, kind, timeout, Caps::default())
 }
 
@@ -143,6 +140,7 @@ struct BodyPayload {
 
 /// Fetch the markdown body of one item.
 pub fn fetch_detail(
+    binaries: &Binaries,
     repo: &str,
     kind: ItemKind,
     number: u64,
@@ -152,11 +150,7 @@ pub fn fetch_detail(
         repo: repo.to_owned(),
         source: source.into(),
     })?;
-    let mut argv = gh(&cwd, detail_args(repo, kind, number));
-    argv.program = crate::binaries::resolve("gh").map_err(|source| FetchError::Run {
-        repo: repo.to_owned(),
-        source,
-    })?;
+    let argv = gh(binaries, &cwd, detail_args(repo, kind, number));
     fetch_detail_with_caps(&argv, repo, timeout, Caps::default())
 }
 
@@ -255,6 +249,7 @@ where
 
 /// Fetch every repo with the real `gh`.
 pub fn fetch_many(
+    binaries: &Binaries,
     repos: &[String],
     kind: ItemKind,
     limit: usize,
@@ -262,6 +257,6 @@ pub fn fetch_many(
     parallel: usize,
 ) -> FetchOutcome {
     fetch_many_with(repos, parallel, |repo| {
-        fetch_one(repo, kind, limit, timeout)
+        fetch_one(binaries, repo, kind, limit, timeout)
     })
 }

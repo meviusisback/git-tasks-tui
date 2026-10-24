@@ -8,7 +8,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use gtasks::binaries::Binaries;
 use gtasks::gh::{Argv, Caps, Timeout, gh, git, run_pipe, run_pipe_with_caps};
+
+/// Builders take the resolved binaries; tests hand them explicit paths, so no
+/// test ever repairs `argv.program` after the fact.
+fn bins(gh_path: PathBuf, git_path: PathBuf) -> Binaries {
+    Binaries::new(gh_path, git_path)
+}
 
 fn args(items: &[&str]) -> Vec<OsString> {
     items.iter().map(OsString::from).collect()
@@ -46,16 +53,20 @@ fn argv_for(program: PathBuf, cwd: &Path) -> Argv {
 #[test]
 fn argv_never_shell_metachars() {
     let nasty = "owner/repo; rm -rf / #$(id) `whoami` | tee";
-    let argv = gh(Path::new("/tmp"), args(&["repo", "view", nasty]));
+    let tmp = tempfile::tempdir().unwrap();
+    let program = fake(tmp.path(), "gh", "printf '<%s>' \"$@\"");
+    let binaries = bins(program, PathBuf::from("/bin/false"));
+
+    let argv = gh(&binaries, tmp.path(), args(&["repo", "view", nasty]));
     assert_eq!(argv.args.len(), 3);
     assert_eq!(argv.args[2], OsString::from(nasty));
+    assert_eq!(
+        argv.program, binaries.gh,
+        "the builder uses the resolved path"
+    );
 
     // End to end: the fake prints each argv element wrapped, proving the
     // nasty string arrived as ONE element, never interpreted.
-    let tmp = tempfile::tempdir().unwrap();
-    let program = fake(tmp.path(), "gh", "printf '<%s>' \"$@\"");
-    let mut argv = gh(tmp.path(), args(&["repo", "view", nasty]));
-    argv.program = program;
     let out = run_pipe(&argv, Duration::from_secs(10)).expect("fake gh runs");
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -68,12 +79,14 @@ fn argv_never_shell_metachars() {
 /// builders panic on the exact element, for `gh` and `git` alike.
 #[test]
 fn argv_forbids_admin_force_auto() {
+    let binaries = bins(PathBuf::from("/bin/true"), PathBuf::from("/bin/true"));
     for flag in ["--admin", "--force", "--auto"] {
         for (tool, make) in [
-            ("gh", gh as fn(&Path, Vec<OsString>) -> Argv),
-            ("git", git as fn(&Path, Vec<OsString>) -> Argv),
+            ("gh", gh as fn(&Binaries, &Path, Vec<OsString>) -> Argv),
+            ("git", git as fn(&Binaries, &Path, Vec<OsString>) -> Argv),
         ] {
-            let caught = std::panic::catch_unwind(|| make(Path::new("/tmp"), args(&["x", flag])));
+            let caught =
+                std::panic::catch_unwind(|| make(&binaries, Path::new("/tmp"), args(&["x", flag])));
             assert!(
                 caught.is_err(),
                 "{tool} must panic on forbidden flag {flag}"
@@ -81,16 +94,25 @@ fn argv_forbids_admin_force_auto() {
         }
     }
     // Benign neighbours stay legal: prefix matches and values are fine.
-    let argv = gh(Path::new("/tmp"), args(&["pr", "merge", "1", "--squash"]));
+    let argv = gh(
+        &binaries,
+        Path::new("/tmp"),
+        args(&["pr", "merge", "1", "--squash"]),
+    );
     assert_eq!(flat(&argv), ["pr", "merge", "1", "--squash"]);
-    let argv = git(Path::new("/tmp"), args(&["--force-with-lease"]));
+    let argv = git(&binaries, Path::new("/tmp"), args(&["--force-with-lease"]));
     assert!(flat(&argv).contains(&"--force-with-lease".to_string()));
 }
 
 /// S16: every git invocation carries the three overrides, first, in one place.
 #[test]
 fn git_always_carries_s16_overrides() {
-    let argv = git(Path::new("/tmp"), args(&["status", "--porcelain"]));
+    let binaries = bins(PathBuf::from("/bin/true"), PathBuf::from("/bin/true"));
+    let argv = git(
+        &binaries,
+        Path::new("/tmp"),
+        args(&["status", "--porcelain"]),
+    );
     let flat = flat(&argv);
     assert_eq!(
         &flat[..6],

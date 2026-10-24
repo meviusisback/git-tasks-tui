@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, ensure};
 
+use crate::binaries::Binaries;
 use crate::env::{gh_env, git_env};
 
 /// A fully-resolved child invocation. Nothing is looked up at spawn time
@@ -104,10 +105,10 @@ fn forbid_admin_force_auto(args: &[OsString], tool: &str) {
 
 /// `gh` invocation: argv only, `gh` environment (token + non-interactive knobs).
 /// The caller fills in `program` with `binaries::resolve("gh")`.
-pub fn gh(cwd: &Path, args: Vec<OsString>) -> Argv {
+pub fn gh(binaries: &Binaries, cwd: &Path, args: Vec<OsString>) -> Argv {
     forbid_admin_force_auto(&args, "gh");
     Argv {
-        program: PathBuf::from("gh"),
+        program: binaries.gh.clone(),
         args,
         env: gh_env(),
         cwd: cwd.to_path_buf(),
@@ -117,7 +118,7 @@ pub fn gh(cwd: &Path, args: Vec<OsString>) -> Argv {
 /// The **single** place where a `git` invocation is composed. Every call gets
 /// the S16 overrides, so no repository hook, fsmonitor or pager can run.
 /// The caller fills in `program` with `binaries::resolve("git")`.
-pub fn git(cwd: &Path, args: Vec<OsString>) -> Argv {
+pub fn git(binaries: &Binaries, cwd: &Path, args: Vec<OsString>) -> Argv {
     forbid_admin_force_auto(&args, "git");
     let mut full: Vec<OsString> = Vec::with_capacity(args.len() + 6);
     for value in [
@@ -132,7 +133,7 @@ pub fn git(cwd: &Path, args: Vec<OsString>) -> Argv {
     }
     full.extend(args);
     Argv {
-        program: PathBuf::from("git"),
+        program: binaries.git.clone(),
         args: full,
         env: git_env(),
         cwd: cwd.to_path_buf(),

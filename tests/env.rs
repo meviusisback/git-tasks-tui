@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use gtasks::binaries;
+use gtasks::binaries::{self, Binaries};
 use gtasks::env::{agent_env_from, base_env_from, gh_env_from, git_env_from, has_no_git_vars};
 use gtasks::gh::{git, run_pipe};
 
@@ -142,8 +142,12 @@ fn git_config_count_is_stripped() {
     );
 
     // End to end: the same command through the wrapper ignores the injection.
-    let mut argv = git(tmp.path(), vec!["config".into(), "--list".into()]);
-    argv.program = git_bin.clone();
+    let binaries = Binaries::new(PathBuf::from("/bin/false"), git_bin.clone());
+    let mut argv = git(
+        &binaries,
+        tmp.path(),
+        vec!["config".into(), "--list".into()],
+    );
     argv.env = env;
     let out = run_pipe(&argv, std::time::Duration::from_secs(10)).expect("wrapped git runs");
     let text = String::from_utf8_lossy(&out.stdout);
@@ -209,8 +213,12 @@ fn git_dir_does_not_hijack_c_flag() {
         ("HOME", tmp.path().to_str().unwrap()),
         ("GIT_DIR", elsewhere.to_str().unwrap()),
     ]);
-    let mut argv = git(&repo, vec!["rev-parse".into(), "--absolute-git-dir".into()]);
-    argv.program = git_bin.clone();
+    let binaries = Binaries::new(PathBuf::from("/bin/false"), git_bin.clone());
+    let mut argv = git(
+        &binaries,
+        &repo,
+        vec!["rev-parse".into(), "--absolute-git-dir".into()],
+    );
     argv.env = git_env_from(&dirty);
     let out = run_pipe(&argv, std::time::Duration::from_secs(10)).expect("wrapped git runs");
     assert!(out.status.success());

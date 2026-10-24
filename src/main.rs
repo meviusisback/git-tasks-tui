@@ -19,6 +19,7 @@ use crossterm::terminal::{
 };
 use crossterm::{cursor, execute};
 use gtasks::app::{App, Msg};
+use gtasks::binaries::Binaries;
 use gtasks::config::Config;
 use gtasks::fetch::{self, FetchOutcome};
 use gtasks::input::map_key;
@@ -135,6 +136,7 @@ fn demo_config() -> Config {
 /// Start one fetch in the background. Dropping the receiver with the app means
 /// a late result is simply discarded.
 fn spawn_fetch(
+    binaries: Binaries,
     repos: Vec<String>,
     kind: ItemKind,
     limit: usize,
@@ -143,7 +145,7 @@ fn spawn_fetch(
 ) -> Receiver<FetchOutcome> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let outcome = fetch::fetch_many(&repos, kind, limit, timeout, parallel);
+        let outcome = fetch::fetch_many(&binaries, &repos, kind, limit, timeout, parallel);
         let _ = tx.send(outcome);
     });
     rx
@@ -151,6 +153,7 @@ fn spawn_fetch(
 
 /// Start one body fetch in the background.
 fn spawn_detail(
+    binaries: Binaries,
     repo: String,
     number: u64,
     kind: ItemKind,
@@ -158,7 +161,7 @@ fn spawn_detail(
 ) -> Receiver<DetailResult> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = fetch::fetch_detail(&repo, kind, number, timeout);
+        let result = fetch::fetch_detail(&binaries, &repo, kind, number, timeout);
         let _ = tx.send(result);
     });
     rx
@@ -182,6 +185,11 @@ fn run_tui() -> anyhow::Result<()> {
     let _guard = TuiGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
+    let binaries = match Binaries::detect() {
+        Ok(binaries) => binaries,
+        Err(err) => anyhow::bail!("gh and git are required: {err:#}"),
+    };
+
     let config = load_config();
     let repos = config.repos.clone();
     let timeout = Duration::from_secs(config.timeout_s.max(1));
@@ -194,6 +202,7 @@ fn run_tui() -> anyhow::Result<()> {
         ..App::default()
     };
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
+        binaries.clone(),
         repos.clone(),
         ItemKind::Pr,
         limit,
@@ -255,7 +264,7 @@ fn run_tui() -> anyhow::Result<()> {
                 pending_detail = Some((
                     repo.clone(),
                     number,
-                    spawn_detail(repo, number, ItemKind::Pr, timeout),
+                    spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
                 ));
             }
         }
@@ -264,6 +273,7 @@ fn run_tui() -> anyhow::Result<()> {
         if app.refresh_requested && pending.is_none() {
             app.refresh_requested = false;
             pending = Some(spawn_fetch(
+                binaries.clone(),
                 repos.clone(),
                 ItemKind::Pr,
                 limit,
