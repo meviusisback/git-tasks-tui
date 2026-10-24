@@ -113,8 +113,10 @@ a belt for pre-existing **regular** files. The log is rotated **at startup** at 
 per-launch until the Task 5 event loop re-checks the size (R5-1).
 `xdg-open` is called only for `https://` URLs on `github.com` / `www.github.com`. `gh repo clone`
 requires a **non-existing** target checked with `symlink_metadata`, under a configured root.
-Tests: `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed`,
-`runtime_dir_symlink_is_not_followed`.
+Tests: `state_dir_symlink_is_not_followed`, `state_dir_nested_symlink_is_not_followed`
+(intermediate component), `log_file_symlink_is_not_followed`. `runtime_dir_symlink_is_not_followed`
+lands with **Task 11a**: it protects the seed runtime dir, not the state dir, and does not exist on
+main today.
 
 ## S15 — Terminal ownership and signals
 Two spawn profiles:

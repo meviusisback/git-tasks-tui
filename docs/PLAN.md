@@ -245,6 +245,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 - **Tag the reviewed commit** (`review/<task>-rN`) and push the tag: a force-push of the branch can then never lose the exact commit under review.
 - **Auditors never touch a working tree**: review from `origin/*` (`git show origin/main:path`), deliver harness files on an `audit/*` branch.
 - **Docs are the coordinator's**: agents propose text, the coordinator commits it.
+- **Merge is the last step, after PASS.** The merge commit message carries `reviewed-sha: <branch sha>` and `key-file-sha256: <hash of src/main.rs>`, so the verdict→merge chain is verifiable after the fact.
 - Every phase ends with a remote read-back (SHA + file content) before it is reported as done.
 
 ## Validation
