@@ -316,6 +316,11 @@ fn sanitise_line(text: &str) -> String {
     crate::sanitize::sanitize(text).replace('\n', "\\n")
 }
 
+/// Longest credential the redactor can be looking at: the prefixes plus the
+/// longest realistic body. Only used to keep a tail across a cap flush, so a
+/// token is never cut in half — the same class as L-3, one layer out.
+const MAX_SECRET_TAIL: usize = 256;
+
 /// A writer that never sends a newline must not grow the buffer forever.
 ///
 /// Known limits of sanitising at this layer, both measured in review: a payload
@@ -349,8 +354,14 @@ impl<W: io::Write> io::Write for SanitisingWriter<W> {
         // No newline in sight: emit what we have rather than buffer without bound.
         // (Taken from the auditor's PR #3; the record boundary is unchanged.)
         if self.pending.len() > MAX_PENDING {
-            let text = String::from_utf8_lossy(&self.pending).into_owned();
-            self.pending.clear();
+            let mut cut = self.pending.len().saturating_sub(MAX_SECRET_TAIL);
+            // Never split a UTF-8 sequence: a cut inside one emits a replacement
+            // character where the tail should have been preserved verbatim.
+            while cut > 0 && (self.pending[cut] & 0xC0) == 0x80 {
+                cut -= 1;
+            }
+            let text = String::from_utf8_lossy(&self.pending[..cut]).into_owned();
+            self.pending.drain(..cut);
             let clean = sanitise_line(&text);
             self.inner.write_all(clean.as_bytes())?;
         }
