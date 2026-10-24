@@ -90,9 +90,11 @@ their own longer timeout. **Exception:** the interactive agent child must NOT ge
 (a non-foreground pgroup reading the tty stops on SIGTTIN); see S15.
 
 ## S12 — Bounded, streamed I/O
-Two concurrent reader tasks with independent caps (16 MiB stdout, 256 KiB stderr), killed on
-overflow with a `truncated` flag; JSON is parsed only from capped bytes. Caps are applied while
-streaming, never after `wait_with_output()`.
+Two concurrent reader tasks with independent caps (`Caps::default()` = **4 MiB** stdout, **64 KiB**
+stderr). The cap **truncates and drains** instead of killing the child: a writer killed mid-stream can
+lose the diagnostic we are about to show, and the child is already bounded by the wall-clock timeout.
+`truncated` is reported. JSON is parsed only from the capped bytes; `model::parse_list` has **no cap of
+its own** — the caller's `Caps` is the single bound (M-2).
 
 ## S13 — Output hygiene
 `ratatui >= 0.28` filters control characters in `Buffer`; pin it and keep a regression test with an
