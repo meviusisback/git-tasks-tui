@@ -26,6 +26,7 @@ branch moved afterwards is stale by definition and must be re-tagged.
 | `main@e0cbe1d` | `e0cbe1d` | awaiting verdict | **prctl return checked**: a failed `PR_SET_PDEATHSIG` now fails the spawn instead of running without the death-signal; **worktree path de-flattened**: `owner/repo` stays two components, so `a--b/c` and `a/b--c` no longer share a directory (`distinct_slugs_can_never_flatten_into_one_directory`). S11/S12 now say out loud that the timeout bounds the child, not its readers (T2-5). 26 suites green | T2-3c clusters (`-fd`), M-3 |
 | `main@b470a86` | `b470a86` | awaiting verdict | **Task 9, action 1**: `o` opens the selected item in the browser. The URL is gated first (https + `github.com`/`www.github.com`, no userinfo, no non-443 port, no control characters or spaces), `xdg-open` is resolved once at startup, the child is detached and inherits no stdio. Tests: the request is only made for a safe URL, an unsafe one never reaches the launcher, the launcher receives exactly one argument (`tests/browser_open.rs`), a relative launcher is refused | worktree action (writes), agent integration |
 | `main@d64978f` | `d64978f` | awaiting verdict | **auditor probe vendored** as `tests/audit_task02.rs`, adapted to the current API: slug keys the path, a relative program is refused, and the builders' argv is actually spawnable (`git --version`, `gh --version` through `run_pipe`). 3/3 green — the third assertion is the one whose absence let B-1 merge | T2-3c clusters, M-3 |
+| `main@e6d3b0d` | `e6d3b0d` | awaiting verdict | **T2-3c closed**: `check_argv` decomposes short-flag clusters (`-fd`, `-df`, `-af` refused; `-n` legal). **M-3 closed**: the render test now uses the same hostile bytes as the model probe (OSC-52 clipboard write + RLO), asserting the visible text survives and nothing else does | nothing outstanding in this ledger |
 
 ## Standing rules this ledger encodes
 
@@ -42,9 +43,9 @@ branch moved afterwards is stale by definition and must be re-tagged.
 
 ## Carried debt (not blocking any tag)
 
-- **T2-3c** short-flag clusters (`-fd`) are not decomposed; the long-term answer is an allowlist of the
-  flags the app actually uses.
-- **M-3** the render test should reuse the same hostile bytes as the model probe.
+Nothing security-relevant is outstanding. The next functional block is Task 9 part 2 (worktree for a
+PR) and Task 11 (agent), neither of which has been written yet.
+
 
 ## Closed since this ledger started
 
@@ -56,3 +57,4 @@ branch moved afterwards is stale by definition and must be re-tagged.
 - **S15-1 / S12-1 / S14-1 / T2-3b / U+2028-29-FEFF** (`77a844e`).
 - **B-1 / T2-2** binaries resolved once at startup and injected into the builders (`5d7cc37`).
 - **prctl return** and **slug flattening** (`e0cbe1d`).
+- **T2-3c** short-flag clusters and **M-3** hostile render bytes (`e6d3b0d`).
