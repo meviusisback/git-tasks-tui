@@ -5,6 +5,7 @@
 //! CLI parsing, logging init, process lifetime.
 
 pub mod agent;
+pub mod app;
 pub mod binaries;
 pub mod config;
 pub mod env;
