@@ -10,6 +10,7 @@
 > **Rev 4.7** — **Task 4 merged** (`fe8689a`: config + state on `0600` files, atomic writes, symlink refusal, repo/profile validators, plugin import of `selectedRepos`; 10 tests). A clippy failure slipped into the first merge and was fixed forward immediately.
 > **Rev 4.8** — S-1 fixed (`4044d2e`: `SeedFile::create_in` enforces the private runtime dir, so G-2 is closed by construction; the auditor's three probes pass). Task 2 fixes for r9 live on `c2997af` (T2-1 slug-keyed paths, T2-2 absolute program at spawn, T2-4 branch grammar, T2-6 `PDEATHSIG`, T2-7 name cap); **T2-5** (readers joined without a deadline) is carried to Task 5 together with the in-session log rotation.
 > **Rev 4.9** — **Task 2 merged** (`90db490`): `Argv` (inspectable), `gh`/`git` builders with S16 overrides in one place, per-child env allowlists (`*_env_from`), verified binaries, group-killed bounded spawn with `PDEATHSIG` and kill-on-drop, pure slug-keyed `resolve`. 36 tests green, clippy clean, harness 16/0 + 8/0, gate rc 0. Task 3 also PASS.
+> **Rev 5.0** — **Task 5 complete** (`b990b65`): `sanitize` (controls/bidi/credentials), pure `App::update` with `/` search mode, `ui::draw` with `TestBackend` coverage, event loop with `TuiGuard` (drop, panic hook, SIGTERM/SIGHUP), pure key map, and **in-session log rotation** via `RotatingFile` (R5-1 closed). Verified in a real pty: `q` and SIGTERM both exit 0 with the terminal restored.
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -125,7 +126,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 - **Tests** (must fail on the old code): `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed` — victim mode/size/content unchanged, `Err` returned. They must exercise the real init path: `--version` exits inside clap **before** logging starts (this is why the manual repro initially looked clean).
 - **F-3 (MEDIUM)** two `crossterm` in the tree (0.28.1 via ratatui, 0.29.0 direct). **Decision: option A** — `crossterm = "0.28"`, imports via `ratatui::crossterm::*`; a CI step fails if a duplicate reappears.
 - **F-4 (MEDIUM)** CI: pinned action SHAs, `permissions: contents: read`, `--locked`, `components: rustfmt, clippy`, `timeout-minutes: 15`, `concurrency`.
-- **F-5 (LOW)** log rotates **at startup** at 5 MiB (`gtasks.log.1`, one generation); in-session re-check carried to Task 5 (R5-1). S14 updated.
+- **F-5 (LOW)** log rotates at 5 MiB (`gtasks.log.1`, one generation): at startup and **in session** by `RotatingFile`, which rotates on the write that crosses the bound (R5-1 closed, `tests/log_in_session.rs`).
 - **F-6 (LOW)** toolchain channel `1.99.1`, `rust-version = "1.85"`.
 - **F-7 (INFO)** `#![deny(clippy::print_stdout)]`, allow only on the stderr fallback.
 - **F-8 (INFO)** `[lints.clippy] all = "deny"`; `cargo machete` once the deps are in use.
@@ -155,7 +156,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 ### Task 5 — `App::update` skeleton (no fetch)
 **Files:** `src/app.rs`, `src/msg.rs`, `src/sanitize.rs`, `src/ui/{mod,layout,status}.rs`.
 **Work:** `Msg`, `App::update`, pane focus, modal stack, status line; `TuiGuard`; sanitize helpers.
-**Carried over (R5-1):** the log currently rotates only at startup; the event loop must re-check the size (interval or a `MakeWriter` that reopens) so a long-running TUI keeps the 5 MiB bound.
+**Carried over (R5-1):** *done* — `RotatingFile` rotates on the write that crosses 5 MiB, so the loop does not poll and the bound holds for a long-running TUI (`tests/log_in_session.rs`: bound crossed, one generation, mode `0600`).
 **Tests:** key→state transitions; one `TestBackend` golden; `TuiGuard` restores after `Child` exit 1; `bidi_chars_stripped_from_labels`; `terminal_escape_in_title_is_inert`.
 **Verify:** `cargo test app sanitize`.
 
