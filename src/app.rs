@@ -161,12 +161,14 @@ impl App {
             }
         }
         self.set_lengths(self.repos.len(), self.visible_items().len());
+        // Row 0 is the "all repos" selector, not a repository: do not count it.
+        let configured = self.repos.len().saturating_sub(1);
         self.status = match self.failed {
-            0 => format!("{} items from {} repos", self.items.len(), self.repos.len()),
+            0 => format!("{} items from {} repos", self.items.len(), configured),
             failed => format!(
                 "{} items from {} repos · {} failed",
                 self.items.len(),
-                self.repos.len(),
+                configured,
                 failed
             ),
         };
