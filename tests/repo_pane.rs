@@ -198,6 +198,45 @@ fn esc_in_the_repos_pane_with_a_filter_clears_it() {
 }
 
 #[test]
+fn esc_restores_the_repo_you_came_from() {
+    // The list changed while drilled in (a refresh reordered it): the way
+    // back must find the repo by identity, not replay the old index.
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, row 2
+    app.update(Msg::Key(Key::Enter)); // drill in
+    assert_eq!(app.pane, gtasks::app::Pane::List);
+
+    app.repos = vec![
+        "— all repos —".to_string(),
+        "me/busy".to_string(), // moved to row 1
+        "me/other".to_string(),
+    ];
+    app.update(Msg::Key(Key::Esc)); // drill out
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    assert_eq!(app.repos_cursor, 1, "identity, not the old index 2");
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::One(_)));
+}
+
+#[test]
+fn esc_falls_back_to_the_first_row_when_it_is_gone() {
+    // The repo vanished while drilled in: home to row 0, which also resets
+    // the filter (a cursor on "all" with a dead filter would lie).
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, row 2
+    app.update(Msg::Key(Key::Enter)); // drill in
+    app.repos = vec!["— all repos —".to_string(), "me/other".to_string()];
+    app.update(Msg::Key(Key::Esc)); // drill out
+    assert_eq!(app.pane, gtasks::app::Pane::Repos);
+    assert_eq!(app.repos_cursor, 0);
+    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::All));
+    assert_eq!(app.status, "— all repos — · 1 items");
+}
+
+#[test]
 fn acting_on_an_item_uses_that_items_repo_not_the_cursor() {
     // The cursor sits on the "all" row (index 0), whose text is not a repo slug:
     // if the action took its repo from the cursor, this could never work.
