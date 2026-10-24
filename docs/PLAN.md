@@ -161,6 +161,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 ### Task 5 — `App::update` skeleton (no fetch)
 **Decided with the auditor (allowlist, not blocklist):** `enum Action { OpenUrl, Merge, Comment, Checkout }` with a single translator to `Vec<OsString>`; per action a constant of allowed flags (`MERGE_FLAGS`), and `check_argv` refuses **any** element starting with `-` that is not in that list; valued flags are always an explicit pair (`--body` + value), never a concatenated string; each action gets a test that its argv ⊆ the allowlist plus a control that `--admin` is refused.
 
+**Flag allowlist (agreed with the auditor, see [`task9-allowlist.md`](task9-allowlist.md)):** one `argv_for(&Binaries, &Action)` per action, a positive per-action flag list measured from the real `gh`, typed positionals (`u64`, `RepoSlug`, `Branch`), and `ensure_allowlisted` validating the argv the code just built. Four tests, two of them controls.
 **Files:** `src/app.rs`, `src/msg.rs`, `src/sanitize.rs`, `src/ui/{mod,layout,status}.rs`.
 **Work:** `Msg`, `App::update`, pane focus, modal stack, status line; `TuiGuard`; sanitize helpers.
 **Carried over (R5-1):** *done* — `RotatingFile` rotates on the write that crosses 5 MiB, so the loop does not poll and the bound holds for a long-running TUI (`tests/log_in_session.rs`: bound crossed, one generation, mode `0600`).
