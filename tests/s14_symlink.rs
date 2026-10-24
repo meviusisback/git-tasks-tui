@@ -9,7 +9,7 @@
 
 use std::os::unix::fs::{PermissionsExt, symlink};
 
-use gtasks::logging::{MAX_LOG_BYTES, ensure_state_dir, open_log_file, rotate_log};
+use gtasks::logging::{ensure_state_dir, open_log_file, rotate_log};
 
 fn mode_of(path: &std::path::Path) -> u32 {
     std::fs::symlink_metadata(path)
@@ -107,20 +107,28 @@ fn log_file_symlink_is_not_followed() {
     );
 }
 
-/// F-5 (L1): at the threshold the live log becomes `.1`, keeping its bytes.
+/// F-5 (L1): at the threshold the live log becomes `.1`, keeping its bytes and
+/// its mode. A tiny threshold keeps the test fast (never 5 MiB).
 #[test]
 fn log_rotation_keeps_one_backup() {
     let root = tempfile::tempdir().unwrap();
     let log = root.path().join("gtasks.log");
-    std::fs::write(&log, vec![b'x'; MAX_LOG_BYTES as usize]).unwrap();
+    let old = b"old-log-bytes".to_vec();
+    std::fs::write(&log, &old).unwrap();
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-    rotate_log(&log).unwrap();
+    rotate_log(&log, old.len() as u64).unwrap();
 
     let backup = root.path().join("gtasks.log.1");
     assert_eq!(
-        std::fs::metadata(&backup).unwrap().len(),
-        MAX_LOG_BYTES,
+        std::fs::read(&backup).unwrap(),
+        old,
         "the backup must carry the old bytes"
+    );
+    assert_eq!(
+        mode_of(&backup),
+        0o600,
+        "the backup inherits the live log's mode"
     );
     assert!(
         !log.exists(),
@@ -140,20 +148,21 @@ fn log_rotation_keeps_one_backup() {
 fn rotation_refuses_symlinked_log() {
     let root = tempfile::tempdir().unwrap();
     let victim = root.path().join("victim.log");
-    std::fs::write(&victim, vec![b'v'; MAX_LOG_BYTES as usize]).unwrap();
+    let bytes = b"victim-log-bytes".to_vec();
+    std::fs::write(&victim, &bytes).unwrap();
     std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
     let link = root.path().join("gtasks.log");
     symlink(&victim, &link).unwrap();
 
-    let err = rotate_log(&link).expect_err("symlinked log must not rotate");
+    let err = rotate_log(&link, 1).expect_err("symlinked log must not rotate");
     assert!(
         format!("{err:#}").to_lowercase().contains("symlink"),
         "error must name the symlink refusal, got: {err:#}"
     );
     assert_eq!(
-        std::fs::metadata(&victim).unwrap().len(),
-        MAX_LOG_BYTES,
-        "the victim keeps its size"
+        std::fs::read(&victim).unwrap(),
+        bytes,
+        "the victim keeps its bytes"
     );
     assert!(
         !root.path().join("gtasks.log.1").exists(),
@@ -166,21 +175,17 @@ fn rotation_refuses_symlinked_log() {
 fn rotation_replaces_previous_backup() {
     let root = tempfile::tempdir().unwrap();
     let log = root.path().join("gtasks.log");
-    std::fs::write(&log, vec![b'n'; MAX_LOG_BYTES as usize]).unwrap();
+    let fresh = b"new-log-bytes".to_vec();
+    std::fs::write(&log, &fresh).unwrap();
     let backup = root.path().join("gtasks.log.1");
     std::fs::write(&backup, "stale-backup").unwrap();
 
-    rotate_log(&log).unwrap();
+    rotate_log(&log, fresh.len() as u64).unwrap();
 
     let bytes = std::fs::read(&backup).unwrap();
     assert_eq!(
-        bytes.len() as u64,
-        MAX_LOG_BYTES,
+        bytes, fresh,
         "the old backup must be replaced, not appended to"
-    );
-    assert!(
-        bytes.starts_with(b"nnn"),
-        "the new backup is the live log's content"
     );
     assert!(
         !bytes.windows(6).any(|w| w == b"stale-"),
@@ -188,14 +193,38 @@ fn rotation_replaces_previous_backup() {
     );
 }
 
-/// S14 (L3): a `..` component is refused outright, before any filesystem work.
+/// S14 (L3): `..` is refused in the middle of a path, and nothing is created.
 #[test]
-fn state_dir_rejects_parent_dir_component() {
-    let err = ensure_state_dir(std::path::Path::new("/tmp/../tmp/gtasks-should-not-exist"))
+fn state_dir_rejects_parent_dir_component_in_the_middle() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("gtasks-should-not-exist");
+    let err = ensure_state_dir(&root.path().join("..").join("gtasks-should-not-exist"))
         .expect_err("a `..` component must be refused");
     assert!(
         format!("{err:#}").contains(".."),
         "error must name the `..` refusal, got: {err:#}"
+    );
+    assert!(
+        !target.exists(),
+        "nothing may be created under the refused path"
+    );
+}
+
+/// S14 (L3): a trailing `..` is refused **before** creating the missing
+/// component that precedes it — no half-built tree.
+#[test]
+fn state_dir_rejects_trailing_parent_dir_without_side_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let missing = root.path().join("missing");
+    let err = ensure_state_dir(&missing.join(".."))
+        .expect_err("a trailing `..` component must be refused");
+    assert!(
+        format!("{err:#}").contains(".."),
+        "error must name the `..` refusal, got: {err:#}"
+    );
+    assert!(
+        !missing.exists(),
+        "the missing component must not be created before the refusal"
     );
 }
 
