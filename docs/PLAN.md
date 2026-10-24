@@ -9,6 +9,7 @@
 > **Rev 4.6** — P2 fixed (`3584d3c`: the init guard runs before any fs work, so a refused second init cannot rotate the live log) and **Task 3 merged** (`c97b316`: serde models + pure filter/sort/group, 8 tests, no panic on malformed JSON).
 > **Rev 4.7** — **Task 4 merged** (`fe8689a`: config + state on `0600` files, atomic writes, symlink refusal, repo/profile validators, plugin import of `selectedRepos`; 10 tests). A clippy failure slipped into the first merge and was fixed forward immediately.
 > **Rev 4.8** — S-1 fixed (`4044d2e`: `SeedFile::create_in` enforces the private runtime dir, so G-2 is closed by construction; the auditor's three probes pass). Task 2 fixes for r9 live on `c2997af` (T2-1 slug-keyed paths, T2-2 absolute program at spawn, T2-4 branch grammar, T2-6 `PDEATHSIG`, T2-7 name cap); **T2-5** (readers joined without a deadline) is carried to Task 5 together with the in-session log rotation.
+> **Rev 4.9** — **Task 2 merged** (`90db490`): `Argv` (inspectable), `gh`/`git` builders with S16 overrides in one place, per-child env allowlists (`*_env_from`), verified binaries, group-killed bounded spawn with `PDEATHSIG` and kill-on-drop, pure slug-keyed `resolve`. 36 tests green, clippy clean, harness 16/0 + 8/0, gate rc 0. Task 3 also PASS.
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -129,7 +130,8 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 - **F-7 (INFO)** `#![deny(clippy::print_stdout)]`, allow only on the stderr fallback.
 - **F-8 (INFO)** `[lints.clippy] all = "deny"`; `cargo machete` once the deps are in use.
 
-### Task 2 — `gh` wrapper (argv-only, bounded, group-killed) + env/binaries
+### Task 2 — `gh` wrapper (argv-only, bounded, group-killed) + env/binaries — DONE (`90db490`)
+**Delivered:** `src/gh/mod.rs` (`Argv` with `program/args/env/cwd`; `gh()`/`git()` builders, the three S16 `-c` overrides in one place; `run_pipe` with timeout, SIGTERM→SIGKILL to the group, `PR_SET_PDEATHSIG`, kill-on-drop, capped streaming readers, typed `Timeout`), `src/binaries.rs` (canonical, executable, owner root/uid, no group/world write), `src/env.rs` (`*_env_from(parent)` allowlists; `gh` token only for `gh`), `src/worktree.rs` (pure `resolve(clone, slug, branch)`, **slug-keyed** paths, branch grammar). 36 tests overall.
 **Files:** `src/gh/mod.rs`, `src/binaries.rs`, `src/env.rs`, `tests/gh_args.rs`, `tests/gh_process.rs`, `tests/env_harness.rs`.
 **Work:** S2, S3 (per child), S4, S11, S12. **S16 git flags** live in the git builder (shared with Task 10).
 **API hooks required by the harness (review r5b, verbatim):** (a) the `gh` wrapper exposes the built `Argv` **and** the child `env` as inspectable values, so tests assert without spawning; (b) `resolve(clone, slug, branch) -> Result<PathBuf>` as a **pure** function (the Task 10b resolver); (c) a single function where the `git` invocation is composed, so the `-c core.hooksPath=… -c core.fsmonitor=false -c core.pager=cat` assertion has exactly one home.
