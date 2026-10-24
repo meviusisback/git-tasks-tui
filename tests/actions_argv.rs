@@ -176,3 +176,53 @@ fn the_number_is_a_positional_value_not_a_flag() {
         "the number is not a flag"
     );
 }
+
+/// A-1: the action lists and the transport's deny-list disagreed about
+/// `--delete-branch`, so a merge that deletes the branch panicked in `gh()`.
+/// The allowlist is the authority: no emitted flag may be forbidden.
+#[test]
+fn no_action_emits_a_flag_the_transport_forbids() {
+    for action in every_action() {
+        for flag in emitted_flags(&action).unwrap() {
+            assert!(
+                !gtasks::gh::is_forbidden_flag(flag),
+                "{:?} emits {flag}, which the transport refuses",
+                action
+            );
+        }
+    }
+}
+
+/// A-1, the call the test above replaces: building the argv must not panic.
+#[test]
+fn a_merge_that_deletes_the_branch_builds_without_panicking() {
+    let action = Action::Merge {
+        repo: "acme/widget".into(),
+        number: 1,
+        method: MergeMethod::Squash,
+        delete_branch: true,
+    };
+    let argv = argv_for(&binaries(), &action).expect("no panic, no error");
+    let rendered: Vec<String> = argv
+        .args
+        .iter()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+    assert!(
+        rendered.contains(&"--delete-branch".to_string()),
+        "got {rendered:?}"
+    );
+}
+
+/// A-2: a value that starts with a dash must survive the transport.
+#[test]
+fn a_comment_body_starting_with_a_dash_survives_the_transport() {
+    let action = Action::Comment {
+        repo: "acme/widget".into(),
+        number: 1,
+        body: "-done: looks good".into(),
+    };
+    let argv = argv_for(&binaries(), &action).expect("builds");
+    // The transport check is the one that used to reject it.
+    gtasks::gh::check_argv(&argv).expect("a value is not a flag");
+}

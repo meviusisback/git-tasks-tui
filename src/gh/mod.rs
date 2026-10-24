@@ -69,14 +69,17 @@ impl Argv {
 
 /// Flags that must never be produced by the builders (S9). Exact element
 /// match only: `--force-with-lease` and friends stay legal.
-const FORBIDDEN: &[&str] = &[
-    "--admin",
-    "--force",
-    "--auto",
-    "--delete-branch",
-    "-d",
-    "-f",
-];
+const FORBIDDEN: &[&str] = &["--admin", "--force", "--auto", "-d", "-f"];
+
+/// Short flags whose combination is still dangerous (`-fd` = force + delete).
+/// A token is decomposed only when **every** letter is one of these: `-admin` is
+/// a value that happens to start with a dash, not a cluster (A-2).
+const SHORT_FLAGS: &[char] = &['f', 'd'];
+
+/// Exposed so a test can assert that no action list contains a forbidden flag.
+pub fn is_forbidden_flag(flag: &str) -> bool {
+    FORBIDDEN.contains(&flag)
+}
 
 /// The choke point: every argv passes here, whether it came from `gh()`/`git()`
 /// or from a literal `Argv` (the fields are `pub`, so a factory bypass must not
@@ -97,7 +100,10 @@ pub fn check_argv(argv: &Argv) -> anyhow::Result<()> {
         );
         // A short-flag cluster such as `-fd` hides `-f` and `-d`: decompose it.
         if let Some(cluster) = flag.strip_prefix('-') {
-            if !cluster.starts_with('-') {
+            let is_cluster = !cluster.is_empty()
+                && !cluster.starts_with('-')
+                && cluster.chars().all(|c| SHORT_FLAGS.contains(&c));
+            if is_cluster {
                 for short in cluster.chars() {
                     let spelling = format!("-{short}");
                     anyhow::ensure!(

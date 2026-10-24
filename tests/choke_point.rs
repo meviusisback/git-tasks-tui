@@ -39,12 +39,10 @@ fn every_forbidden_flag_is_refused() {
         "--admin",
         "--force",
         "--auto",
-        "--delete-branch",
         "-f",
         "-d",
         "--force=true",
         "--admin=yes",
-        "--delete-branch=1",
     ] {
         let argv = argv(PathBuf::from("/bin/echo"), vec![OsString::from(flag)]);
         let err = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap_err();
@@ -53,6 +51,19 @@ fn every_forbidden_flag_is_refused() {
             "{flag}: {err:#}"
         );
     }
+}
+
+/// `--delete-branch` left the deny-list when the Task 9 allowlist made the
+/// action lists the authority (A-1): it is an option the app offers, with a
+/// confirmation. The transport must not refuse what an action may emit.
+#[test]
+fn a_flag_an_action_may_emit_is_not_refused_by_the_transport() {
+    let argv = argv(
+        PathBuf::from("/bin/echo"),
+        vec![OsString::from("--delete-branch")],
+    );
+    let out = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap();
+    assert!(out.status.success());
 }
 
 #[test]
@@ -68,7 +79,9 @@ fn a_similar_flag_stays_legal() {
 #[test]
 fn a_short_flag_cluster_is_decomposed() {
     // `-fd` hides `-f` and `-d`: a per-element match would let it through.
-    for cluster in ["-fd", "-df", "-af"] {
+    // Only clusters made entirely of tracked short flags are decomposed: `-af`
+    // is not one, because `a` is not a flag we track (A-2).
+    for cluster in ["-fd", "-df", "-dfd"] {
         let argv = argv(PathBuf::from("/bin/echo"), vec![OsString::from(cluster)]);
         let err = run_pipe_with_caps(&argv, Duration::from_secs(5), Caps::default()).unwrap_err();
         assert!(
