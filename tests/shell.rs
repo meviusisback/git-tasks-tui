@@ -57,13 +57,23 @@ fn legend_names_the_keys_available_right_now() {
 }
 
 #[test]
-fn legend_states_when_esc_has_nothing_to_close() {
-    let top = App::default();
+fn esc_at_the_top_level_says_nothing_is_closed() {
+    // It used to live in the legend. There it was 24 characters that pushed
+    // every real status message off the right edge below ~110 columns (S-6a),
+    // so it moved to the status panel, where the text may be as long as needed.
+    let mut top = App::default();
+    press(&mut top, Key::Esc);
+    let status = top.status_text().unwrap_or_default();
     assert!(
-        top.legend().contains("Esc — nothing to close"),
-        "top level says Esc has nothing to close: {}",
+        status.contains("Esc — nothing to close"),
+        "top level says Esc has nothing to close: {status}"
+    );
+    assert!(
+        !top.legend().contains("nothing to close"),
+        "and the legend no longer carries it: {}",
         top.legend()
     );
+    assert!(!top.quit, "Esc is never an exit");
     for state in [
         App {
             pane: Pane::Detail,

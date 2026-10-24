@@ -264,31 +264,38 @@ impl App {
                 query = sanitize(&self.query)
             );
         }
-        // The legend names what the keys do *here*: the repos pane drills
-        // in, a filtered list drills back out, anywhere else Esc has
-        // nothing to close.
-        let mut line = if self.pane == Pane::Detail {
+        // The legend names what the keys do *here*. It stays short on
+        // purpose: the status has its own panel (`status_text`), and a long
+        // legend in this one row would push every message off the edge.
+        if self.pane == Pane::Detail {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
         } else if self.pane == Pane::Repos {
-            String::from("q quit · ? help · Enter drill in · ↑/↓ move · Esc — nothing to close")
+            String::from("q quit · ? help · Enter drill in · ↑/↓ move")
         } else if self.repo_filter == RepoFilter::All {
-            // Nothing to close: say so, right after the recovery keys, so
-            // the note survives truncation at narrow widths.
             String::from(
-                "q quit · ? help · Esc — nothing to close · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
         } else {
             String::from(
                 "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
-        };
-        if !self.status.is_empty() {
-            line.push_str(" │ ");
-            line.push_str(&sanitize(&self.status));
         }
-        line
+    }
+
+    /// The status message, rendered in its own panel.
+    ///
+    /// It must NOT be a suffix of `legend()`: that string goes into a single
+    /// row, so a long legend pushes the status past the right edge and the
+    /// message disappears at 80–100 columns — exactly where "nothing selected"
+    /// and, later, "it may have been applied" have to be readable.
+    pub fn status_text(&self) -> Option<String> {
+        if self.status.is_empty() {
+            None
+        } else {
+            Some(sanitize(&self.status))
+        }
     }
 
     /// Ask the loop to open the selected item, after checking its URL (S10).
@@ -486,7 +493,11 @@ impl App {
                     self.repos_cursor = 0;
                     self.apply_repo_filter();
                 }
-                Pane::List | Pane::Repos => {}
+                Pane::List | Pane::Repos => {
+                    // Nothing to close: say it as a status. In the legend it was
+                    // 24 characters that pushed every real message off the edge.
+                    self.status = "Esc — nothing to close".to_string();
+                }
             },
             Key::Char('q') => self.quit = true,
             Key::Char('?') => self.show_help = true,

@@ -156,8 +156,12 @@ fn legend_follows_the_drill_mode() {
     app.update(Msg::Key(Key::Tab)); // repos pane
     let repos_legend = app.legend();
     assert!(repos_legend.contains("Enter drill in"), "{repos_legend}");
-    assert!(repos_legend.contains("nothing to close"), "{repos_legend}");
+    // S-6a: the note is a *message*, not a key hint. In the legend it was 24
+    // characters that pushed every real status off the right edge at 80 columns.
+    assert!(!repos_legend.contains("nothing to close"), "{repos_legend}");
     assert!(!repos_legend.contains("Esc back"), "{repos_legend}");
+    app.update(Msg::Key(Key::Esc));
+    assert_eq!(app.status, "Esc — nothing to close");
 
     app.update(Msg::Key(Key::Down));
     app.update(Msg::Key(Key::Down)); // me/busy, filter live
