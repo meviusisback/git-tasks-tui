@@ -7,6 +7,7 @@
 > **Rev 4.4** — r5b matrix PASS. **R5-1**: rotation is startup-only, so S14 now says exactly that and Task 5 owns in-session rotation. Task 2 carries the three harness API hooks verbatim (inspectable `Argv`+`env`, pure `resolve`, single `git` composition point).
 > **Rev 4.5** — logged L1/L2/L3 merged (`c50ada8`: rotation tests, `try_init`, `..` pre-scan) and **Task 11a-seed merged** (`f3669d2`: `SeedFile`, `ensure_runtime_dir` → `logging::ensure_state_dir`, C1 interactive + dash negative tests, harness vendored in CI). Task 2 API (`f969fa0`) is in review.
 > **Rev 4.6** — P2 fixed (`3584d3c`: the init guard runs before any fs work, so a refused second init cannot rotate the live log) and **Task 3 merged** (`c97b316`: serde models + pure filter/sort/group, 8 tests, no panic on malformed JSON).
+> **Rev 4.7** — **Task 4 merged** (`fe8689a`: config + state on `0600` files, atomic writes, symlink refusal, repo/profile validators, plugin import of `selectedRepos`; 10 tests). A clippy failure slipped into the first merge and was fixed forward immediately.
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -141,7 +142,8 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 **Tests:** fixtures; invalid types error, no panic; truth tables.
 **Verify:** `cargo test parse`.
 
-### Task 4 — Config + state
+### Task 4 — Config + state — DONE (`fe8689a`)
+**Delivered:** `src/config.rs` (+ `write_private`/`read_private`: `0600`, atomic temp+rename, symlink refusal) and `src/state.rs`; validators for repo slugs and profiles; `from_plugin_json` imports **only** `selectedRepos`. Missing file → defaults; a present but invalid file is an error (no silent fallback). Ten tests: round-trips, modes, symlink refusal, out-of-range values, traversal, bad profiles.
 **Files:** `src/config.rs`, `src/state.rs`, `tests/config_roundtrip.rs`.
 **Work:** `Config { repos, clone_roots, worktree_root, parallel, timeout_s, write_timeout_s, refresh_s, default_profile, limit, trust_worktree_rules }`; `0600`/`0700`; `--import-from-plugin`.
 **Tests:** round-trip; defaults; invalid → error, no overwrite; `state_and_config_are_0600`; import maps `selectedRepos` only.
