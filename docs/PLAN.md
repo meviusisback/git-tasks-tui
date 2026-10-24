@@ -2,6 +2,7 @@
 
 > **Rev 4** — folded @coder's architecture review, @auditor's security review (r0), and @auditor's doc re-review r1 (**C1 blocking: `--query-file -` cannot seed an interactive session; C2 terminal ownership; C3 per-child env; C4 new invariant S16; C5 five point fixes**).
 > **Rev 4.1** — Task 1 accepted (scaffold + spike evidence). Its automated seed-file/PTY tests move to Task 11a, with the negative control. Coordination protocol added (ref-only ops, per-agent worktrees, auditors read `origin/*`).
+> **Rev 4.2** — r2 review of Task 1: **FAIL** on two S5/S14 blockers (F-1/F-2, both reproduced with the binary) plus 6 findings. Added **Task 1b (hardening)** and settled F-3: one `crossterm`, 0.28 via `ratatui::crossterm`.
 > **Canonical security text: [`docs/security.md`](security.md) (S1–S16).** If this plan and that file disagree, `docs/security.md` wins.
 > **For Hermes:** implement with `test-driven-development`, one task at a time; `requesting-code-review` before merge; `security-audit` (TREE scope) before any public release.
 
@@ -108,6 +109,18 @@ hermes -p <profile> chat --query-file <seed-file> --in <worktree> [--ignore-rule
 **Delivered:** `cargo init --name gtasks` (lib + thin bin), deps, `tracing` → `$XDG_STATE_HOME/gtasks/gtasks.log` (dir 0700 / file 0600), CI fmt+clippy+test, `rust-toolchain.toml`. Verified by the coordinator: `cargo fmt --check`, `clippy -D warnings` clean, `cargo build`, `gtasks 0.1.0`, log line present. PTY spike (`script -qec … --query-file <file>`) shows the session stays interactive (exit 124) — recorded in `docs/agent-cli.md`.
 **Deferred to Task 11a** (where `agent.rs` exists): `agent_seed_file_0600_and_unlinked`, the PTY test `agent_stays_interactive_after_first_turn`, **and its negative control** (`--query-file -` must exit 2 — a test that also passes with the bug has no teeth).
 **Accepted deviations:** `edition = "2024"` (cargo default on 1.99), `tracing-subscriber` with `env-filter`.
+
+### Task 1b — Hardening after the r2 review (branch `fix/task-01-hardening`, owner @coder)
+All reproduced by the coordinator with the real binary before assignment; all closed **before** Task 2.
+- **F-1 (MEDIUM, S5/S14)** `ensure_state_dir`: `create_dir_all` + `chmod` on the path followed a symlinked state dir (foreign dir → `0700`, received `gtasks.log`). Fix: per-component `create_dir` + `symlink_metadata`, open `O_DIRECTORY|O_NOFOLLOW`, `set_permissions` on the fd.
+- **F-2 (LOW, S14)** `open_log_file`: no `O_NOFOLLOW`, mode applied after creation (foreign file → `0600` + log bytes). Fix: `.mode(0o600).custom_flags(O_NOFOLLOW)`, `ELOOP` → stderr fallback; `set_permissions` only as a belt for existing regular files.
+- **Tests** (must fail on the old code): `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed` — victim mode/size/content unchanged, `Err` returned. They must exercise the real init path: `--version` exits inside clap **before** logging starts (this is why the manual repro initially looked clean).
+- **F-3 (MEDIUM)** two `crossterm` in the tree (0.28.1 via ratatui, 0.29.0 direct). **Decision: option A** — `crossterm = "0.28"`, imports via `ratatui::crossterm::*`; a CI step fails if a duplicate reappears.
+- **F-4 (MEDIUM)** CI: pinned action SHAs, `permissions: contents: read`, `--locked`, `components: rustfmt, clippy`, `timeout-minutes: 15`, `concurrency`.
+- **F-5 (LOW)** log rotates at 5 MiB (`gtasks.log.1`, one generation); S14 updated.
+- **F-6 (LOW)** toolchain channel `1.99.1`, `rust-version = "1.85"`.
+- **F-7 (INFO)** `#![deny(clippy::print_stdout)]`, allow only on the stderr fallback.
+- **F-8 (INFO)** `[lints.clippy] all = "deny"`; `cargo machete` once the deps are in use.
 
 ### Task 2 — `gh` wrapper (argv-only, bounded, group-killed) + env/binaries
 **Files:** `src/gh/mod.rs`, `src/binaries.rs`, `src/env.rs`, `tests/gh_args.rs`, `tests/gh_process.rs`, `tests/env_harness.rs`.
@@ -250,6 +263,7 @@ hermes -p <profile> chat --query-file <seed-file> --in <worktree> [--ignore-rule
 6. Worktrees outside the clone; reuse only from `git worktree list --porcelain`.
 7. Seed via a `0600` file (`--query-file <path>`), never `-` and never argv (C1).
 8. Two spawn profiles: pipe children vs interactive child (terminal ownership, S15).
+9. One `crossterm`: **0.28** through `ratatui::crossterm::{event,terminal}`; no direct 0.29 dependency (one type universe for input and backend).
 
 ## Remaining questions
 

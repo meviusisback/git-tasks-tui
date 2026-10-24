@@ -94,9 +94,18 @@ OSC escape in a title. Anything printed **outside** the buffer (panic, toast, lo
 inside the TUI is model text: it goes through the same sanitizer.
 
 ## S14 — Files and URLs
-Config, state **and seed** files are created `0600` (directories `0700`). `xdg-open` is called only
-for `https://` URLs on `github.com` / `www.github.com`. `gh repo clone` requires a **non-existing**
-target checked with `symlink_metadata`, under a configured root.
+Config, state **and seed** files are created `0600` (directories `0700`).
+**Nothing we create or open may follow a symlink.** A pre-existing symlink at the state dir, at the
+log file, or at any file we open is refused (`symlink_metadata`, `openat(O_NOFOLLOW)`); never
+`create_dir_all` + `chmod` on the path — that writes into, and chmods, the attacker's target
+(proven on the Task 1 scaffold: a symlinked state dir turned a foreign directory into `0700` and
+received `gtasks.log`; a symlinked log file rewrote a foreign file and chmodded it `0600`). Files are
+opened with `mode(0o600)` at creation time, not chmodded afterwards; `set_permissions` stays only as
+a belt for pre-existing **regular** files. The log rotates at 5 MiB (`gtasks.log` → `gtasks.log.1`,
+one generation) so a long-running TUI cannot fill the disk.
+`xdg-open` is called only for `https://` URLs on `github.com` / `www.github.com`. `gh repo clone`
+requires a **non-existing** target checked with `symlink_metadata`, under a configured root.
+Tests: `state_dir_symlink_is_not_followed`, `log_file_symlink_is_not_followed`.
 
 ## S15 — Terminal ownership and signals
 Two spawn profiles:

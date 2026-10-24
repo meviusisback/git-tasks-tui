@@ -77,7 +77,7 @@ See S11/S15.
   assert the process is still alive after the first turn, and that the seed file is gone after exit.
 - **negative control** in the same test: the same launch with `--query-file -` must exit **2**
   (`--query-file - is empty`, `gateway_chat.py:379-380`). Without it, the test would also pass on the
-  broken contract.
+  broken contract. Test name: `agent_query_file_dash_exits_2_empty`.
 
 ## Task 1 spike evidence (2026-10-24, Hermes v0.22.5, profile `coder`)
 
