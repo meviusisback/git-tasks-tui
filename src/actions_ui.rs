@@ -13,7 +13,7 @@ use std::process::ExitStatus;
 use std::time::Duration;
 
 use crate::actions::{Action, MergeMethod};
-use crate::gh::{Argv, Caps, run_pipe_with_caps};
+use crate::gh::{Argv, CheckedArgv, run_checked};
 
 /// What the user is asked to confirm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,8 +108,8 @@ pub enum Executed {
 /// and its group at the deadline, and a timed-out write must surface as an
 /// error, not be repeated. `ETXTBSY` retries live inside the transport and
 /// concern `exec`, not the remote effect of the command.
-pub fn execute(argv: &Argv, timeout: Duration) -> anyhow::Result<Executed> {
-    match run_pipe_with_caps(argv, timeout, Caps::default()) {
+pub fn execute(argv: &CheckedArgv, timeout: Duration) -> anyhow::Result<Executed> {
+    match run_checked(argv, timeout) {
         Ok(output) => Ok(Executed::Finished(output.status)),
         Err(err) if err.downcast_ref::<crate::gh::Timeout>().is_some() => {
             Ok(Executed::Unknown(err.to_string()))

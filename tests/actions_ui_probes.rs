@@ -21,6 +21,7 @@ use gtasks::actions_ui::{Executed, confirmation_for, execute};
 use gtasks::binaries::Binaries;
 use gtasks::env::git_env_from;
 use gtasks::gh::Argv;
+use gtasks::gh::CheckedArgv;
 
 fn sh(script: &str) -> Argv {
     Argv {
@@ -45,7 +46,7 @@ fn a_timed_out_write_runs_once() {
     let marker = format!("/tmp/gtt-run-{}", std::process::id());
     let _ = std::fs::remove_file(&marker);
     let _ = execute(
-        &sh(&format!("echo x >> {marker}; sleep 5")),
+        &CheckedArgv::unchecked_for_tests(sh(&format!("echo x >> {marker}; sleep 5"))),
         Duration::from_millis(500),
     );
     let runs = std::fs::read_to_string(&marker)
@@ -59,7 +60,11 @@ fn a_timed_out_write_runs_once() {
 /// P-2: a timeout means *we cannot know*, not *nothing happened*.
 #[test]
 fn a_timeout_is_not_a_refusal() {
-    let outcome = execute(&sh("sleep 5"), Duration::from_millis(400)).expect("no panic");
+    let outcome = execute(
+        &CheckedArgv::unchecked_for_tests(sh("sleep 5")),
+        Duration::from_millis(400),
+    )
+    .expect("no panic");
     assert!(
         !matches!(outcome, Executed::Refused(_)),
         "a timeout must not be reported as a refusal: the write may have been applied, \
@@ -115,5 +120,32 @@ fn the_sentence_does_not_omit_an_effect_of_the_argv() {
         "the sentence hides an effect the argv has: summary={:?} argv={:?}",
         shown.summary,
         shown.argv
+    );
+}
+
+/// F-1 (review): a value that is a single dash-word must survive on the typed
+/// path. `-fR` and `-fetch` differ only in how they arrived — hand-built versus
+/// builder — and that is exactly what `CheckedArgv` records.
+#[test]
+fn a_dash_word_value_is_accepted_on_the_typed_path_and_refused_hand_built() {
+    let binaries = Binaries::new(PathBuf::from("/bin/true"), PathBuf::from("/bin/true"));
+    let action = Action::Comment {
+        repo: slug(),
+        number: 3,
+        body: "-fetch".to_string(),
+    };
+    let argv = argv_for(&binaries, &action).expect("builds");
+
+    // Hand-built, the same shape is refused: fail-closed costs nothing there.
+    assert!(
+        gtasks::gh::check_argv(&argv).is_err(),
+        "a hand-built argv must refuse -fetch"
+    );
+
+    // Typed, it is a value and it runs.
+    let outcome = execute(&argv, Duration::from_secs(5)).expect("no panic");
+    assert!(
+        matches!(outcome, Executed::Finished(_)),
+        "a typed value must run: {outcome:?}"
     );
 }

@@ -321,7 +321,63 @@ fn collect_readers(
 
 /// Run a pipe child with explicit caps (tests use small caps to trigger
 /// truncation without moving megabytes around).
+/// An argv whose tokens have already been through the allowlist.
+///
+/// The field is private to this module: a value of this type is the **proof**
+/// that `ensure_allowlisted` ran. Because of that, `run_checked` does not repeat
+/// the forbidden-flag scan — and a value that merely looks like a cluster (a
+/// comment body such as `-fetch`) stays a value on this path, while a hand-built
+/// argv is still refused by `check_argv`.
+#[derive(Debug, Clone)]
+pub struct CheckedArgv(Argv);
+
+impl CheckedArgv {
+    /// For the builders of this crate whose tokens are already allowlisted.
+    /// Not public: outside the crate there is no way to assert "I checked".
+    pub(crate) fn from_checked(argv: Argv) -> Self {
+        Self(argv)
+    }
+
+    /// Test-only escape hatch: integration tests live outside the crate and
+    /// cannot call `from_checked`. Hidden from the docs on purpose — it exists so
+    /// a probe can exercise `execute`, not so production code can skip the door.
+    #[doc(hidden)]
+    pub fn unchecked_for_tests(argv: Argv) -> Self {
+        Self(argv)
+    }
+
+    pub fn as_argv(&self) -> &Argv {
+        &self.0
+    }
+
+    pub fn into_argv(self) -> Argv {
+        self.0
+    }
+}
+
+impl std::ops::Deref for CheckedArgv {
+    type Target = Argv;
+
+    fn deref(&self) -> &Argv {
+        &self.0
+    }
+}
+
+/// Run an argv the builder already checked (no forbidden-flag rescan).
+pub fn run_checked(argv: &CheckedArgv, timeout: Duration) -> anyhow::Result<Output> {
+    run_pipe_inner(argv.as_argv(), timeout, Caps::default(), false)
+}
+
 pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow::Result<Output> {
+    run_pipe_inner(argv, timeout, caps, true)
+}
+
+fn run_pipe_inner(
+    argv: &Argv,
+    timeout: Duration,
+    caps: Caps,
+    scan_forbidden: bool,
+) -> anyhow::Result<Output> {
     // S2: the program is resolved once, by the caller. At spawn there is no
     // PATH lookup — a relative program is a bug, not a convenience (T2-2).
     anyhow::ensure!(
@@ -329,7 +385,9 @@ pub fn run_pipe_with_caps(argv: &Argv, timeout: Duration, caps: Caps) -> anyhow:
         "refusing a non-absolute program: {}",
         argv.program.display()
     );
-    check_argv(argv)?;
+    if scan_forbidden {
+        check_argv(argv)?;
+    }
     let mut argv = argv.clone();
     argv.program = resolve_program(&argv.program)?;
     let mut cmd = argv.command();
