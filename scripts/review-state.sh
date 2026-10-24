@@ -84,7 +84,14 @@ if [ -n "$key_symbol" ]; then
     fi
 fi
 
+# A stale clone shows the same files and the same green tests, and HEAD looks
+# like the tip: say out loud how far behind the local tree is, because a verdict
+# on an ancestor describes a tree nobody will use.
+local=$(git rev-parse --short HEAD)
+behind=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo '?')
+
 printf 'remote main    : %s\n' "$main"
+printf 'local HEAD     : %s (behind: %s)\n' "$local" "$behind"
 printf 'newest row     : %s (%s)\n' "${row_sha:-<none>}" "${row_verdict:-<none>}"
 printf 'newest PASS    : %s\n' "${pass_sha:-<none>}"
 
