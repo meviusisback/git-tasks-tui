@@ -37,4 +37,27 @@ if sh .githooks/commit-msg "$probe" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "hooks installed and verified: core.hooksPath=$(git config --get core.hooksPath)"
+# H-3: the same distinction for `pre-push`. A hook that is present, executable
+# and **mute** is worse than a missing one: the ledger could cite it as a
+# guarantee. Two directions again — an untagged commit must be refused, a tagged
+# one must pass. The untagged sha does not exist on purpose: `git tag
+# --points-at` prints nothing for it, so the verdict cannot depend on repo state.
+untagged=1234567890123456789012345678901234567890
+if printf 'refs/heads/main %s refs/heads/main %s\n' "$untagged" "$untagged" \
+    | sh .githooks/pre-push >/dev/null 2>&1; then
+    echo "install-hooks: pre-push ACCEPTS an untagged commit — the tag guard is not running" >&2
+    exit 1
+fi
+
+selftest_tag="review/install-selftest-$$"
+head_sha=$(git rev-parse HEAD)
+git tag -f "$selftest_tag" "$head_sha" >/dev/null 2>&1 || true
+if ! printf 'refs/heads/main %s refs/heads/main %s\n' "$head_sha" "$head_sha" \
+    | sh .githooks/pre-push >/dev/null 2>&1; then
+    git tag -d "$selftest_tag" >/dev/null 2>&1 || true
+    echo "install-hooks: pre-push REFUSES a tagged commit — the guard refuses everything" >&2
+    exit 1
+fi
+git tag -d "$selftest_tag" >/dev/null 2>&1 || true
+
+echo "hooks installed and verified: commit-msg answers both ways, pre-push refuses an untagged commit and accepts a tagged one"
