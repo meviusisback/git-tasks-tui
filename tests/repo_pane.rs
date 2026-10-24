@@ -57,13 +57,23 @@ fn picking_a_repo_filters_the_list_and_an_empty_one_empties_it() {
     let mut app = app_with_two_repos();
     // One keypress from the list: narrowing the list must not need discovery.
     app.update(Msg::Key(Key::Tab));
-    assert_eq!(app.pane, gtasks::app::Pane::Repos, "Tab did not reach the repos pane");
+    assert_eq!(
+        app.pane,
+        gtasks::app::Pane::Repos,
+        "Tab did not reach the repos pane"
+    );
     app.update(Msg::Key(Key::Down)); // row 1: me/empty
-    assert_eq!(app.repos_cursor, 1, "the cursor did not move in the repos pane");
+    assert_eq!(
+        app.repos_cursor, 1,
+        "the cursor did not move in the repos pane"
+    );
     assert!(
         app.visible_items().is_empty(),
         "the list still shows items from another repo: {:?}",
-        app.visible_items().iter().map(|i| i.repo.clone()).collect::<Vec<_>>()
+        app.visible_items()
+            .iter()
+            .map(|i| i.repo.clone())
+            .collect::<Vec<_>>()
     );
 
     app.update(Msg::Key(Key::Down)); // row 2: me/busy
