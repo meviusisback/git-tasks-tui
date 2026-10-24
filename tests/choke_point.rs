@@ -144,18 +144,22 @@ fn the_short_delete_flag_is_allowed_but_force_inside_a_cluster_is_not() {
     assert!(check_argv(&value).is_ok(), "a value is not a flag");
 }
 
-/// D-1 (known gap, LOW): the cluster alphabet does not generalise. `-fR`
-/// carries `-f` plus a letter the alphabet does not know, so it is not
-/// decomposed and passes. This test records the gap so it cannot be forgotten;
-/// when `CheckedArgv` lands (strict scanning for hand-built argvs) it must fail
-/// and be replaced by one that asserts the refusal.
+/// D-1, closed. The gap test said: *if this now fails, D-1 was fixed — replace
+/// this test*. Cluster detection is now by shape, not by a known alphabet, so a
+/// letter outside `SHORT_FLAGS` no longer smuggles `-f` through.
 #[test]
-fn known_gap_a_cluster_with_an_unknown_letter_slips_through() {
-    for cluster in ["-fR", "-fq", "-fn"] {
+fn a_cluster_with_an_unknown_letter_is_refused() {
+    for cluster in ["-fR", "-fq", "-fn", "-fs", "-fC", "-fd", "-df"] {
         let argv = argv(PathBuf::from("/bin/true"), vec![OsString::from(cluster)]);
+        let err = check_argv(&argv).unwrap_err().to_string();
         assert!(
-            check_argv(&argv).is_ok(),
-            "{cluster}: if this now fails, D-1 was fixed — replace this test"
+            err.contains("inside"),
+            "{cluster} hides a forbidden letter: {err}"
         );
+    }
+    // And values that only look like clusters stay values.
+    for value in ["-done", "-done: looks good", "-admin --force"] {
+        let argv = argv(PathBuf::from("/bin/true"), vec![OsString::from(value)]);
+        assert!(check_argv(&argv).is_ok(), "{value} is a value");
     }
 }
