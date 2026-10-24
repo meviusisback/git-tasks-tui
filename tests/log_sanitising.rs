@@ -120,3 +120,28 @@ fn the_cap_does_not_cut_through_a_token() {
         &written[written.len().saturating_sub(80)..]
     );
 }
+
+/// The cap must not cut inside a UTF-8 sequence: the tail is preserved and
+/// re-emitted later, so a cut mid-character would produce a replacement char.
+#[test]
+fn the_cap_does_not_split_a_utf8_sequence() {
+    const CAP: usize = 64 * 1024;
+    let mut sink: Vec<u8> = Vec::new();
+    {
+        let mut writer = SanitisingWriter::new(&mut sink);
+        // 'è' is two bytes, so the boundaries sit at even offsets. An odd total
+        // length puts `len - MAX_SECRET_TAIL` on an odd offset, i.e. **inside**
+        // a character: the cut has to walk back to the previous boundary.
+        let mut pad: String = std::iter::repeat_n('è', CAP / 2).collect();
+        pad.push('a'); // 65_537 bytes: odd
+        writer.write_all(pad.as_bytes()).unwrap();
+        writer.write_all("città più è".as_bytes()).unwrap();
+        writer.write_all(b"\n").unwrap();
+        writer.flush().unwrap();
+    }
+    let written = String::from_utf8(sink).expect("the log must stay valid UTF-8");
+    assert!(
+        !written.contains('\u{FFFD}'),
+        "no replacement character may appear"
+    );
+}
