@@ -132,14 +132,11 @@ fn worktree_resolve_rejects_escapes() {
 /// never the requested branch).
 #[test]
 fn confirm_branch_asks_git_not_the_path() {
-    use gtasks::binaries::Binaries;
+    use gtasks::binaries::{self, Binaries};
     use gtasks::gh::{git, run_pipe};
 
     let git_bin = binaries::resolve("git").expect("test needs a real git");
-    let binaries = Binaries {
-        git: git_bin,
-        gh: std::path::PathBuf::from("gh-unused-in-this-test"),
-    };
+    let binaries = Binaries::new(std::path::PathBuf::from("gh-unused-in-this-test"), git_bin);
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     let target = tmp.path().join("wt");
