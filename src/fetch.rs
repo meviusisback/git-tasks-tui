@@ -110,6 +110,9 @@ fn classify(repo: &str, err: anyhow::Error) -> FetchError {
     }
 }
 
+/// One repo's result, kept with its index so the merge can restore repo order.
+type IndexedResult = (usize, Result<Vec<Item>, FetchError>);
+
 /// Result of fetching several repos: what arrived, and what did not (with the
 /// reason), so the UI can say `failed=N` instead of hiding a broken repo.
 #[derive(Debug, Default)]
@@ -136,7 +139,7 @@ where
 
     let parallel = parallel.clamp(1, 4).min(repos.len().max(1));
     let next = AtomicUsize::new(0);
-    let collected: Mutex<Vec<(usize, Result<Vec<Item>, FetchError>)>> = Mutex::new(Vec::new());
+    let collected: Mutex<Vec<IndexedResult>> = Mutex::new(Vec::new());
 
     std::thread::scope(|scope| {
         for _ in 0..parallel {
