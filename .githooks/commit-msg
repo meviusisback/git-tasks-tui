@@ -1,0 +1,4 @@
+#!/bin/sh
+# Versioned shim: git finds it through `core.hooksPath` (see scripts/install-hooks.sh).
+# The logic lives in scripts/check-claims.sh so it can be run outside git.
+exec "$(git rev-parse --show-toplevel)/scripts/check-claims.sh" "$1"

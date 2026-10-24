@@ -60,3 +60,4 @@ than hidden — and it is why probe 2 counts **processes** instead of asserting 
    raw mode. That one needs the code to exist; the harness is already pty-based,
    so it is a second scenario in the same script, not a second script.
 # z
+# z
