@@ -47,23 +47,41 @@ is a slug validated by `config::validate_repo_slug` (already exists).
 
 ## The check that makes it a guarantee
 
+A flat scan of `argv.args` cannot work: it sees *values* too. The first draft of this
+section did exactly that, and implemented literally it refuses `body = "-admin"` — the very case
+rule 3 says must be accepted. Measured, with the two functions as written (no dependencies, `rustc`):
+
+```
+$ ./check          # ["comment", "--repo", "o/r", "--body", "-admin"]
+REFUSED   <- flag "-admin" is not allowlisted for this action
+```
+
+So the distinction has to be a **type**, not a convention:
+
 ```rust
-pub fn argv_for(b: &Binaries, action: &Action) -> anyhow::Result<Argv> {
-    let (flags, args) = match action { /* build from the list only */ };
-    let argv = git_or_gh(b, repo_path(action), args);
-    ensure_allowlisted(&argv, flags)?;   // every token starting with '-' is in `flags`
-    Ok(argv)
+enum Token {
+    Flag(&'static str),   // must be in FLAGS[action]
+    Value(OsString),      // opaque: never inspected as a flag
 }
 
-fn ensure_allowlisted(argv: &Argv, allowed: &[&str]) -> anyhow::Result<()> {
-    for arg in &argv.args {
-        let text = arg.to_string_lossy();
-        if !text.starts_with('-') { continue; }
-        ensure!(allowed.contains(&text.as_str()), "flag {text:?} is not allowlisted for this action");
+pub fn argv_for(b: &Binaries, action: &Action) -> anyhow::Result<Argv> {
+    let tokens: Vec<Token> = match action { /* only Token::Flag from FLAGS, only Token::Value for values */ };
+    ensure_allowlisted(&tokens, flags_for(action))?;
+    Ok(argv_from(b, repo_path(action), tokens))
+}
+
+fn ensure_allowlisted(tokens: &[Token], allowed: &[&str]) -> anyhow::Result<()> {
+    for token in tokens {
+        if let Token::Flag(flag) = token {
+            ensure!(allowed.contains(flag), "flag {flag:?} is not allowlisted for this action");
+        }
     }
     Ok(())
 }
 ```
+
+Now a value can be neither refused nor accepted by mistake, and every value is emitted together
+with its flag by construction, so `["--body"]` with no value cannot be built at all.
 
 Note the direction: `ensure_allowlisted` validates the argv the code *just built*, so it is not a
 filter a caller can forget — it runs on the only path that exists. Keep `check_argv`'s deny-list in
@@ -82,12 +100,15 @@ the guarantee must not depend on it.
 ## Tests that make the class unreachable
 
 1. `every_action_argv_is_allowlisted` — iterate the `Action` enum (exhaustive `match`, so a new
-   variant is a compile error until it declares its list) and assert `argv ⊂ FLAGS[action]`.
+   variant is a compile error until it declares its list) and assert every `Token::Flag` is in
+   `FLAGS[action]`, and that no `Token::Value` is ever inspected.
 2. `no_action_emits_a_forbidden_flag` — the control: for each action, injecting `--admin` into the
    args must be refused. Without this the first test passes on an empty list.
 3. `a_value_stays_a_value` — `body = "-admin"` must be **accepted and passed as a value** (measured:
    `git commit -m "-x --admin"` records it literally); the counterpart, `a_positional_cannot_be_a_flag`
    — a branch named `-dfdf` must be refused by the type, not by a string inspection.
+   Plus `a_missing_value_cannot_shift_a_flag`: building `["--body"]` without a value is a construction
+   error, not an argv whose next flag slides into the value slot.
 4. `destructive_actions_require_confirmation` — allowlist prevents *injection*, not *intent*: the app
    must still ask (the existing `Modal::Confirm`), and that is a separate test.
 
