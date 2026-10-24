@@ -32,6 +32,7 @@ branch moved afterwards is stale by definition and must be re-tagged.
 | `main@11811b3` | `11811b3` | awaiting verdict | `scripts/review-state.sh` now counts the commits between the newest ledger row and the remote tip; a reviewer runs it first and knows whether the SHA in hand is still the tree | nothing outstanding |
 | `main@81b14fe` | `81b14fe` | awaiting verdict | `review-state.sh` excludes docs-only commits when counting unreviewed code, so the ledger and the tip can finally agree | nothing outstanding |
 | `main@a8c7d83` | `a8c7d83` | awaiting verdict | **r21 LOW closed**: `read_private` opens with `O_NOFOLLOW`, so a symlinked config fails at `open` instead of between `symlink_metadata` and `read_to_string` (unit tests: symlinked file refused, regular file read). **r21 INFO closed**: `Span::plain` sanitises its text, so the public constructor cannot bypass S13. Audited-good from r21: fetch args, `OutputCap`, markdown spans, atomic private writes | nothing outstanding |
+| `main@c7b7daf` | `c7b7daf` | awaiting verdict | **S-2 closed**: `review-state.sh` resolves the repository top first, so the pathspec no longer depends on the cwd (verified from root, `docs/` and `tests/`: same answer). **S-3 closed**: the reference is the newest row whose verdict is `PASS`, and the script prints both the newest row and the newest PASS, so an `awaiting`/`FAIL` row can never read as "in sync" | B-2 and U-1: **closed in `003d47f` and `33823d9`** (before this row) |
 
 ## Standing rules this ledger encodes
 
