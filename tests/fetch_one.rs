@@ -168,3 +168,35 @@ fn a_failing_gh_reports_the_exit_status_and_stderr() {
     assert!(matches!(err, FetchError::Run { .. }), "got {err:?}");
     assert!(err.to_string().contains("no such repo"), "got {err}");
 }
+
+/// The auditor's 401 probe: an authenticated failure is a `Run` error carrying
+/// stderr — which can contain a token. The log layer sanitises it (L-1); this
+/// test pins that it stays a `Run` error and not a parse failure.
+#[test]
+fn a_401_is_a_run_error_carrying_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("gh");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho 'HTTP 401: Bad credentials' >&2\necho 'token: gho_16C7eABCdef' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let err = fetch_with_caps(
+        &argv_for(&program, "acme/widget", ItemKind::Pr),
+        "acme/widget",
+        ItemKind::Pr,
+        Duration::from_secs(10),
+        Caps::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, FetchError::Run { .. }), "got {err:?}");
+    let text = err.to_string();
+    assert!(text.contains("401"), "got {text}");
+
+    // What the log would store is the sanitised form: no token survives.
+    let logged = gtasks::sanitize::sanitize(&text);
+    assert!(!logged.contains("gho_16C7e"), "got {logged}");
+}
