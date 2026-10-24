@@ -352,7 +352,8 @@ impl CheckedArgv {
     pub fn unchecked_for_tests(argv: Argv) -> Self {
         debug_assert!(
             check_argv(&argv).is_ok(),
-            "unchecked_for_tests was given an argv the strict check refuses"
+            "unchecked_for_tests was given an argv the strict check refuses: \
+             this door is for probes, not for bypassing the transport"
         );
         Self(argv)
     }
