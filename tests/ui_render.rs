@@ -164,6 +164,50 @@ fn help_overlay_lists_the_full_keymap() {
         screen.contains("quit (with a confirmation"),
         "quit row: {screen}"
     );
+    assert!(
+        screen.contains("coming in the next stages:"),
+        "future keys get their own section: {screen}"
+    );
+    assert!(
+        screen.contains("repo selection menu (stage 11)"),
+        "future keys name their stage: {screen}"
+    );
+    assert!(
+        !screen.contains("drill into the repo"),
+        "no claims about unimplemented drill-down: {screen}"
+    );
+}
+
+#[test]
+fn recovery_keys_survive_narrow_widths() {
+    // S-1b: at 40 and 20 columns the legend must still show `q` and `?`,
+    // because they are the two keys that explain and exit. They lead the
+    // line, so truncation from the right takes the middle first.
+    let render_narrow = |w: u16, h: u16| {
+        let (app, view) = sample();
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    };
+    let legend = App::default().legend();
+    assert!(
+        legend.starts_with("q quit · ? help"),
+        "recovery keys lead: {legend}"
+    );
+    for (w, h) in [(40, 12), (20, 8)] {
+        let screen = render_narrow(w, h);
+        assert!(screen.contains("q quit"), "{w}x{h}: q visible: {screen}");
+        assert!(screen.contains("? help"), "{w}x{h}: ? visible: {screen}");
+    }
 }
 
 #[test]

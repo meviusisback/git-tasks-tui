@@ -125,8 +125,32 @@ ctl_dotgit_file() {
   info "so clone validation must compare the git dir, not the toplevel"
 }
 
+ctl_spawn_sites() {
+  group "CTL S-SPAWN — every process spawn site is listed, so a new one is a visible decision"
+  local allowed="src/gh/mod.rs src/actions.rs"
+  local found
+  found=$(grep -rn 'Command::new' src --include='*.rs' | sed 's/:[0-9]*:.*//' | sort -u \
+    | sed 's/^ *//')
+  local f ok=1
+  for f in $found; do
+    case " $allowed " in
+      *" $f "*) pass "spawn site is listed: $f";;
+      *) fail "UNLISTED spawn site: $f (add it to allowed with its reason)" "$found"; ok=0;;
+    esac
+  done
+  [ "$ok" -eq 1 ] || return 0
+  local a
+  for a in $allowed; do
+    case "$found" in
+      *"$a"*) ;;
+      *) fail "allowed entry has no spawn site anymore: $a (remove it)" "$found";;
+    esac
+  done
+}
+
 main() {
   have git || { echo "git required" >&2; exit 2; }
+  ctl_spawn_sites
   ctl_worktree_symlink_in_clone
   ctl_outside_root_symlink
   ctl_chmod_follows_symlink

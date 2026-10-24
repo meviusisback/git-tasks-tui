@@ -243,8 +243,9 @@ impl App {
                 query = sanitize(&self.query)
             );
         }
-        let mut line =
-            String::from("←/→ panes · ↑/↓ move · Enter open · R repos · m actions · ? help · q");
+        let mut line = String::from(
+            "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+        );
         if !self.status.is_empty() {
             line.push_str(" │ ");
             line.push_str(&sanitize(&self.status));

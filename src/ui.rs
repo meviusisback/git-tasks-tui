@@ -22,22 +22,28 @@ pub struct ViewModel {
     pub detail: String,
 }
 
-/// The full keymap, one line per key. Also the source of the `?` overlay.
-const HELP_LINES: &[&str] = &[
+/// The keys that work today. Also the source of the `?` overlay.
+const HELP_NOW: &[&str] = &[
     "← / →      move between the left column and the right column",
     "↑ / ↓      move the selection in the left column",
-    "Enter      open the detail box (in repo mode: drill into the repo)",
-    "Esc        back one level: overlay → detail → list (then quit)",
-    "R          repo selection menu (multi-select, Enter applies)",
-    "m          actions menu for the selected item",
-    "w          worktree menu for the selected item",
-    "a          start the agent on the selected item",
-    "s          session menu while the agent runs",
+    "Enter      open the detail box",
+    "Esc        back one level: overlay → detail → list (never quits)",
     "o          open the selected item in the browser",
     "/          filter the visible list",
     "r          refresh",
+    "a          first action on the selected item",
     "?          this keymap",
     "q          quit (with a confirmation if the agent is running)",
+];
+
+/// Keys the overlay would lie about if they were listed above: nothing
+/// happens yet, so they get their own section with the stage that brings
+/// them, instead of reading as available today (X-1).
+const HELP_NEXT: &[&str] = &[
+    "R          repo selection menu (stage 11)",
+    "m          actions menu (stage 14)",
+    "w          worktree menu (stage 15)",
+    "s          agent sessions (stage 16)",
 ];
 
 pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
@@ -55,7 +61,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
 
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(rows[0]);
 
     let (list, mut list_state) = left_list(app, view);
@@ -216,9 +222,18 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 fn draw_help(frame: &mut Frame, area: Rect) {
     let area = centered_rect(70, 80, area);
     frame.render_widget(Clear, area);
-    let text: Vec<ratatui::text::Line<'static>> = HELP_LINES
+    let text: Vec<ratatui::text::Line<'static>> = HELP_NOW
         .iter()
         .map(|line| ratatui::text::Line::from(sanitize(line)))
+        .chain(std::iter::once(ratatui::text::Line::from("")))
+        .chain(std::iter::once(ratatui::text::Line::from(sanitize(
+            "coming in the next stages:",
+        ))))
+        .chain(
+            HELP_NEXT
+                .iter()
+                .map(|line| ratatui::text::Line::from(sanitize(line))),
+        )
         .collect();
     let help = Paragraph::new(text)
         .block(
