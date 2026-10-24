@@ -288,6 +288,37 @@ impl std::io::Write for RotatingFile {
     }
 }
 
+/// Every log line goes through [`crate::sanitize::sanitize`] on the way out.
+///
+/// The log is the one sink that used to write untrusted text verbatim: a `gh`
+/// failure carries stderr, and stderr carries tokens (L-1). Fixing it in the
+/// layer covers every present and future call site, which a `Secret<T>` newtype
+/// would not — that only protects the call sites that remember to use it.
+pub struct SanitisingWriter<W> {
+    inner: W,
+}
+
+impl<W> SanitisingWriter<W> {
+    pub fn new(inner: W) -> Self {
+        Self { inner }
+    }
+}
+
+impl<W: io::Write> io::Write for SanitisingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        let clean = crate::sanitize::sanitize(&text);
+        self.inner.write_all(clean.as_bytes())?;
+        // Report the whole buffer as consumed: the caller must not retry the
+        // remainder, the sanitised text is not byte-for-byte identical.
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Log level from `GTASKS_LOG` (a `tracing_subscriber::EnvFilter` directive),
 /// defaulting to `info`.
 pub fn log_filter() -> EnvFilter {
@@ -327,7 +358,7 @@ pub fn init_file_logging_at(path: &Path) -> anyhow::Result<PathBuf> {
     let writer = RotatingFile::open(path, MAX_LOG_BYTES)?;
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
-        .with_writer(move || writer.clone())
+        .with_writer(move || SanitisingWriter::new(writer.clone()))
         .with_ansi(false)
         .try_init()
         .map_err(|e| anyhow::anyhow!("logging subscriber already initialised: {e}"))?;
