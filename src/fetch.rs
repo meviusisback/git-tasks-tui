@@ -116,6 +116,75 @@ fn classify(repo: &str, err: anyhow::Error) -> FetchError {
     }
 }
 
+/// `gh pr view <n>` / `gh issue view <n>`, argv only.
+pub fn detail_args(repo: &str, kind: ItemKind, number: u64) -> Vec<OsString> {
+    let subcommand = match kind {
+        ItemKind::Pr => "pr",
+        ItemKind::Issue => "issue",
+    };
+    vec![
+        OsString::from(subcommand),
+        OsString::from("view"),
+        OsString::from(number.to_string()),
+        OsString::from("--repo"),
+        OsString::from(repo),
+        OsString::from("--json"),
+        OsString::from("body"),
+    ]
+}
+
+/// Only the body: the list already carries the metadata, and a smaller JSON
+/// keeps the output well inside `Caps`.
+#[derive(serde::Deserialize)]
+struct BodyPayload {
+    #[serde(default)]
+    body: String,
+}
+
+/// Fetch the markdown body of one item.
+pub fn fetch_detail(
+    repo: &str,
+    kind: ItemKind,
+    number: u64,
+    timeout: Duration,
+) -> Result<String, FetchError> {
+    let cwd = std::env::current_dir().map_err(|source| FetchError::Run {
+        repo: repo.to_owned(),
+        source: source.into(),
+    })?;
+    let mut argv = gh(&cwd, detail_args(repo, kind, number));
+    argv.program = crate::binaries::resolve("gh").map_err(|source| FetchError::Run {
+        repo: repo.to_owned(),
+        source,
+    })?;
+    fetch_detail_with_caps(&argv, repo, timeout, Caps::default())
+}
+
+pub fn fetch_detail_with_caps(
+    argv: &Argv,
+    repo: &str,
+    timeout: Duration,
+    caps: Caps,
+) -> Result<String, FetchError> {
+    let output = gh::run_pipe_with_caps(argv, timeout, caps).map_err(|err| classify(repo, err))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(FetchError::Run {
+            repo: repo.to_owned(),
+            source: anyhow::anyhow!("{}: {}", output.status, stderr.trim()),
+        });
+    }
+    if output.truncated {
+        return Err(FetchError::OutputCap);
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let payload: BodyPayload = serde_json::from_str(&text).map_err(|source| FetchError::Parse {
+        repo: repo.to_owned(),
+        source: source.into(),
+    })?;
+    Ok(payload.body)
+}
+
 /// One repo's result, kept with its index so the merge can restore repo order.
 type IndexedResult = (usize, Result<Vec<Item>, FetchError>);
 
