@@ -39,10 +39,14 @@ pub struct SeedFile {
 
 impl SeedFile {
     /// Write `seed` to a fresh unique file inside `dir` and return the owner.
+    /// The directory guarantee is **enforced here**, not assumed: `dir` must be
+    /// a real `0700` directory (a symlink is refused), so a call site that
+    /// forgets `ensure_runtime_dir` cannot leak the seed elsewhere (G-2/S-1).
     /// The file is created atomically with mode `0600` (`create_new` refuses
     /// to follow or trample an existing path, symlink included) and verified
     /// afterwards with `symlink_metadata`.
     pub fn create_in(dir: &Path, seed: &str) -> anyhow::Result<Self> {
+        ensure_runtime_dir(dir)?;
         for _ in 0..100 {
             let n = SEED_COUNTER.fetch_add(1, Ordering::Relaxed);
             let path = dir.join(format!("seed-{}-{n}", std::process::id()));
