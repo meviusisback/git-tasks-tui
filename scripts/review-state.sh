@@ -35,12 +35,13 @@ tips="$(
         git cat-file -e "$sha^{commit}" 2>/dev/null || continue
         git merge-base --is-ancestor "$sha" origin/main 2>/dev/null || continue
         ahead=$(git rev-list --count "$sha..origin/main" -- . ':(exclude)docs' 2>/dev/null || echo 999999)
-        printf '%s|%s|%s\n' "$ahead" "$sha" "$verdict"
+        printf '%s|%s|%s|%s\n' "$ahead" "$sha" "$verdict" "$line"
     done | sort -n -t'|' -k1,1
 )"
 
 last_row=$(printf '%s\n' "$tips" | grep -v '^$' | head -1 || true)
 last_pass=$(printf '%s\n' "$tips" | grep -v '^$' | awk -F'|' '$3 ~ /PASS/ { print; exit }')
+last_pass_row=$(printf '%s' "$last_pass" | cut -d'|' -f4-)
 
 row_sha=$(printf '%s' "$last_row" | cut -d'|' -f2)
 row_verdict=$(printf '%s' "$last_row" | cut -d'|' -f3)
@@ -50,7 +51,7 @@ pass_sha=$(printf '%s' "$last_pass" | cut -d'|' -f2)
 # the row to be true: `key-symbol: path contains "text"`. A merge that was
 # declared but never executed leaves no red test — it leaves a missing symbol,
 # and that is checkable by machine.
-key_symbol=$(printf '%s' "$last_pass" \
+key_symbol=$(printf '%s' "$last_pass_row" \
     | sed -n 's/.*key-symbol: *\([^ ]*\) *\(contains\|absent\) *"\([^"]*\)".*/\1|\2|\3/p')
 ks_status=''
 if [ -n "$key_symbol" ]; then
