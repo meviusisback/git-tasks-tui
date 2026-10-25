@@ -9,8 +9,8 @@ disagree, the handler is right and this file is a bug.
 | `Ctrl-C` | quit — the escape hatch, always live, except with the agent focused, where it interrupts the agent |
 | `Esc` | back **one level**: overlay → confirmation → search → agent → detail → list → repos. It **never quits**: at the outermost level it says `Esc — nothing to close` in the status line |
 | `?` | the overlay of keys (it says which work today and which are promised) |
-| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles all four panes. The mouse is not supported — keyboard only |
-| `Tab` | next pane: list → repos → detail → agent → list (for people who expect it) |
+| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, skipping the empty agent box. The mouse is not supported — keyboard only |
+| `Tab` | next pane: list → repos → detail → list, plus the agent box while an agent runs (for people who expect it) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
 | `Enter` | in the repos pane: drill into that repo's items; in the list: open a tab for the row (the detail follows the active tab); in the search box: leave the box |
 | `t` / `T` | next / previous tab (says `no tabs — Enter opens one` when empty) |

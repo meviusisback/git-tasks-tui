@@ -8,6 +8,8 @@ fn press(app: &mut App, key: Key) {
 
 #[test]
 fn tab_cycles_panes_both_ways() {
+    // Idle: the agent pane stays out of the cycle — cycling into an empty
+    // instructions box is a surprise. `w` reaches it on purpose.
     let mut app = App::default();
     assert_eq!(app.pane, Pane::List);
     press(&mut app, Key::Tab);
@@ -15,7 +17,28 @@ fn tab_cycles_panes_both_ways() {
     press(&mut app, Key::Tab);
     assert_eq!(app.pane, Pane::Detail);
     press(&mut app, Key::Tab);
-    assert_eq!(app.pane, Pane::Agent);
+    assert_eq!(app.pane, Pane::List, "no agent: back to the list");
+    press(&mut app, Key::BackTab);
+    assert_eq!(app.pane, Pane::Detail);
+    press(&mut app, Key::BackTab);
+    assert_eq!(app.pane, Pane::Repos);
+    press(&mut app, Key::BackTab);
+    assert_eq!(app.pane, Pane::List);
+}
+
+#[test]
+fn tab_cycle_includes_the_agent_while_one_runs() {
+    let mut app = App {
+        agent_running: true,
+        ..App::default()
+    };
+    assert_eq!(app.pane, Pane::List);
+    press(&mut app, Key::Tab);
+    assert_eq!(app.pane, Pane::Repos);
+    press(&mut app, Key::Tab);
+    assert_eq!(app.pane, Pane::Detail);
+    press(&mut app, Key::Tab);
+    assert_eq!(app.pane, Pane::Agent, "running: the box joins the cycle");
     press(&mut app, Key::Tab);
     assert_eq!(app.pane, Pane::List);
     press(&mut app, Key::BackTab);

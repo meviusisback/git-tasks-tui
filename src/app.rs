@@ -1477,8 +1477,8 @@ impl App {
                     self.pane = Pane::Detail;
                 }
             }
-            Key::Tab => self.pane = next_pane(self.pane, true),
-            Key::BackTab => self.pane = next_pane(self.pane, false),
+            Key::Tab => self.pane = next_pane(self.pane, true, self.agent_active()),
+            Key::BackTab => self.pane = next_pane(self.pane, false, self.agent_active()),
             Key::Up => self.move_cursor(-1),
             Key::Down => self.move_cursor(1),
             Key::Backspace => {}
@@ -1519,16 +1519,24 @@ impl App {
     }
 }
 
-fn next_pane(pane: Pane, forward: bool) -> Pane {
-    // Order: list → repos → detail → agent. The repos pane comes first on
+fn next_pane(pane: Pane, forward: bool, with_agent: bool) -> Pane {
+    // Order: list → repos → detail, plus the agent pane only while there is
+    // something in it (an agent being arranged or running). Cycling into an
+    // empty instructions box is a surprise, not a shortcut — `w` reaches the
+    // instructions on purpose when idle. The repos pane comes first on
     // purpose: it is how you narrow the list, so it must be one keypress
-    // away from it. The agent pane closes the cycle: the worktree
-    // instructions live there, at the bottom-right.
-    match (pane, forward) {
-        (Pane::List, true) | (Pane::Detail, false) => Pane::Repos,
-        (Pane::Repos, true) | (Pane::Agent, false) => Pane::Detail,
-        (Pane::Detail, true) | (Pane::List, false) => Pane::Agent,
-        (Pane::Agent, true) | (Pane::Repos, false) => Pane::List,
+    // away from it.
+    match (pane, forward, with_agent) {
+        (Pane::List, true, _) => Pane::Repos,
+        (Pane::Repos, true, _) => Pane::Detail,
+        (Pane::Detail, true, true) => Pane::Agent,
+        (Pane::Detail, true, false) => Pane::List,
+        (Pane::Agent, true, _) => Pane::List,
+        (Pane::List, false, true) => Pane::Agent,
+        (Pane::List, false, false) => Pane::Detail,
+        (Pane::Agent, false, _) => Pane::Detail,
+        (Pane::Detail, false, _) => Pane::Repos,
+        (Pane::Repos, false, _) => Pane::List,
     }
 }
 
