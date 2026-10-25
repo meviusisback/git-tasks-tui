@@ -75,9 +75,22 @@ wait_for_row() { # wait_for_row <session> <seconds> <step>
 # The control (3): one repo, isolated config, must show a row.
 mkdir -p "$payload/control/gtasks"
 printf 'repos = ["cli/cli"]\nlimit = 5\n' > "$payload/control/gtasks/config.toml"
+# Authentication: `gh` inside a detached session sees only what we pass. Without
+# the token exported, the run fails for auth and the number says "too slow" —
+# a harness failure wearing the face of a measurement. Pass the variables by
+# NAME (-e VAR), so the value never appears on any command line or in any log.
+auth=""
+for var in GH_TOKEN GITHUB_TOKEN; do
+    eval "val=\${$var:-}"
+    if [ -n "$val" ]; then
+        auth="$auth -e $var"
+    fi
+done
+
+# shellcheck disable=SC2086
 tmux new-session -d -s "$control_session" -x 120 -y 30 \
     -e XDG_CONFIG_HOME="$payload/control" -e XDG_STATE_HOME="$payload/control-state" \
-    "$abs_bin"
+    $auth "$abs_bin"
 if ! control_ms=$(wait_for_row "$control_session" 60 0.25); then
     echo "control           : the pattern matched no item row on a known-good screen"
     echo "verdict           : unmeasurable — the pattern is wrong, not the program"
@@ -91,9 +104,10 @@ mkdir -p "$payload/state"
 config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 repos=$(grep -cE '"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"' "$config_home/gtasks/config.toml" 2>/dev/null || echo 0)
 echo "config read by app: $config_home/gtasks/config.toml ($repos repos)"
+# shellcheck disable=SC2086
 tmux new-session -d -s "$session" -x 120 -y 30 \
     -e XDG_CONFIG_HOME="$config_home" -e XDG_STATE_HOME="$payload/state" \
-    "$abs_bin"
+    $auth "$abs_bin"
 
 # A binary that never started must not be reported as a slow binary: the two
 # verdicts are different, and the first one is a defect of the harness.
