@@ -312,6 +312,25 @@ round trip; they are written here so the next stage does not pay again.
 Theme: Catppuccin Mocha tokens in one module (`src/theme.rs`), no colour literals
 elsewhere; the legend and the status line share the same palette.
 
+## Owed, small, and easy to forget
+
+Each of these was found by measurement and is a one-or-two-line change; none of
+them is a feature. They are listed here because a chat message is not a place
+where work survives.
+
+1. **The `repos` half of the cursor clamp is inert.** `set_lengths` is called
+   three times, always with `self.repos.len()`, so `repos_cursor.min(len - 1)`
+   cannot lower anything, and `apply_repo_filter` already handles an
+   out-of-range cursor (`_ => RepoFilter::All`). Delete that half; keep the
+   `list` half, which really does shorten. Dead code that reads as a guard is
+   worse than no guard: the next reader believes the reorder is defended.
+2. **`last_repo` must not come back.** It has been added and removed twice. The
+   fact that makes it unnecessary — *every* writer of the repo list resets the
+   cursor — belongs in a comment on `set_repos`, not on the clamp.
+3. **The estate of `RepoFilter`.** It was not removed: it is derived from
+   `RepoRow` in exactly one place. Two names for two things (the row, the active
+   filter) is the good outcome; a third representation would not be.
+
 ## Non-negotiables
 
 1. Untrusted text is displayed with escape sequences sanitised and never reaches
