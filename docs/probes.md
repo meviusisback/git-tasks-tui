@@ -134,3 +134,168 @@ absent one. It is also the only form in which an example can **describe a
 signature that does not exist** — `gh(cwd, &args)` with two arguments while
 the real function takes three — without anyone noticing. An example that cannot be made compilable is prose — take it out
 of the code block.
+
+## A probe that certifies a dead field (`5aecae6`)
+
+`last_repo` was added to remember, on the way back from a drill-down, *which repo you came
+from* — and it was **redundant in every reachable state**: the only writer of the repo list
+(`set_repos`) also resets `repo_filter`, so the `Esc` arm guarded by `One(_)` could not run in
+the one case the field was added for, and on every other path the field held the same slug the
+filter already held.
+
+This probe is what proved it, kept here rather than in `tests/` because it **cannot compile on
+`main`**: it touches `app.last_repo`, removed in `b53717f`. Copied into `tests/` it would turn the
+suite red for the wrong reason — a missing field, not a wrong behaviour — so it is a manual
+experiment with a recorded result, **not a gate test**.
+
+Measured on `5aecae6` (both red for the right reason, not on a compile error):
+
+```
+a_production_rebuild_wipes_the_filter_and_esc_never_reads_last_repo ... FAILED
+the_key_sequence_reaches_a_list_pane_where_esc_does_nothing ........... FAILED
+  R+Enter: pane=List filter_all=true last_repo=Some("me/busy") cursor=0 modal=false
+```
+
+The `println!` line is the part that mattered: it shows the state the field was added for, reached
+with **keys only** (`Enter`, `R`, `Enter`) — with the filter already reset to `All`, which is why
+the arm could not fire.
+
+**A correction this probe also taught me**: I first read its second failure as "`Esc` does nothing
+here". Wrong — that tree already had the catch-all arm writing `Esc — nothing to close`, so the key
+*narrated*; the probe asserted that the pane did not move, which is equally true for a silent key
+and for one that writes a status. The instrument answered a different question than the one I asked.
+
+```rust
+
+use gtasks::app::{App, Key, Msg, Pane, RepoFilter};
+use gtasks::model::{Item, ItemKind};
+
+fn item(repo: &str, number: u64, title: &str) -> Item {
+    Item {
+        number,
+        title: title.to_string(),
+        state: "OPEN".into(),
+        is_draft: None,
+        author: None,
+        labels: Vec::new(),
+        updated_at: "2026-10-20T10:00:00Z".into(),
+        created_at: String::new(),
+        url: format!("https://github.com/{repo}/pull/{number}"),
+        head_ref_name: None,
+        review_decision: None,
+        mergeable: None,
+        status_check_rollup: Vec::new(),
+        repo: repo.to_string(),
+        kind: ItemKind::Pr,
+        assignees: Vec::new(),
+        base_ref_name: None,
+        closing_issues_references: Vec::new(),
+    }
+}
+
+fn app_with_two_repos() -> App {
+    let mut app = App::default();
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("me/empty").unwrap(),
+        gtasks::actions::RepoSlug::parse("me/busy").unwrap(),
+    ]);
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![item("me/busy", 7, "seven")],
+        failures: Vec::new(),
+    });
+    app
+}
+
+#[test]
+fn a_production_rebuild_wipes_the_filter_and_esc_never_reads_last_repo() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, row 2
+    app.update(Msg::Key(Key::Enter)); // drill in
+    assert_eq!(app.pane, Pane::List);
+    assert!(matches!(app.repo_filter, RepoFilter::One(_)));
+    assert!(app.last_repo.is_some(), "the origin is recorded at Enter");
+
+    // The only production way the repo list changes (the `R` menu's Enter, or
+    // startup): the same call main.rs and app.rs make.
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("me/busy").unwrap(),
+        gtasks::actions::RepoSlug::parse("me/other").unwrap(),
+    ]);
+
+    assert!(
+        matches!(app.repo_filter, RepoFilter::All),
+        "set_repos resets the filter, so the Esc identity arm's guard is false"
+    );
+    assert!(
+        app.last_repo.is_some(),
+        "last_repo survives the rebuild — it is the only place the origin still is"
+    );
+
+    app.update(Msg::Key(Key::Esc)); // drill out
+    assert_eq!(app.pane, Pane::Repos);
+    assert_eq!(
+        app.repos_cursor, 0,
+        "we land on row 0 via the plain arm, not on the origin's new row (which is 1)"
+    );
+}
+
+#[test]
+fn after_applying_a_selection_the_identity_and_the_filter_disagree() {
+    let mut app = app_with_two_repos();
+    // `open_repo_menu` reads `all_repos`; without it `R` is a status message and
+    // `Enter` becomes request_detail — the test would then "pass" having exercised
+    // nothing. Assert the menu is open before pressing Enter.
+    app.all_repos = vec![
+        gtasks::actions::RepoSlug::parse("me/empty").unwrap(),
+        gtasks::actions::RepoSlug::parse("me/busy").unwrap(),
+    ];
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, row 2
+    app.update(Msg::Key(Key::Enter)); // drill in: List + One(me/busy)
+    assert_eq!(app.pane, Pane::List);
+
+    app.update(Msg::Key(Key::Char('R')));
+    assert!(app.modal.is_some(), "the repo menu must open, or this test proves nothing");
+    app.update(Msg::Key(Key::Enter)); // apply whatever is marked
+
+    println!(
+        "after R+Enter: pane={:?} filter_all={} last_repo={:?} cursor={}",
+        app.pane,
+        matches!(app.repo_filter, RepoFilter::All),
+        app.last_repo.as_ref().map(|s| s.as_str().to_string()),
+        app.repos_cursor,
+    );
+
+    assert!(
+        !(matches!(app.repo_filter, RepoFilter::All) && app.last_repo.is_some()),
+        "identity alive ({:?}) while the filter guarding its only reader is All",
+        app.last_repo.as_ref().map(|s| s.as_str().to_string())
+    );
+}
+```
+
+### Recurrence, measured on `f0a0e3c` (`review/task-13-r2`)
+
+The field came back, and with the fixture made honest the same defect reproduces —
+**keys only**, with the menu asserted open before pressing `Enter`, because without that
+assertion the test "passed" having exercised nothing (an empty `all_repos` makes `R` a
+status message and turns `Enter` into `request_detail`):
+
+```
+after R+Enter: pane=List filter_all=true last_repo=Some("me/busy") cursor=0
+FAILED  after_applying_a_selection_the_identity_and_the_filter_disagree
+        "identity alive (Some(\"me/busy\")) while the filter guarding its only reader is All"
+```
+
+Same shape as `5aecae6`: the one operation that rebuilds the list also clears the filter,
+so the field survives exactly where nothing reads it. Removing it needs no replacement:
+`filter = All, cursor = 0` after a selection is the coherent outcome ("you just chose which
+repos to view, so you see everything").
+
+**The lesson that keeps repeating**: every time I dropped a precondition from the fixture the
+test stayed green for a different reason. A test whose setup is incomplete fails at the same
+place a correct one fails, and passes at the same place a truncated one passes.
+
