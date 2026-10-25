@@ -166,11 +166,39 @@ fn an_existing_tree_is_used_not_created() {
     assert_eq!(menu.rows.len(), 1);
     assert_eq!(menu.rows[0].path, path);
     press(&mut app, Key::Enter);
-    let plan = app
-        .agent_requested
+    let (plan, place) = app
+        .agent_place
         .as_ref()
-        .expect("using the row hands the plan to the loop");
+        .expect("using the row hands the plan plus its path to the loop");
     assert_eq!(plan.branch, "fix-foo");
+    assert_eq!(*place, path, "the row's real path — never re-derived");
+}
+
+#[test]
+fn a_renamed_tree_launches_where_it_is_not_where_it_was() {
+    // A rename outside the app leaves the directory out of sync with the
+    // branch: the dir is still `fix-foo` but the tree is on `fix-bar`.
+    // Using the row must hand the loop the real path, or it would ask to
+    // create a tree that already exists elsewhere.
+    let (mut app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    let path = plant_worktree(&root, "fix-foo");
+    let gitdir = root.join("gitdir-").join("fix-foo");
+    std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/fix-bar\n").unwrap();
+    open_menu(&mut app);
+    confirm_first_row(&mut app);
+    let Some(Modal::Worktrees(menu)) = app.modal.as_ref() else {
+        panic!("the drifted tree is still listed, got {:?}", app.modal);
+    };
+    assert_eq!(menu.rows.len(), 1);
+    assert_eq!(menu.rows[0].branch.as_str(), "fix-bar");
+    press(&mut app, Key::Enter);
+    let (plan, place) = app
+        .agent_place
+        .as_ref()
+        .expect("using the row hands the plan plus its path to the loop");
+    assert_eq!(plan.branch, "fix-bar");
+    assert_eq!(*place, path, "the real directory, not resolve_in(fix-bar)");
 }
 
 #[test]

@@ -205,6 +205,38 @@ fn start_agent(
     }
 }
 
+/// Launch on the exact tree the worktree picker handed over (it exists —
+/// the menu listed it). No resolve: after an outside rename the directory
+/// no longer matches the branch name, and re-deriving the path would point
+/// at a directory that was never created. If the tree vanished meanwhile,
+/// it falls back to the creation question instead of failing silently.
+fn start_placed(
+    app: &mut App,
+    plan: AgentPlan,
+    path: PathBuf,
+    term_size: (u16, u16),
+    session: &mut Option<EmbeddedSession>,
+) {
+    // One agent at a time, same as every other launch.
+    if session.is_some() {
+        app.status = "an agent is already running in the box below".to_string();
+        return;
+    }
+    match agent::next_step(path) {
+        agent::AgentNext::Launch(path) => {
+            launch_agent(app, &plan, &path, term_size, session);
+        }
+        agent::AgentNext::AskToCreate(path) => {
+            let question = format!(
+                "no worktree for {}@{} — create it and start the agent?",
+                plan.repo, plan.branch,
+            );
+            app.modal = Some(Modal::Confirm(question));
+            app.pending = Some(Pending::Agent(plan, path));
+        }
+    }
+}
+
 /// Rename a worktree from a validated order: the branch first, then the
 /// move. Branch-first means a failed move leaves a valid tree at the old
 /// path on the new branch — still usable, never half-moved. Refused while a
@@ -707,6 +739,9 @@ fn run_tui() -> anyhow::Result<()> {
                 term_size,
                 &mut embedded,
             );
+        }
+        if let Some((plan, path)) = app.agent_place.take() {
+            start_placed(&mut app, plan, path, term_size, &mut embedded);
         }
         if let Some(order) = app.rename_go.take() {
             rename_worktree(&mut app, &binaries, order, &embedded);

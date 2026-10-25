@@ -348,6 +348,12 @@ pub struct App {
     /// Set by `y` on the create question, consumed by the loop: the plan
     /// plus the worktree the user agreed to create.
     pub agent_go: Option<(AgentPlan, std::path::PathBuf)>,
+    /// Set by `Enter` on a worktree row: the plan plus the tree's real path.
+    /// The loop launches there without re-deriving the path from the branch:
+    /// a rename outside the app leaves the directory out of sync with the
+    /// branch name, and the derived path would point at a directory that
+    /// was never created.
+    pub agent_place: Option<(AgentPlan, std::path::PathBuf)>,
     /// Set by `Enter` on the rename prompt, consumed by the loop: rename
     /// the branch, then move the tree. No confirm — nothing is lost.
     pub rename_go: Option<crate::worktree::WorktreeRename>,
@@ -400,6 +406,7 @@ impl Default for App {
             agent_dismissed_for: None,
             agent_requested: None,
             agent_go: None,
+            agent_place: None,
             rename_go: None,
             delete_go: None,
             worktree_root: None,
@@ -1120,8 +1127,9 @@ impl App {
     }
 
     /// `Enter` on a worktree row: work on it — the plan takes the row's
-    /// branch and goes to the loop, which launches straight into the
-    /// existing tree (no creation question for what is already there).
+    /// branch and the loop launches on the row's path. The path travels
+    /// with the choice instead of being re-derived from the branch: after
+    /// an outside rename the two no longer match.
     fn use_worktree_row(&mut self) {
         if let Some(Modal::Worktrees(menu)) = self.modal.take() {
             let Some(row) = menu.rows.get(menu.cursor).cloned() else {
@@ -1131,7 +1139,7 @@ impl App {
             let mut plan = menu.plan;
             plan.branch = row.branch.as_str().to_string();
             plan.agent = menu.agent;
-            self.agent_requested = Some(plan);
+            self.agent_place = Some((plan, row.path));
         }
     }
 
