@@ -342,6 +342,14 @@ round trip; they are written here so the next stage does not pay again.
   allowlisted) and the signal handlers ("belong to the same restore" — they
   already ended in `Drop`). Both cost a round of deciding to apply something
   already applied. Ten minutes of measuring beats a day of believing.
+- **Removing a field "nobody reads" needs two questions, not one.** (1) who
+  reads it? (2) what does it say to the person who writes it? The greps answer
+  the first; only the user's machine answers the second. Measured 2026-10-25:
+  `clone_roots` had zero readers, so it was removed — and it was the only place
+  that said *where the local clones are* (26 of them, in two directories). The
+  agent window stopped working on the machine that used it. "The suite is
+  identical" is the right proof for a field that does nothing; it is silent for
+  a field that describes a configuration.
 - **Commit before you mutate.** Four times in this project a `checkout --`,
   `reset --hard` or an abandoned rebase destroyed work that was not committed —
   by both humans and agents. A copy in `/tmp` is luck; a commit is a guarantee.
