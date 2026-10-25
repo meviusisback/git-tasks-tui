@@ -304,6 +304,11 @@ round trip; they are written here so the next stage does not pay again.
   empty must then be read with the **real** `git`: a fake cannot testify about
   what it did not do, and a fake grading its own homework is the same vacuity as
   a scan that matches nothing.
+- **A config key that is silently clamped is a lie.** `config.toml` says
+  `parallel = 6`; `fetch_many_with` does `parallel.clamp(1, 4)`, and a test pins
+  the clamp. The file therefore states something the program cannot do, and the
+  person tuning it has no way to learn that. Either honour the value, or refuse
+  it at load with a message — never accept it and ignore it.
 - **A probe is not a test.** Non-deterministic checks (the TOCTOU window between
   `create_dir` and `git worktree add`) are run by hand and written down as
   probes; they never enter the gate, because a flaky green is worse than an
