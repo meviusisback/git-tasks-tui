@@ -329,6 +329,15 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **A guard that cannot enter must leave the world as it found it.** `TuiGuard::enter`
+  enables raw mode and then enters the alternate screen; if the second step fails
+  it returns `Err` with raw mode still on and no `Drop` to undo it — a terminal
+  with no echo and no line editing, from a state nobody tests because it lives in
+  the binary (`main.rs`) and no test can name it. Two rules follow: undo the first
+  step before returning the error, and **move the guard into the library** so the
+  property can be asserted (`main` loop and the agent handoff share it). The
+  property, in one line: *the terminal comes back as you found it — even if
+  entering fails halfway, even if the body panics, even if the child dies.*
 - **A timeout on a write does not say whether the write happened.** Measured
   (2026-10-25): `gh pr create` answered `HTTP 504: Gateway Timeout` and the pull
   request had been created anyway (#30, OPEN). For a read the ambiguity is
