@@ -240,38 +240,6 @@ fn live_in_group(group: u32) -> Vec<u32> {
     out
 }
 
-/// Pids whose full command line equals `want` and whose state is not zombie.
-fn live_processes_matching(want: &str) -> Vec<u32> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid): Option<u32> = name.to_string_lossy().parse().ok() else {
-            continue;
-        };
-        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-        let flat: Vec<String> = cmdline
-            .split(|b| *b == 0)
-            .filter(|s| !s.is_empty())
-            .map(|s| String::from_utf8_lossy(s).into_owned())
-            .collect();
-        if flat.join(" ") != want {
-            continue;
-        }
-        // /proc/<pid>/stat: state is the field after the last ')' (comm may
-        // contain spaces or parens).
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-        let state = stat
-            .rfind(')')
-            .and_then(|i| stat[i + 2..].split(' ').next());
-        if state != Some("Z") {
-            out.push(pid);
-        }
-    }
-    out
-}
 
 /// S12: a stderr flood is capped, and the flag says so.
 #[test]
