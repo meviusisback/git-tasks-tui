@@ -53,3 +53,36 @@ fn freshness_is_exact_equality() {
     assert!(!gtasks::cache::is_fresh(&items, &[item("me/a", 2)]));
     assert!(!gtasks::cache::is_fresh(&items, &[]));
 }
+
+#[test]
+fn bodies_roundtrip_per_item_and_kind() {
+    use gtasks::cache::Resolve;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    gtasks::cache::save_detail(root, "o/r", 7, "2026-10-20T10:00:00Z", "the body").unwrap();
+    gtasks::cache::save_diff(root, "o/r", 7, "2026-10-20T10:00:00Z", "the diff").unwrap();
+    // Body and diff share the item but never the file.
+    let body = gtasks::cache::load_detail(root, "o/r", 7).expect("cached body");
+    assert_eq!(body.text, "the body");
+    let diff = gtasks::cache::load_diff(root, "o/r", 7).expect("cached diff");
+    assert_eq!(diff.text, "the diff");
+    // Same stamp: no fetch. New stamp: show it, refetch behind. Nothing:
+    // fetch, show the loading state meanwhile.
+    assert_eq!(
+        gtasks::cache::resolve(Some(body.clone()), "2026-10-20T10:00:00Z"),
+        Resolve::Fresh("the body".to_string())
+    );
+    assert_eq!(
+        gtasks::cache::resolve(Some(body), "2026-10-21T10:00:00Z"),
+        Resolve::Stale("the body".to_string())
+    );
+    assert_eq!(
+        gtasks::cache::resolve(None, "2026-10-20T10:00:00Z"),
+        Resolve::Missing
+    );
+    // A missing or broken file is not an error.
+    assert!(gtasks::cache::load_detail(root, "o/r", 8).is_none());
+    std::fs::create_dir_all(root.join("o/r")).unwrap();
+    std::fs::write(root.join("o/r/9.body.json"), "{not json").unwrap();
+    assert!(gtasks::cache::load_detail(root, "o/r", 9).is_none());
+}

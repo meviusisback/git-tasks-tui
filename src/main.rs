@@ -480,6 +480,16 @@ fn spawn_detail(
 type DetailResult = Result<String, fetch::FetchError>;
 type PendingDetail = (String, u64, Receiver<DetailResult>);
 
+/// The item's `updated_at` for the cache: a body cached under this stamp is
+/// current, anything else is stale. `None` when the item left the list —
+/// the fetch then runs and fails honestly instead of trusting the disk.
+fn item_updated_at(app: &App, repo: &str, number: u64) -> Option<String> {
+    app.items
+        .iter()
+        .find(|item| item.repo == repo && item.number == number)
+        .map(|item| item.updated_at.clone())
+}
+
 /// What a diff fetch returns, and the tuple kept while it is in flight.
 type DiffResult = Result<String, fetch::FetchError>;
 type PendingDiff = (String, u64, Receiver<DiffResult>);
@@ -596,6 +606,9 @@ fn run_tui() -> anyhow::Result<()> {
     // background. A broken cache is ignored — the fetch is the source of
     // truth, the cache only speed.
     let cache_path = app_dir().map(|base| base.join("items-cache.json"));
+    // Bodies and diffs, one file per item: shown at once on selection,
+    // revalidated in the background when the list moved on.
+    let detail_cache_dir = app_dir().map(|base| base.join("details"));
     let mut cached_items: Option<Vec<gtasks::model::Item>> =
         cache_path.as_deref().and_then(gtasks::cache::load);
     if let Some(items) = cached_items.clone() {
@@ -672,7 +685,20 @@ fn run_tui() -> anyhow::Result<()> {
         if let Some(result) = detail_result {
             if let Some((repo, number, _)) = pending_detail.take() {
                 match result {
-                    Ok(body) => app.apply_detail(&repo, number, body),
+                    Ok(body) => {
+                        // The fetch is the source of truth: it replaces the
+                        // cache, stale or not, before painting.
+                        if let Some(dir) = detail_cache_dir.as_deref() {
+                            if let Some(stamp) = item_updated_at(&app, &repo, number) {
+                                if let Err(err) =
+                                    gtasks::cache::save_detail(dir, &repo, number, &stamp, &body)
+                                {
+                                    tracing::warn!("cannot save the body cache: {err:#}");
+                                }
+                            }
+                        }
+                        app.apply_detail(&repo, number, body);
+                    }
                     Err(err) => {
                         // Do not leave the request pending: it would be retried
                         // on every loop iteration.
@@ -699,14 +725,28 @@ fn run_tui() -> anyhow::Result<()> {
         }
         if let Some(result) = diff_result {
             if let Some((repo, number, _)) = pending_diff.take() {
-                if let Err(err) = &result {
-                    // Do not leave the request pending: it would be retried
-                    // on every loop iteration. The modal stays open showing
-                    // the failure (apply_diff writes it), so the status
-                    // line echo is for the record, not the discovery.
-                    app.status = format!("diff failed: {err}");
+                match result {
+                    Ok(text) => {
+                        if let Some(dir) = detail_cache_dir.as_deref() {
+                            if let Some(stamp) = item_updated_at(&app, &repo, number) {
+                                if let Err(err) =
+                                    gtasks::cache::save_diff(dir, &repo, number, &stamp, &text)
+                                {
+                                    tracing::warn!("cannot save the diff cache: {err:#}");
+                                }
+                            }
+                        }
+                        app.apply_diff(&repo, number, Ok(text));
+                    }
+                    Err(err) => {
+                        // Do not leave the request pending: it would be retried
+                        // on every loop iteration. The modal stays open showing
+                        // the failure (apply_diff writes it), so the status
+                        // line echo is for the record, not the discovery.
+                        app.status = format!("diff failed: {err}");
+                        app.apply_diff(&repo, number, Err(err));
+                    }
                 }
-                app.apply_diff(&repo, number, result);
             }
         }
 
@@ -793,25 +833,89 @@ fn run_tui() -> anyhow::Result<()> {
             }
         }
 
-        // A request from the key handler.
+        // A request from the key handler. The disk is asked first: a body
+        // cached for this `updated_at` paints at once with no fetch, a
+        // stale one paints at once and refetches behind.
         if pending_detail.is_none() {
             if let Some((repo, number)) = app.detail_requested.clone() {
-                pending_detail = Some((
-                    repo.clone(),
-                    number,
-                    spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
-                ));
+                let stamp = item_updated_at(&app, &repo, number);
+                let cached = detail_cache_dir
+                    .as_deref()
+                    .and_then(|dir| gtasks::cache::load_detail(dir, &repo, number));
+                match (stamp, cached) {
+                    (Some(stamp), cached) => match gtasks::cache::resolve(cached, &stamp) {
+                        gtasks::cache::Resolve::Fresh(text) => {
+                            app.apply_detail(&repo, number, text);
+                        }
+                        gtasks::cache::Resolve::Stale(text) => {
+                            app.apply_detail(&repo, number, text);
+                            // The apply above clears the request; raise it
+                            // again for the revalidation below.
+                            app.detail_requested = Some((repo.clone(), number));
+                            pending_detail = Some((
+                                repo.clone(),
+                                number,
+                                spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
+                            ));
+                        }
+                        gtasks::cache::Resolve::Missing => {
+                            pending_detail = Some((
+                                repo.clone(),
+                                number,
+                                spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
+                            ));
+                        }
+                    },
+                    (None, _) => {
+                        pending_detail = Some((
+                            repo.clone(),
+                            number,
+                            spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
+                        ));
+                    }
+                }
             }
         }
 
-        // A diff request from the key handler.
+        // A diff request from the key handler. Same disk-first rule as the
+        // body: a cached diff for this `updated_at` opens at once, a stale
+        // one opens at once and refetches behind.
         if pending_diff.is_none() {
             if let Some((repo, number)) = app.diff_requested.clone() {
-                pending_diff = Some((
-                    repo.clone(),
-                    number,
-                    spawn_diff(binaries.clone(), repo, number, timeout),
-                ));
+                let stamp = item_updated_at(&app, &repo, number);
+                let cached = detail_cache_dir
+                    .as_deref()
+                    .and_then(|dir| gtasks::cache::load_diff(dir, &repo, number));
+                match (stamp, cached) {
+                    (Some(stamp), cached) => match gtasks::cache::resolve(cached, &stamp) {
+                        gtasks::cache::Resolve::Fresh(text) => {
+                            app.apply_diff(&repo, number, Ok(text));
+                        }
+                        gtasks::cache::Resolve::Stale(text) => {
+                            app.apply_diff(&repo, number, Ok(text));
+                            app.diff_requested = Some((repo.clone(), number));
+                            pending_diff = Some((
+                                repo.clone(),
+                                number,
+                                spawn_diff(binaries.clone(), repo, number, timeout),
+                            ));
+                        }
+                        gtasks::cache::Resolve::Missing => {
+                            pending_diff = Some((
+                                repo.clone(),
+                                number,
+                                spawn_diff(binaries.clone(), repo, number, timeout),
+                            ));
+                        }
+                    },
+                    (None, _) => {
+                        pending_diff = Some((
+                            repo.clone(),
+                            number,
+                            spawn_diff(binaries.clone(), repo, number, timeout),
+                        ));
+                    }
+                }
             }
         }
 
