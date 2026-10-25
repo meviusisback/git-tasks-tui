@@ -36,9 +36,15 @@ pub fn border_focused() -> Style {
     Style::default().fg(FOCUSED)
 }
 
-/// Pane titles.
+/// Pane titles: brighter when focused, and bold so the title reads as a
+/// title and the rows below as content.
 pub fn title(focused: bool) -> Style {
-    Style::default().fg(if focused { FOCUSED } else { SUBTEXT })
+    let base = Style::default().fg(if focused { FOCUSED } else { SUBTEXT });
+    if focused {
+        base.add_modifier(Modifier::BOLD)
+    } else {
+        base
+    }
 }
 
 /// The selected row.

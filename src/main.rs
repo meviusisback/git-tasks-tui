@@ -370,6 +370,18 @@ fn run_tui() -> anyhow::Result<()> {
     // open tabs come back from `state.json`. Unknown values fall back
     // instead of breaking startup.
     app.restore_session(&state);
+    // The items cache paints instantly; the fetch below refreshes in the
+    // background. A broken cache is ignored — the fetch is the source of
+    // truth, the cache only speed.
+    let cache_path = app_dir().map(|base| base.join("items-cache.json"));
+    let mut cached_items: Option<Vec<gtasks::model::Item>> =
+        cache_path.as_deref().and_then(gtasks::cache::load);
+    if let Some(items) = cached_items.clone() {
+        app.items = items;
+        app.set_lengths(app.repos.len(), app.visible_items().len());
+        app.refresh_status();
+        app.status = format!("{} — cached, refreshing…", app.status);
+    }
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
         all.clone(),
@@ -384,7 +396,26 @@ fn run_tui() -> anyhow::Result<()> {
         if let Some(rx) = &pending {
             match rx.try_recv() {
                 Ok(outcome) => {
+                    // Freshness check: unchanged means the screen and the
+                    // cache stay; changed means both are replaced together.
+                    let changed = cached_items
+                        .as_ref()
+                        .map(|cached| !gtasks::cache::is_fresh(cached, &outcome.items))
+                        .unwrap_or(true);
                     app.apply_outcome(outcome);
+                    if changed {
+                        if let Some(path) = cache_path.as_deref() {
+                            match gtasks::cache::save(path, &app.items) {
+                                Ok(()) => cached_items = Some(app.items.clone()),
+                                Err(err) => {
+                                    tracing::warn!("cannot save the items cache: {err:#}");
+                                    cached_items = Some(app.items.clone());
+                                }
+                            }
+                        }
+                    } else {
+                        app.status = format!("up to date — {}", app.status);
+                    }
                     pending = None;
                     // No prefetch: the detail body is fetched only on explicit
                     // request (Enter). The list already shows every field.

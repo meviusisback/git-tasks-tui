@@ -101,19 +101,23 @@ fn a_full_pr_shows_every_present_field() {
     assert_eq!(
         rows,
         vec![
-            "#12 Add widget",
-            "state: OPEN",
-            "author: alberto",
-            "labels: bug, ui",
-            "assignees: bob",
+            "**#12 Add widget**",
+            "",
+            "**state:** OPEN",
+            "**author:** alberto",
+            "**labels:** bug, ui",
+            "**assignees:** bob",
             "created 2d ago · updated 1h ago",
+            "",
             "feat/x → main",
-            "checks: 1 passed, 1 failed (lint), 1 pending",
-            "mergeable: MERGEABLE",
-            "review: APPROVED",
-            "linked: #5 linked issue",
-            "url: https://github.com/o/r/pull/12",
-            "repo: o/r",
+            "",
+            "**checks:** 1 passed, 1 failed (lint), 1 pending",
+            "**mergeable:** MERGEABLE",
+            "**review:** APPROVED",
+            "",
+            "**linked:** #5 linked issue",
+            "**url:** https://github.com/o/r/pull/12",
+            "**repo:** o/r",
         ]
     );
 }
@@ -132,11 +136,11 @@ fn failed_checks_count_by_name_and_cap_at_two_plus_n() {
     let mut item = rich_pr();
     item.status_check_rollup = vec![failing("ci"), failing("ci")];
     let rows = item.detail_fields(NEW_YEAR);
-    assert!(rows.contains(&"checks: 0 passed, 2 failed (ci ×2)".to_string()));
+    assert!(rows.contains(&"**checks:** 0 passed, 2 failed (ci ×2)".to_string()));
 
     item.status_check_rollup = vec![failing("lint"), failing("ci"), failing("docs")];
     let rows = item.detail_fields(NEW_YEAR);
-    assert!(rows.contains(&"checks: 0 passed, 3 failed (lint, ci, +1)".to_string()));
+    assert!(rows.contains(&"**checks:** 0 passed, 3 failed (lint, ci, +1)".to_string()));
 }
 
 #[test]
@@ -160,7 +164,13 @@ fn empty_fields_are_omitted_never_blank() {
     // so zero is a datum, not an absence.
     assert_eq!(
         rows,
-        vec!["#12 Add widget", "state: OPEN", "checks: 0 passed"]
+        vec![
+            "**#12 Add widget**",
+            "",
+            "**state:** OPEN",
+            "",
+            "**checks:** 0 passed"
+        ]
     );
     for row in &rows {
         assert!(
@@ -172,7 +182,7 @@ fn empty_fields_are_omitted_never_blank() {
     // there the line is omitted — "never asked" is not "none".
     item.kind = ItemKind::Issue;
     let rows = item.detail_fields(NEW_YEAR);
-    assert_eq!(rows, vec!["#12 Add widget", "state: OPEN"]);
+    assert_eq!(rows, vec!["**#12 Add widget**", "", "**state:** OPEN"]);
 }
 
 #[test]

@@ -37,6 +37,7 @@ fn sample() -> (App, ViewModel) {
     let view = ViewModel {
         repos: vec!["owner/repo".into()],
         items: vec!["#12 Add widget".into(), "#7 Fix crash".into()],
+        item_kinds: vec![None, None],
         detail: "Body line one\nBody line two".into(),
         tabs: Vec::new(),
         active_tab: None,

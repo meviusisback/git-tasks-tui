@@ -6,22 +6,22 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Whether an item came from `gh pr list` or `gh issue list`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ItemKind {
     Pr,
     #[default]
     Issue,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Author {
     pub login: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Label {
     pub name: String,
     #[serde(default)]
@@ -30,7 +30,7 @@ pub struct Label {
 
 /// One entry of `statusCheckRollup`; `gh` varies the shape by provider, so
 /// every field is optional and unknown keys are ignored.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Check {
     #[serde(default)]
@@ -43,7 +43,7 @@ pub struct Check {
 
 /// One entry of `closingIssuesReferences`; shape varies, so everything is
 /// optional and unknown keys are ignored — same discipline as `Check`.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClosingRef {
     #[serde(default)]
@@ -53,7 +53,7 @@ pub struct ClosingRef {
 }
 
 /// A pull request or an issue, as returned by the pinned `--json` field list.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Item {
     pub number: u64,
@@ -87,10 +87,12 @@ pub struct Item {
     #[serde(default)]
     pub closing_issues_references: Vec<ClosingRef>,
     /// Set by the fetcher: the payload does not say which repo it came from.
-    #[serde(skip)]
+    /// Serialized for the items cache, defaulted when a payload omits it.
+    #[serde(default)]
     pub repo: String,
     /// Set by the fetcher: the payload does not say PR vs issue.
-    #[serde(skip)]
+    /// Serialized for the items cache, defaulted when a payload omits it.
+    #[serde(default)]
     pub kind: ItemKind,
 }
 
@@ -170,18 +172,26 @@ impl Item {
     /// Structured detail rows, one per present field. Empty fields are
     /// *omitted*, never blank: a blank line would claim "none".
     pub fn detail_fields(&self, now_unix: u64) -> Vec<String> {
-        let mut rows = vec![format!("#{} {}", self.number, self.title)];
-        let mut state = format!("state: {}", self.state);
+        // Sections read as sections: the title, then who/when, then where it
+        // merges, then CI, then links — blank lines between, field names in
+        // bold, values plain. The `**` markers are Markdown the detail pane
+        // renders; on screen only the names are bold.
+        let title = vec![format!("**#{} {}**", self.number, self.title)];
+        let mut meta = Vec::new();
+        let mut refs = Vec::new();
+        let mut ci = Vec::new();
+        let mut links = Vec::new();
+        let mut state = format!("**state:** {}", self.state);
         if self.is_draft == Some(true) {
             state.push_str(" (draft)");
         }
-        rows.push(state);
+        meta.push(state);
         if let Some(author) = &self.author {
-            rows.push(format!("author: {}", author.login));
+            meta.push(format!("**author:** {}", author.login));
         }
         if !self.labels.is_empty() {
-            rows.push(format!(
-                "labels: {}",
+            meta.push(format!(
+                "**labels:** {}",
                 self.labels
                     .iter()
                     .map(|label| label.name.as_str())
@@ -190,8 +200,8 @@ impl Item {
             ));
         }
         if !self.assignees.is_empty() {
-            rows.push(format!(
-                "assignees: {}",
+            meta.push(format!(
+                "**assignees:** {}",
                 self.assignees
                     .iter()
                     .map(|a| a.login.as_str())
@@ -207,15 +217,15 @@ impl Item {
             when.push(format!("updated {ago}"));
         }
         if !when.is_empty() {
-            rows.push(when.join(" · "));
+            meta.push(when.join(" · "));
         }
         match (
             Self::present(&self.head_ref_name),
             Self::present(&self.base_ref_name),
         ) {
-            (Some(head), Some(base)) => rows.push(format!("{head} → {base}")),
-            (Some(head), None) => rows.push(format!("head: {head}")),
-            (None, Some(base)) => rows.push(format!("base: {base}")),
+            (Some(head), Some(base)) => refs.push(format!("{head} → {base}")),
+            (Some(head), None) => refs.push(format!("**head:** {head}")),
+            (None, Some(base)) => refs.push(format!("**base:** {base}")),
             (None, None) => {}
         }
         // `checks: none` and `checks: never asked` are different sentences.
@@ -237,7 +247,7 @@ impl Item {
                     pending += 1;
                 }
             }
-            let mut line = format!("checks: {passed} passed");
+            let mut line = format!("**checks:** {passed} passed");
             if !failed.is_empty() {
                 // Count by name: three red jobs of one workflow mean "that
                 // workflow is red", not the same name three times. Past two
@@ -270,13 +280,13 @@ impl Item {
             if pending > 0 {
                 line.push_str(&format!(", {pending} pending"));
             }
-            rows.push(line);
+            ci.push(line);
         }
         if let Some(mergeable) = Self::present(&self.mergeable) {
-            rows.push(format!("mergeable: {mergeable}"));
+            ci.push(format!("**mergeable:** {mergeable}"));
         }
         if let Some(review) = Self::present(&self.review_decision) {
-            rows.push(format!("review: {review}"));
+            ci.push(format!("**review:** {review}"));
         }
         let linked: Vec<String> = self
             .closing_issues_references
@@ -289,13 +299,22 @@ impl Item {
             })
             .collect();
         if !linked.is_empty() {
-            rows.push(format!("linked: {}", linked.join(", ")));
+            links.push(format!("**linked:** {}", linked.join(", ")));
         }
         if !self.url.is_empty() {
-            rows.push(format!("url: {}", self.url));
+            links.push(format!("**url:** {}", self.url));
         }
         if !self.repo.is_empty() {
-            rows.push(format!("repo: {}", self.repo));
+            links.push(format!("**repo:** {}", self.repo));
+        }
+        // Sections joined with a blank line between non-empty ones, so the
+        // detail reads as blocks instead of a wall of rows.
+        let mut rows = title;
+        for group in [meta, refs, ci, links] {
+            if !group.is_empty() {
+                rows.push(String::new());
+                rows.extend(group);
+            }
         }
         rows
     }

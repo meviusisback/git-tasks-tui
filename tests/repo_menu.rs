@@ -54,6 +54,28 @@ fn space_toggles_and_the_cursor_moves() {
 }
 
 #[test]
+fn a_marks_every_repo_and_n_clears_them() {
+    let mut app = app_with_three_repos();
+    open_menu(&mut app);
+    app.update(Msg::Key(Key::Char('n')));
+    assert!(marked(&app).is_empty(), "n unmarks everything");
+    app.update(Msg::Key(Key::Char('a')));
+    assert_eq!(marked(&app), vec![0, 1, 2], "a marks everything");
+}
+
+#[test]
+fn applying_an_empty_check_shows_everything() {
+    // `n` then `Enter`: empty means "everything", like an empty state file —
+    // one meaning, said out loud.
+    let mut app = app_with_three_repos();
+    open_menu(&mut app);
+    app.update(Msg::Key(Key::Char('n')));
+    app.update(Msg::Key(Key::Enter));
+    assert!(app.modal.is_none(), "Enter applies and closes");
+    assert_eq!(app.repos.len(), 4, "all repos plus the All row");
+}
+
+#[test]
 fn enter_applies_to_the_live_list_and_reports_for_save() {
     let mut app = app_with_three_repos();
     open_menu(&mut app);

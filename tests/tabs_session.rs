@@ -72,6 +72,10 @@ fn enter_in_the_list_opens_a_tab_and_the_detail_follows_it() {
 fn t_cycles_tabs_forward_and_back() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // #1
+    // The list narrowed to the first tab's repo: climb out to open #2.
+    press(&mut app, Key::Esc);
+    press(&mut app, Key::Up);
+    press(&mut app, Key::Enter);
     press(&mut app, Key::Down);
     press(&mut app, Key::Enter); // #2
     assert_eq!(app.tabs.len(), 2);
@@ -138,13 +142,18 @@ fn the_agent_panel_names_the_worktree_steps() {
     let app = app_with_items();
     let text = app.agent_panel_text();
     for line in [
-        "g create worktree + launch agent",
-        "Enter opens a tab",
-        "t/T switch",
+        "g creates the worktree + launches the agent",
+        "task ·",
         "profile ·",
         "clones ·",
     ] {
         assert!(text.contains(line), "agent pane says {line:?}: {text}");
+    }
+    for line in ["switch", "close tab", "Enter opens a tab"] {
+        assert!(
+            !text.contains(line),
+            "switch/close keys live in the legend only, not here: {text}"
+        );
     }
 }
 
@@ -201,34 +210,151 @@ fn a_stale_session_never_breaks_startup() {
 }
 
 #[test]
+fn opening_a_tab_pulls_the_left_column_onto_it() {
+    // Both columns show the same task: the repos cursor moves to the tab's
+    // repo and the list cursor to the tab's row.
+    let mut app = app_with_items();
+    app.repos_cursor = 0;
+    app.list_cursor = 1; // looking at me/b #2, repos cursor elsewhere
+    press(&mut app, Key::Enter);
+    assert_eq!(app.active_tab, Some(0));
+    assert!(
+        matches!(
+            &app.repo_filter,
+            gtasks::app::RepoFilter::One(slug) if slug.as_str() == "me/b"
+        ),
+        "the list narrowed to the tab's repo: {:?}",
+        app.repo_filter
+    );
+    assert_eq!(
+        app.effective_item().map(|i| i.number),
+        Some(2),
+        "the detail is on the tab"
+    );
+    assert_eq!(app.list_cursor, 0, "the only row of the narrowed list");
+}
+
+#[test]
+fn switching_tabs_moves_the_left_column_along() {
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter); // me/a #1, the list narrows to me/a
+    press(&mut app, Key::Esc); // back to the repos, cursor on me/a
+    press(&mut app, Key::Up); // row 0: all, the list shows both again
+    press(&mut app, Key::Enter); // into the list
+    press(&mut app, Key::Down); // me/b #2
+    press(&mut app, Key::Enter); // second tab
+    assert_eq!(app.active_tab, Some(1));
+    press(&mut app, Key::Char('t')); // back to me/a #1
+    assert_eq!(app.active_tab, Some(0));
+    assert!(
+        matches!(
+            &app.repo_filter,
+            gtasks::app::RepoFilter::One(slug) if slug.as_str() == "me/a"
+        ),
+        "the left column followed the tab: {:?}",
+        app.repo_filter
+    );
+    assert_eq!(
+        app.effective_item().map(|i| i.number),
+        Some(1),
+        "the detail is back on the first tab"
+    );
+}
+
+#[test]
+fn the_agent_pane_shows_only_for_work_in_progress() {
+    use gtasks::agent::{AgentOutcome, AgentRecord, AgentStatus};
+    let mut app = app_with_items();
+    assert!(!app.agent_active(), "idle: no pane");
+    app.agent_record = Some(AgentRecord {
+        repo: "me/a".to_string(),
+        number: 1,
+        profile: "default".to_string(),
+        worktree: std::path::PathBuf::from("/tmp/wt"),
+        seed_lines: 1,
+        status: AgentStatus::Running,
+    });
+    assert!(app.agent_active(), "running: pane shows");
+    app.agent_record = Some(AgentRecord {
+        repo: "me/a".to_string(),
+        number: 1,
+        profile: "default".to_string(),
+        worktree: std::path::PathBuf::from("/tmp/wt"),
+        seed_lines: 1,
+        status: AgentStatus::Finished {
+            outcome: AgentOutcome::Exit(0),
+            secs: 3,
+        },
+    });
+    assert!(
+        !app.agent_active(),
+        "finished: the card stays in the detail, the pane hides"
+    );
+}
+
+#[test]
+fn nerd_icons_follow_the_override_not_the_host() {
+    // Host fonts vary, so the override decides in tests: whatever the host
+    // has, the env var wins.
+    // SAFETY: `GTASKS_NERD` is process-global, but this env var is only read
+    // by `icons::nerd()`, and no other test in this binary asserts on icon
+    // output — the screen test only checks icon-independent strings. The
+    // previous value is restored before returning.
+    let previous = std::env::var_os("GTASKS_NERD");
+    unsafe {
+        std::env::set_var("GTASKS_NERD", "1");
+    }
+    assert!(gtasks::icons::nerd(), "GTASKS_NERD=1 forces icons on");
+    assert!(!gtasks::icons::kind_pr().is_empty());
+    unsafe {
+        std::env::set_var("GTASKS_NERD", "0");
+    }
+    assert!(!gtasks::icons::nerd(), "GTASKS_NERD=0 forces icons off");
+    assert!(gtasks::icons::kind_pr().is_empty());
+    assert_eq!(gtasks::icons::repo(), "▸ ");
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("GTASKS_NERD", value),
+            None => std::env::remove_var("GTASKS_NERD"),
+        }
+    }
+}
+
+#[test]
 fn the_screen_names_tab_and_repo_keys() {
-    // Regression: the tab keys used to live only in the legend, which
-    // truncates on narrow terminals. They now sit on the tabs strip and in
-    // the agent pane, so this renders a real frame and reads it back.
+    // Regression: the tab keys used to live on the tabs strip, which has no
+    // room for prose. They now live in the bottom legend; the strip shows
+    // only the tabs. This renders a real frame and reads it back.
     use gtasks::ui::{draw, view_for};
     use ratatui::{Terminal, backend::TestBackend};
     let mut app = app_with_items();
     press(&mut app, Key::Enter);
+    assert!(!app.agent_active(), "idle: the agent pane stays hidden");
     let view = view_for(&app);
-    let backend = TestBackend::new(100, 30);
+    let backend = TestBackend::new(200, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let mut out = String::new();
     for y in 0..30 {
-        for x in 0..100 {
+        for x in 0..200 {
             out.push_str(buffer[(x, y)].symbol());
         }
         out.push('\n');
     }
     for needle in [
-        "Tab repos",         // bottom legend: how to reach the repos
-        "t/T switch",        // tabs strip: how to move between tabs
-        "x close",           // tabs strip: how to close one
-        "g create worktree", // agent pane: the most important step
+        "Tab repos", // bottom legend: how to reach the repos
+        "t/T tabs",  // bottom legend: how to move between tabs
+        "x close",   // bottom legend: how to close one
+        "●",         // the active tab marker on the strip
+        "#1",        // the open tab itself
     ] {
         assert!(out.contains(needle), "screen names {needle:?}:\n{out}");
     }
+    assert!(
+        !out.contains("tabs:"),
+        "the strip shows tabs, not prose:\n{out}"
+    );
 }
 
 #[test]
@@ -244,7 +370,7 @@ fn the_view_carries_tabs_and_agent_to_the_screen() {
         view.tabs
     );
     assert!(
-        view.agent.contains("g create worktree"),
+        view.agent.contains("g creates the worktree"),
         "agent pane reaches the screen: {}",
         view.agent
     );

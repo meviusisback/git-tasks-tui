@@ -4,7 +4,7 @@
 
 use crate::actions::{Action, MergeMethod, RepoSlug, argv_for};
 use crate::actions_ui::{Confirmation, Executed, confirmation_for, execute};
-use crate::agent::{AgentPlan, AgentRecord, plan_agent};
+use crate::agent::{AgentPlan, AgentRecord, AgentStatus, plan_agent};
 use crate::binaries::Binaries;
 use crate::fetch::FetchOutcome;
 use crate::gh::CheckedArgv;
@@ -30,6 +30,15 @@ pub enum Pane {
 pub struct Tab {
     pub repo: String,
     pub number: u64,
+}
+
+/// One entry of the tabs strip: the label, the kind (for colour) and whether
+/// it is the active one (for emphasis).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabInfo {
+    pub label: String,
+    pub kind: Option<crate::model::ItemKind>,
+    pub active: bool,
 }
 
 /// The repo filter as a type, not a string: either everything or one valid
@@ -464,7 +473,7 @@ impl App {
             }
             Some(Modal::RepoMenu(menu)) => {
                 return format!(
-                    "{} marked — Space mark · Enter apply · Esc cancel",
+                    "{} marked — Space mark · a all · n none · Enter apply · Esc cancel",
                     menu.marked.len()
                 );
             }
@@ -490,21 +499,21 @@ impl App {
         // legend in this one row would push every message off the edge.
         let text = if self.pane == Pane::Detail {
             String::from(
-                "q quit · ? help · ←/→ panes · t/T tabs · x close tab · m actions · g agent",
+                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · Enter body",
             )
         } else if self.pane == Pane::Agent {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
             )
         } else if self.pane == Pane::Repos {
-            String::from("q quit · ? help · Enter drill in · ↑/↓ move · R repos")
+            String::from("q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · x close")
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ panes · Tab repos · ↑/↓ move · Enter open tab · R repos · m actions · g agent",
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · Tab repos · ↑/↓ move · Enter open tab · m actions · g agent",
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -596,6 +605,20 @@ impl App {
         }
     }
 
+    /// `a` in the repo menu: mark every repo.
+    fn menu_mark_all(&mut self) {
+        if let Some(Modal::RepoMenu(menu)) = self.modal.as_mut() {
+            menu.marked = (0..menu.rows.len()).collect();
+        }
+    }
+
+    /// `n` in the repo menu: unmark every repo (empty means "everything").
+    fn menu_mark_none(&mut self) {
+        if let Some(Modal::RepoMenu(menu)) = self.modal.as_mut() {
+            menu.marked.clear();
+        }
+    }
+
     /// `Enter` in the repo menu: the checked rows become the selection. An
     /// empty check means "everything", like an empty state file. The list
     /// updates from the items already in memory; the loop saves the file.
@@ -639,7 +662,9 @@ impl App {
     }
 
     /// Open a tab for the row under the cursor, or activate it when open.
-    /// `Enter` in the list opens; the detail follows the active tab.
+    /// `Enter` in the list opens; the detail and the left column follow it.
+    /// `Enter` on the already-active tab changes nothing: the cached body
+    /// is reused instead of being cleared and fetched again.
     pub fn open_tab_for_selected(&mut self) {
         let Some(item) = self.selected_item().cloned() else {
             return;
@@ -649,6 +674,10 @@ impl App {
             .iter()
             .position(|t| t.repo == item.repo && t.number == item.number)
         {
+            if Some(idx) == self.active_tab {
+                self.request_detail();
+                return;
+            }
             self.active_tab = Some(idx);
         } else {
             self.tabs.push(Tab {
@@ -658,6 +687,7 @@ impl App {
             self.active_tab = Some(self.tabs.len() - 1);
         }
         self.session_dirty = true;
+        self.sync_left_to_tab(&item.repo, item.number);
         // Load the body for the newly active tab when missing.
         let key = (item.repo.clone(), item.number);
         if self.detail_for.as_ref() != Some(&key) && self.detail_requested.as_ref() != Some(&key) {
@@ -676,19 +706,22 @@ impl App {
         let idx = idx.min(self.tabs.len() - 1);
         self.active_tab = Some(idx);
         self.session_dirty = true;
-        if let Some(tab) = self.tabs.get(idx).cloned()
-            && let Some(item) = self
+        if let Some(tab) = self.tabs.get(idx).cloned() {
+            // The left column follows the tab, then the body loads for it.
+            self.sync_left_to_tab(&tab.repo, tab.number);
+            if let Some(item) = self
                 .items
                 .iter()
                 .find(|i| i.repo == tab.repo && i.number == tab.number)
                 .cloned()
-        {
-            let key = (item.repo.clone(), item.number);
-            if self.detail_for.as_ref() != Some(&key)
-                && self.detail_requested.as_ref() != Some(&key)
             {
-                self.detail_requested = Some(key);
-                self.status = format!("loading #{}…", item.number);
+                let key = (item.repo.clone(), item.number);
+                if self.detail_for.as_ref() != Some(&key)
+                    && self.detail_requested.as_ref() != Some(&key)
+                {
+                    self.detail_requested = Some(key);
+                    self.status = format!("loading #{}…", item.number);
+                }
             }
         }
     }
@@ -770,23 +803,70 @@ impl App {
 
     /// One-line label per tab, with the live title when the item is loaded.
     pub fn tab_labels(&self) -> Vec<String> {
+        self.tab_infos()
+            .into_iter()
+            .map(|info| info.label)
+            .collect()
+    }
+
+    /// One entry per open tab for the tabs strip: the label, the kind (for
+    /// colour) and whether it is the active one (for emphasis).
+    pub fn tab_infos(&self) -> Vec<TabInfo> {
         self.tabs
             .iter()
-            .map(|tab| {
-                let title = self
+            .enumerate()
+            .map(|(i, tab)| {
+                let found = self
                     .items
                     .iter()
-                    .find(|i| i.repo == tab.repo && i.number == tab.number)
-                    .map(|i| i.title.as_str())
-                    .unwrap_or("");
-                if title.is_empty() {
-                    format!("#{} {}", tab.number, tab.repo)
-                } else {
-                    let short: String = title.chars().take(28).collect();
-                    format!("#{} {short}", tab.number)
+                    .find(|item| item.repo == tab.repo && item.number == tab.number);
+                let label = match found {
+                    Some(item) => {
+                        let short: String = item.title.chars().take(28).collect();
+                        format!("#{} {short}", tab.number)
+                    }
+                    None => format!("#{} {}", tab.number, tab.repo),
+                };
+                TabInfo {
+                    label,
+                    kind: found.map(|item| item.kind),
+                    active: Some(i) == self.active_tab,
                 }
             })
             .collect()
+    }
+
+    /// The left column populates from the tab: repos cursor onto the tab's
+    /// repo (filtering the list to it) and list cursor onto the tab's row.
+    /// Called when a tab opens and whenever the active tab changes, so both
+    /// columns always show the same task.
+    fn sync_left_to_tab(&mut self, repo: &str, number: u64) {
+        if let Some(pos) = self.repos.iter().position(|row| match row {
+            RepoRow::Repo(slug) => slug.as_str() == repo,
+            RepoRow::All => false,
+        }) {
+            self.repos_cursor = pos;
+            self.apply_repo_filter();
+        }
+        if let Some(index) = self
+            .visible_items()
+            .iter()
+            .position(|item| item.repo == repo && item.number == number)
+        {
+            self.list_cursor = index;
+        }
+    }
+
+    /// The agent pane shows only while an agent is being arranged or is
+    /// running. A finished run stays in the detail as a card; the pane
+    /// itself is for work in progress, so idle screens keep the detail tall.
+    pub fn agent_active(&self) -> bool {
+        self.agent_requested.is_some()
+            || self.agent_go.is_some()
+            || matches!(
+                &self.agent_record,
+                Some(record) if record.status == AgentStatus::Running
+            )
     }
 
     /// Copy the session fields into `state` so the loop can persist them.
@@ -1047,9 +1127,6 @@ impl App {
     /// card lives here too, below the task it belongs to.
     pub fn agent_panel_text(&self) -> String {
         let mut out = Vec::new();
-        out.push("g create worktree + launch agent (asks once)".to_string());
-        out.push("Enter opens a tab · t/T switch · x close · w here · o browser".to_string());
-        out.push(String::new());
         match self.effective_item() {
             Some(item) => {
                 out.push(format!(
@@ -1094,6 +1171,8 @@ impl App {
                 .join(", ")
         };
         out.push(format!("clones · {roots}"));
+        out.push(String::new());
+        out.push("g creates the worktree + launches the agent (asks once)".to_string());
         out.join("\n")
     }
 
@@ -1174,6 +1253,8 @@ impl App {
                     Key::Up => self.menu_step(-1),
                     Key::Down => self.menu_step(1),
                     Key::Char(' ') => self.menu_toggle(),
+                    Key::Char('a') => self.menu_mark_all(),
+                    Key::Char('n') => self.menu_mark_none(),
                     Key::Enter => {
                         if let Some(Modal::RepoMenu(menu)) = self.modal.take() {
                             let selected: Vec<RepoSlug> = menu

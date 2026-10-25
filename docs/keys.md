@@ -16,7 +16,7 @@ disagree, the handler is right and this file is a bug.
 | `t` / `T` | next / previous tab (says `no tabs — Enter opens one` when empty) |
 | `x` / `X` | close the active tab first, then the agent record |
 | `w` | focus the agent pane (worktree + agent instructions live there) |
-| `R` | repo selection menu: `Space` marks, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
+| `R` | repo selection menu: `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
 | `o` | open the selected item in the browser |
 | `r` | refresh — it works in every pane, including inside a drilled-in repo |
@@ -39,6 +39,13 @@ the screen has to be checked against it (K-1, 2026-10-25).
 A fresh start (no `state.json` yet) focuses the repos pane: the first
 keypress picks a repo, `Enter` drills into its issues, `Enter` again opens
 a tab. A restart resumes where you left off — pane, filter, tabs included.
+
+The list is cached in `items-cache.json` next to `state.json`: startup
+paints the cache instantly, then a background fetch checks for changes
+("up to date" vs a replaced list).
+
+Icons appear only when the host has a Nerd Font (font directories are
+scanned once); `GTASKS_NERD=1` forces them on, `GTASKS_NERD=0` off.
 
 A key that is promised in the overlay and does nothing is a lie on screen;
 the test `coming_next_keys_produce_no_screen_change` fails when one of them starts

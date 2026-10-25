@@ -6,23 +6,48 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::app::{App, Pane};
+use crate::icons;
 use crate::markdown::{self as md};
+use crate::model::ItemKind;
 use crate::sanitize::sanitize;
 use crate::theme;
 
 /// What the UI needs to draw a frame. Owned strings keep the borrow simple.
+/// `item_kinds` runs parallel to `items`: the kind colours the number without
+/// changing the text any test reads.
 #[derive(Default)]
 pub struct ViewModel {
     pub repos: Vec<String>,
     pub items: Vec<String>,
+    pub item_kinds: Vec<Option<ItemKind>>,
     pub detail: String,
     pub tabs: Vec<String>,
     pub active_tab: Option<usize>,
     pub agent: String,
+}
+
+/// The number colour by kind: green PRs, yellow issues. Only the number —
+/// titles stay plain so the rows scan as text, not confetti.
+fn kind_style(kind: Option<ItemKind>) -> Style {
+    match kind {
+        Some(ItemKind::Pr) => Style::default().fg(theme::OK),
+        Some(ItemKind::Issue) => Style::default().fg(theme::WARN),
+        None => Style::default(),
+    }
+}
+
+/// Pane title with an icon when the host has a Nerd Font, plain otherwise.
+fn pane_title(name: &str, icon: &str) -> String {
+    if icon.is_empty() {
+        format!(" {name} ")
+    } else {
+        format!(" {icon}{name} ")
+    }
 }
 
 /// The keys that work today. Also the source of the `?` overlay.
@@ -34,7 +59,7 @@ const HELP_NOW: &[&str] = &[
     "x / X      close the active tab, then the agent record",
     "w          focus the agent pane (worktree + agent instructions)",
     "Esc        back one level: overlay → agent → detail → list (never quits)",
-    "R          repo selection menu",
+    "R          repo selection menu (Space mark · a all · n none)",
     "o          open the selected item in the browser",
     "g          hand the selected PR to an agent (suspends gtasks)",
     "/          filter the visible list",
@@ -89,20 +114,31 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     let (issues_widget, mut issues_state) = issues_list(app, view);
     frame.render_stateful_widget(issues_widget, left_rows[1], &mut issues_state);
 
-    // Right column: tabs + detail on top, agent/worktree at the bottom.
-    let right_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-        .split(columns[1]);
-    // The tabs are one line, not a box: at 80x12 every row counts, and a
-    // bordered strip would eat the detail it labels.
-    let detail_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .split(right_rows[0]);
-    frame.render_widget(tabs_bar(app, view), detail_rows[0]);
-    frame.render_widget(detail(app, view, detail_rows[1].width), detail_rows[1]);
-    frame.render_widget(agent_panel(app, view, right_rows[1].width), right_rows[1]);
+    // Right column: tabs + detail on top, agent/worktree at the bottom —
+    // but only while an agent is being arranged or is running. Idle screens
+    // give the whole column to the detail instead of an empty box.
+    if app.agent_active() {
+        let right_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(columns[1]);
+        // The tabs are one line, not a box: at 80x12 every row counts, and a
+        // bordered strip would eat the detail it labels.
+        let detail_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(right_rows[0]);
+        frame.render_widget(tabs_bar(app, view), detail_rows[0]);
+        frame.render_widget(detail(app, view, detail_rows[1].width), detail_rows[1]);
+        frame.render_widget(agent_panel(app, view, right_rows[1].width), right_rows[1]);
+    } else {
+        let detail_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(columns[1]);
+        frame.render_widget(tabs_bar(app, view), detail_rows[0]);
+        frame.render_widget(detail(app, view, detail_rows[1].width), detail_rows[1]);
+    }
 
     // Two panels, so the status cannot be pushed off the right edge by the
     // legend. The legend keeps the left side and truncates there: the recovery
@@ -176,9 +212,15 @@ pub fn view_for(app: &App) -> ViewModel {
         })
         .unwrap_or_default();
     let _ = visible;
+    let item_kinds = app
+        .visible_items()
+        .iter()
+        .map(|item| Some(item.kind))
+        .collect();
     ViewModel {
         repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
+        item_kinds,
         detail,
         tabs: app.tab_labels(),
         active_tab: app.active_tab,
@@ -186,7 +228,8 @@ pub fn view_for(app: &App) -> ViewModel {
     }
 }
 
-/// Left column, top: the repos. `▸ repo (n)` rows with per-repo counts.
+/// Left column, top: the repos. `▸ repo (n)` rows with per-repo counts —
+/// a folder icon when the host has a Nerd Font.
 fn repos_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     let counts: Vec<usize> = view
         .repos
@@ -197,7 +240,7 @@ fn repos_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
         .repos
         .iter()
         .zip(counts.iter().chain(std::iter::repeat(&0)))
-        .map(|(repo, count)| format!("▸ {repo} ({count})"))
+        .map(|(repo, count)| format!("{}{repo} ({count})", icons::repo()))
         .collect();
     let selected = if rows.is_empty() {
         None
@@ -214,7 +257,7 @@ fn repos_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" repos ")
+                .title(pane_title("repos", ""))
                 .border_style(if focused {
                     theme::border_focused()
                 } else {
@@ -227,9 +270,19 @@ fn repos_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     (widget, state)
 }
 
+/// Split a `"#12 title"` row into its number and title parts. Rows built
+/// without a title keep the whole text as the number.
+fn split_number_title(entry: &str) -> (String, String) {
+    match entry.split_once(' ') {
+        Some((number, title)) => (number.to_string(), title.to_string()),
+        None => (entry.to_string(), String::new()),
+    }
+}
+
 /// Left column, bottom: the issues/PRs of the repo under the cursor.
 /// The repo filter follows the repos cursor, so this box always shows the
-/// repo above — no `R` menu needed for the common case.
+/// repo above — no `R` menu needed for the common case. The number carries
+/// the kind colour (green PR, yellow issue); the title stays plain.
 fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     let selected = if view.items.is_empty() {
         None
@@ -241,7 +294,25 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     let items: Vec<ListItem> = view
         .items
         .iter()
-        .map(|entry| ListItem::new(sanitize(entry.as_str())))
+        .zip(view.item_kinds.iter().chain(std::iter::repeat(&None)))
+        .map(|(entry, kind)| {
+            let (number, title) = split_number_title(entry);
+            let icon = match kind {
+                Some(ItemKind::Pr) => icons::kind_pr(),
+                Some(ItemKind::Issue) => icons::kind_issue(),
+                None => "",
+            };
+            let mut spans = vec![
+                Span::styled(icon, kind_style(*kind)),
+                Span::styled(sanitize(&number), kind_style(*kind)),
+                Span::raw(" "),
+                Span::raw(sanitize(&title)),
+            ];
+            if icon.is_empty() {
+                spans.remove(0);
+            }
+            ListItem::new(Line::from(spans))
+        })
         .collect();
     let widget = List::new(items)
         .block(
@@ -260,34 +331,46 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     (widget, state)
 }
 
-/// Right column, top strip: the open tabs, herdr-style, on a single line so
-/// small terminals keep their detail rows. The active tab is marked `●`,
-/// the rest `○`; `t`/`T` switch, `x` closes. No tabs yet says how to open
-/// one instead of leaving a blank strip.
+/// Right column, top strip: the open tabs on a single line, so small
+/// terminals keep their detail rows. The active tab is bold, the rest dim;
+/// the number carries the kind colour (green PR, yellow issue). No prefix,
+/// no keys — the legend below owns those.
 fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
-    // The keys live on the strip itself, not only in the legend: the legend
-    // truncates on narrow terminals, this line does not.
-    let line = if view.tabs.is_empty() {
-        "tabs: no tabs — Enter opens one · t/T switch · x close".to_string()
-    } else {
-        let labels = view
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(i, label)| {
-                let mark = if Some(i) == view.active_tab {
-                    "●"
-                } else {
-                    "○"
-                };
-                format!("{mark} {label}")
-            })
-            .collect::<Vec<_>>()
-            .join("  │  ");
-        format!("tabs: {labels} · t/T switch · x close")
-    };
-    let focused = app.pane == Pane::Detail;
-    Paragraph::new(sanitize(&line)).style(theme::title(focused))
+    if view.tabs.is_empty() {
+        let style = theme::title(app.pane == Pane::Detail);
+        return Paragraph::new("no tabs — Enter opens one").style(style);
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, info) in app.tab_infos().iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  │  "));
+        }
+        let mark = if info.active { "●" } else { "○" };
+        let mark_style = if info.active {
+            Style::default()
+                .fg(theme::FOCUSED)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::SUBTEXT)
+        };
+        let icon = match info.kind {
+            Some(ItemKind::Pr) => icons::kind_pr(),
+            Some(ItemKind::Issue) => icons::kind_issue(),
+            None => "",
+        };
+        spans.push(Span::styled(mark.to_string(), mark_style));
+        spans.push(Span::raw(" "));
+        if !icon.is_empty() {
+            spans.push(Span::styled(icon.to_string(), kind_style(info.kind)));
+        }
+        let (number, title) = split_number_title(&info.label);
+        spans.push(Span::styled(sanitize(&number), kind_style(info.kind)));
+        if !title.is_empty() {
+            spans.push(Span::raw(" "));
+            spans.push(Span::raw(sanitize(&title)));
+        }
+    }
+    Paragraph::new(Line::from(spans))
 }
 
 fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
@@ -356,7 +439,7 @@ fn agent_panel(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" agent ")
+                .title(pane_title("agent", icons::agent()))
                 .border_style(if focused {
                     theme::border_focused()
                 } else {
@@ -442,7 +525,7 @@ fn draw_repo_menu(frame: &mut Frame, area: Rect, menu: &crate::app::RepoMenu) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" repos — Space mark · Enter apply · Esc cancel ")
+                .title(" repos — Space mark · a all · n none · Enter apply · Esc cancel ")
                 .border_style(theme::overlay())
                 .title_style(theme::overlay()),
         )
