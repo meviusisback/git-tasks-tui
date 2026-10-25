@@ -145,19 +145,18 @@ fn demo_config() -> Config {
     }
 }
 
-/// Start one fetch in the background. Dropping the receiver with the app means
-/// a late result is simply discarded.
+/// Start one batched fetch in the background. Dropping the receiver with the app
+/// means a late result is simply discarded.
 fn spawn_fetch(
     binaries: Binaries,
-    repos: Vec<String>,
-    kind: ItemKind,
+    repos: Vec<RepoSlug>,
     limit: usize,
     timeout: Duration,
     parallel: usize,
 ) -> Receiver<FetchOutcome> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let outcome = fetch::fetch_many(&binaries, &repos, kind, limit, timeout, parallel);
+        let outcome = fetch::fetch_graphql_many(&binaries, &repos, limit, timeout, parallel);
         let _ = tx.send(outcome);
     });
     rx
@@ -257,11 +256,10 @@ fn run_tui() -> anyhow::Result<()> {
         selected
     };
     app.set_repos(shown);
-    app.all_repos = all;
+    app.all_repos = all.clone();
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
-        config.repos.clone(),
-        ItemKind::Pr,
+        all.clone(),
         limit,
         timeout,
         parallel,
@@ -368,8 +366,7 @@ fn run_tui() -> anyhow::Result<()> {
             app.refresh_requested = false;
             pending = Some(spawn_fetch(
                 binaries.clone(),
-                config.repos.clone(),
-                ItemKind::Pr,
+                all.clone(),
                 limit,
                 timeout,
                 parallel,

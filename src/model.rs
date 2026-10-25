@@ -219,9 +219,9 @@ impl Item {
             (None, None) => {}
         }
         // `checks: none` and `checks: never asked` are different sentences.
-        // The fetcher always asks for the rollup on PRs (FIELDS_PR), so an
-        // empty rollup honestly means none: the line always shows. Issues are
-        // never asked (FIELDS_ISSUE excludes it), so the line is omitted.
+        // The batch query always asks for the rollup on PRs, so an empty one
+        // honestly means none: the line always shows. Issues are never
+        // asked, so the line is omitted.
         if self.kind == ItemKind::Pr || !self.status_check_rollup.is_empty() {
             let mut failed = Vec::new();
             let (mut passed, mut pending) = (0, 0);

@@ -13,6 +13,7 @@ pub mod config;
 pub mod env;
 pub mod fetch;
 pub mod gh;
+pub mod graphql;
 pub mod input;
 pub mod logging;
 pub mod markdown;
