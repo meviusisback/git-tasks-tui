@@ -514,7 +514,7 @@ fn run_tui() -> anyhow::Result<()> {
         Err(err) => anyhow::bail!("gh and git are required: {err:#}"),
     };
 
-    let (config, config_notice) = load_config();
+    let (mut config, config_notice) = load_config();
     // The notice is dismissed with `Esc`; this flag is what the legend keeps saying afterwards,
     // for as long as the program runs on a repository nobody chose.
     let config_fallback = config_notice.is_some();
@@ -707,6 +707,33 @@ fn run_tui() -> anyhow::Result<()> {
                     app.status = format!("diff failed: {err}");
                 }
                 app.apply_diff(&repo, number, result);
+            }
+        }
+
+        // A settings toggle: the key handler flips the flag, the loop writes
+        // `config.toml` (0600, atomic, like every private write). A broken
+        // config is never overwritten — fix it first, then toggle.
+        if app.config_save_requested {
+            app.config_save_requested = false;
+            if config_fallback {
+                app.status =
+                    "the config file is broken — fix it before saving settings".to_string();
+            } else if let Some(path) = config_path() {
+                config.sandbox_agents = app.sandbox_agents;
+                match config.save(&path) {
+                    Ok(()) => {
+                        app.status = format!(
+                            "sandboxed agents {} — saved to {}",
+                            if app.sandbox_agents { "on" } else { "off" },
+                            path.display()
+                        );
+                    }
+                    Err(err) => {
+                        app.status = format!("cannot save the config: {err:#}");
+                    }
+                }
+            } else {
+                app.status = "cannot save the settings: no config directory".to_string();
             }
         }
 

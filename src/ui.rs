@@ -73,7 +73,7 @@ const HELP_NOW: &[&str] = &[
     "r          refresh",
     "a          first action on the selected item",
     "m          actions menu: method and branch deletion are a choice",
-    "?          this keymap",
+    "?          this keymap · s settings",
     "q          quit",
     "Ctrl-C     quit — or interrupt the agent when it has focus",
 ];
@@ -88,9 +88,10 @@ const HELP_NOW: &[&str] = &[
 /// `pub` (not `pub(crate)`) because the second reader is an integration
 /// test, outside the crate.
 ///
-/// `w` used to live here; it now focuses the agent pane, so only `s`
-/// (sessions) is still promised.
-pub const PLANNED: &[(char, &str)] = &[('s', "agent sessions (stage 16)")];
+/// `w` used to live here, then `R`, then `s` (now the settings menu): each
+/// left the day its menu landed. Empty today — the header below says so
+/// instead of dangling.
+pub const PLANNED: &[(char, &str)] = &[];
 
 /// The right column (detail + agent) from the full frame area: outer
 /// border, status row and the left 30% removed. Draw and mouse clicks share
@@ -230,6 +231,9 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     }
     if let Some(crate::app::Modal::AgentMenu(menu)) = &app.modal {
         draw_agent_menu(frame, frame.area(), menu, app);
+    }
+    if let Some(crate::app::Modal::Settings(menu)) = &app.modal {
+        draw_settings(frame, frame.area(), menu, app);
     }
     if let Some(crate::app::Modal::Worktrees(menu)) = &app.modal {
         draw_worktrees_menu(frame, frame.area(), menu);
@@ -671,9 +675,16 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         .chain(std::iter::once(ratatui::text::Line::from(sanitize(
             "coming in the next stages:",
         ))))
-        .chain(PLANNED.iter().map(|(key, what)| {
-            ratatui::text::Line::from(sanitize(&format!("{key}          {what}")))
-        }))
+        .chain(if PLANNED.is_empty() {
+            vec![ratatui::text::Line::from(sanitize("  (nothing promised)"))]
+        } else {
+            PLANNED
+                .iter()
+                .map(|(key, what)| {
+                    ratatui::text::Line::from(sanitize(&format!("{key}          {what}")))
+                })
+                .collect()
+        })
         .collect();
     let help = Paragraph::new(text)
         .block(
@@ -905,6 +916,45 @@ fn draw_diff(frame: &mut Frame, area: Rect, app: &crate::app::App) {
     }));
     let visible = Paragraph::new(rows);
     frame.render_widget(visible, inner);
+}
+
+/// The settings menu: one row per toggle with its state, the selected
+/// row's description underneath. Same centered shape as the other pickers,
+/// so all menus read the same.
+fn draw_settings(
+    frame: &mut Frame,
+    area: Rect,
+    menu: &crate::app::SettingsMenu,
+    app: &crate::app::App,
+) {
+    let area = centered_rect(70, 80, area);
+    frame.render_widget(Clear, area);
+    let items: Vec<ListItem> = menu
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, setting)| {
+            let mark = if i == menu.cursor { "▸" } else { " " };
+            let state = if setting.is_on(app) { "[on]" } else { "[off]" };
+            ListItem::new(sanitize(&format!("{mark} {} {state}", setting.title())))
+        })
+        .collect();
+    let rows = items.len().max(1);
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" settings "))
+        .highlight_style(theme::highlight());
+    frame.render_widget(list, area);
+    if let Some(selected) = menu.rows.get(menu.cursor) {
+        let note = Paragraph::new(sanitize(selected.description()))
+            .style(Style::default().fg(theme::SUBTEXT));
+        let note_area = Rect::new(
+            area.x.saturating_add(2),
+            area.y.saturating_add(rows as u16).saturating_add(2),
+            area.width.saturating_sub(4),
+            2,
+        );
+        frame.render_widget(note, note_area);
+    }
 }
 
 /// The name prompt: create or rename, with the suggestion prepopulated so

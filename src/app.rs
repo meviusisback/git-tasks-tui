@@ -160,6 +160,52 @@ pub enum Modal {
     /// scroll, `q` quits through it like the notice. No payload — the text
     /// lives in the diff fields below, keyed by `diff_for`.
     Diff,
+    /// The settings menu: one row per toggleable setting, `↑`/`↓` move,
+    /// `Enter`/`Space` flip, `Esc` closes, `q` quits through. Flipping sets
+    /// `config_save_requested` — the loop writes `config.toml`, the key
+    /// handler never touches the disk itself.
+    Settings(SettingsMenu),
+}
+
+/// One toggleable setting. A single variant today (sandboxed agents); the
+/// menu grows by adding variants here, not by special-casing the draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setting {
+    SandboxAgents,
+}
+
+impl Setting {
+    /// The menu row title.
+    pub fn title(&self) -> &'static str {
+        match self {
+            Setting::SandboxAgents => "sandboxed agents",
+        }
+    }
+
+    /// What the toggle does, shown under the rows for the selected one.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Setting::SandboxAgents => {
+                "launch through the `<agent>-sandboxed` wrappers (omp YOLO, hermes Smart, pi contained)"
+            }
+        }
+    }
+
+    /// The current state, read from the app at draw and toggle time.
+    pub fn is_on(&self, app: &App) -> bool {
+        match self {
+            Setting::SandboxAgents => app.sandbox_agents,
+        }
+    }
+}
+
+/// The settings menu: every toggleable setting, in a fixed order, cursor
+/// on top. Rows are data (`Setting`), so the draw never decides what
+/// exists — adding a setting is a variant plus its three strings above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsMenu {
+    pub cursor: usize,
+    pub rows: Vec<Setting>,
 }
 
 /// The `g` menu: one row per installed agent binary, cursor, and the
@@ -353,6 +399,9 @@ pub struct App {
     /// `<agent>-sandboxed` wrappers with non-interactive approvals. Off by
     /// default; set from the config at startup, never flipped at runtime.
     pub sandbox_agents: bool,
+    /// Set when a settings toggle flips: the loop writes `config.toml`.
+    /// The key handler never touches the disk itself.
+    pub config_save_requested: bool,
     /// Where to look for local clones, in order (`<root>/<repo-name>`); empty refuses.
     /// A list, not a path: clones really do live in more than one directory, and one path
     /// cannot say so without making the other directory invisible.
@@ -427,6 +476,7 @@ impl Default for App {
             pending: None,
             agent_profile: String::from("default"),
             sandbox_agents: false,
+            config_save_requested: false,
             clone_roots: Vec::new(),
             config_fallback: false,
             agent_record: None,
@@ -623,6 +673,9 @@ impl App {
             Some(Modal::Diff) => {
                 return String::from("↑/↓ scroll · Enter/Esc close · q quit");
             }
+            Some(Modal::Settings(_)) => {
+                return String::from("↑/↓ choose · Enter/Space toggle · Esc close · q quit");
+            }
             Some(Modal::Notice(_)) => {
                 // The box above says what is wrong, in full. The row only
                 // keeps the remedy: repeating the message here would truncate
@@ -642,7 +695,7 @@ impl App {
         // legend in this one row would push every message off the edge.
         let text = if self.pane == Pane::Detail {
             String::from(
-                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · W trees · d diff · Enter body",
+                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · W trees · d diff · Enter body · s settings",
             )
         } else if self.pane == Pane::Agent {
             // While the agent runs, every key but Esc is agent input —
@@ -659,11 +712,11 @@ impl App {
             String::from("q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · x close")
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent · W trees · d diff",
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent · W trees · d diff · s settings",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees · d diff",
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees · d diff · s settings",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -1602,6 +1655,37 @@ impl App {
         }));
     }
 
+    /// `s`: the settings menu — every toggleable setting, cursor on top.
+    /// Always available: settings are app-wide, not per-row.
+    pub fn open_settings(&mut self) {
+        self.modal = Some(Modal::Settings(SettingsMenu {
+            cursor: 0,
+            rows: vec![Setting::SandboxAgents],
+        }));
+    }
+
+    /// Flip the setting under the cursor. The menu stays open on the new
+    /// state; the loop persists it (`config_save_requested`).
+    fn toggle_setting(&mut self) {
+        let Some(Modal::Settings(menu)) = &self.modal else {
+            return;
+        };
+        let Some(setting) = menu.rows.get(menu.cursor).copied() else {
+            return;
+        };
+        match setting {
+            Setting::SandboxAgents => {
+                self.sandbox_agents = !self.sandbox_agents;
+                self.status = if self.sandbox_agents {
+                    "sandboxed agents on".to_string()
+                } else {
+                    "sandboxed agents off".to_string()
+                };
+            }
+        }
+        self.config_save_requested = true;
+    }
+
     /// `W` on the selected row: the worktree menu directly, without going
     /// through the agent menu first. Managing trees (rename, delete, or
     /// picking where to work) is not launching an agent.
@@ -2019,6 +2103,31 @@ impl App {
                 }
                 return;
             }
+            if matches!(self.modal, Some(Modal::Settings(_))) {
+                // One row per setting: `↑`/`↓` move, `Enter`/`Space` flip
+                // (the menu stays open on the new state), `Esc` closes,
+                // `q` quits through like every overlay.
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Up => {
+                        if let Some(Modal::Settings(menu)) = &mut self.modal {
+                            menu.cursor = menu.cursor.saturating_sub(1);
+                        }
+                    }
+                    Key::Down => {
+                        if let Some(Modal::Settings(menu)) = &mut self.modal {
+                            menu.cursor = menu
+                                .cursor
+                                .saturating_add(1)
+                                .min(menu.rows.len().saturating_sub(1));
+                        }
+                    }
+                    Key::Enter | Key::Char(' ') => self.toggle_setting(),
+                    Key::Char('q') => self.quit = true,
+                    _ => {}
+                }
+                return;
+            }
             match key {
                 Key::Esc | Key::Char('n') => self.modal = None,
                 Key::Char('y') => {
@@ -2153,6 +2262,10 @@ impl App {
             // then cached). With a running agent focused this key types
             // into the agent instead — it never reaches here.
             Key::Char('d') => self.request_diff(),
+            // `s` opens the settings menu (app-wide toggles like sandboxed
+            // agents). With a running agent focused this key types into
+            // the agent instead — it never reaches here.
+            Key::Char('s') => self.open_settings(),
             // Esc climbs one level and stops at the first: it never quits.
             // The match is exhaustive on purpose, so a new pane is a compile
             // error here instead of silently inheriting an exit.
