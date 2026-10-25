@@ -61,7 +61,15 @@ while IFS= read -r line; do
         continue
     fi
 
-    if git show ":$path" | grep -qF -- "$text"; then found=yes; else found=no; fi
+    # A claim is a phrase, not a line. A sentence in `docs/` is usually wrapped
+    # at 80 columns, so the same words appear split by a newline and the naive
+    # per-line grep refused a correct quote (reported by @auditor). Normalise
+    # whitespace on BOTH sides: newlines become spaces and runs collapse. This
+    # is not a weakening — the words still have to appear in order — it stops
+    # the verdict from depending on where the paragraph happens to wrap.
+    squeeze() { tr '\n' ' ' | tr -s '[:space:]' ' '; }
+    want=$(printf '%s' "$text" | squeeze)
+    if git show ":$path" | squeeze | grep -qF -- "$want"; then found=yes; else found=no; fi
 
     if { [ "$verb" = contains ] && [ "$found" = yes ]; } \
         || { [ "$verb" = absent ] && [ "$found" = no ]; }; then
