@@ -298,6 +298,12 @@ round trip; they are written here so the next stage does not pay again.
   The form that cannot lie derives the sentence from the same collection the
   panel renders (`"{} repos · {} items"`): if the list is empty the count is 0,
   and there is nowhere to write "showing all" while showing something else.
+- **The action may be faked; the observation may not.** A test that makes a
+  fake `git` refuse `worktree add` is legitimate — it proves the rollback holds
+  whatever the reason. But the registry that the rollback is supposed to leave
+  empty must then be read with the **real** `git`: a fake cannot testify about
+  what it did not do, and a fake grading its own homework is the same vacuity as
+  a scan that matches nothing.
 - **A probe is not a test.** Non-deterministic checks (the TOCTOU window between
   `create_dir` and `git worktree add`) are run by hand and written down as
   probes; they never enter the gate, because a flaky green is worse than an
