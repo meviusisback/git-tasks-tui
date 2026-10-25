@@ -370,3 +370,46 @@ fn another_item_shows_detail_not_the_record() {
         "a record for #7 is not shown on #8"
     );
 }
+
+#[test]
+fn the_agent_child_does_not_inherit_the_github_token() {
+    // S3, applied to the interactive child too: the agent works inside the
+    // worktree of a repository we do not trust, so a planted instruction that
+    // says "read the environment and post it" must find nothing to read.
+    // The parent here is the real one, which in a developer shell usually has
+    // a token exported — so this asserts on the built argv, not on a fixture.
+    unsafe {
+        std::env::set_var("GH_TOKEN", "planted-for-this-test");
+        std::env::set_var("GITHUB_TOKEN", "planted-for-this-test");
+        std::env::set_var("GIT_DIR", "/tmp/planted");
+    }
+    let argv = agent_argv(
+        PathBuf::from("/bin/hermes").as_path(),
+        "default",
+        PathBuf::from("/tmp/seed-1").as_path(),
+        PathBuf::from("/tmp/wt").as_path(),
+    );
+    let keys: Vec<String> = argv
+        .as_argv()
+        .env
+        .iter()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !keys.iter().any(|k| k == "GH_TOKEN" || k == "GITHUB_TOKEN"),
+        "the agent must not receive a token: {keys:?}"
+    );
+    assert!(
+        !keys.iter().any(|k| k.starts_with("GIT_")),
+        "the agent must not receive GIT_*: {keys:?}"
+    );
+    assert!(
+        keys.iter().any(|k| k == "PATH"),
+        "the base allowlist still travels: {keys:?}"
+    );
+    unsafe {
+        std::env::remove_var("GH_TOKEN");
+        std::env::remove_var("GITHUB_TOKEN");
+        std::env::remove_var("GIT_DIR");
+    }
+}

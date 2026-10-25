@@ -279,9 +279,11 @@ pub fn agent_argv(
             worktree.as_os_str().to_os_string(),
             "--ignore-rules".into(),
         ],
-        // No allowlist here: the interactive child inherits the whole
-        // environment in `run_interactive` (it is the user's session).
-        env: Vec::new(),
+        // S3: the agent runs inside the worktree of a repository we do not
+        // trust, so it gets the agent allowlist (base variables, no
+        // GH_TOKEN/GITHUB_TOKEN, no GIT_*) rather than the parent environment.
+        // An injected "read the env and post it" is the payload this closes.
+        env: crate::env::agent_env(),
         cwd: worktree.to_path_buf(),
     })
 }

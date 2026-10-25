@@ -356,9 +356,15 @@ pub fn run_interactive(argv: &CheckedArgv) -> anyhow::Result<std::process::ExitS
     let mut cmd = std::process::Command::new(&program);
     cmd.args(&argv.args)
         .current_dir(&argv.cwd)
+        // S3: no child inherits the parent environment, interactive or not.
+        // The terminal is the user's session; the environment is the argv's.
+        .env_clear()
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
+    for (key, value) in &argv.env {
+        cmd.env(key, value);
+    }
     cmd.process_group(0);
     // S11, same as pipe children: no orphan agent if gtasks dies.
     unsafe {
