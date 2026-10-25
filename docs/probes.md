@@ -339,3 +339,44 @@ program that never painted a screen. With the path it documents (relative) the s
 reported **58 s** on `ac41c4f`. The lesson is in the fix: a harness that cannot tell
 "the binary never started" from "the program is slow" will eventually accuse the program.
 
+### The 502 boundary: a timeout, not a rejection
+
+Six measurements, taken because "one heavy repo breaks the batch" was true but did not say *why* —
+and the remedy depends on the why.
+
+| repos | `limit` | `contexts(first:)` | result |
+|---|---|---|---|
+| 5 heavy | 30 | 50 | **ok** 9.6 s |
+| 5 heavy | 30 | 5 | **ok** 10.3 s |
+| 5 heavy | 100 | 5 | **502** 10.7 s |
+| 20 heavy | 100 | 5 | **502** 10.7 s |
+| 20 heavy | 30 | 5 | **ok** 7.3 s |
+| `rust-lang/rust` alone | 10 / 25 / 50 / 100 | 50 | ok, 2.1 / 1.9 / 5.1 / 10.4 s |
+
+What the numbers say:
+
+- **Every failure landed between 10.6 and 11.0 s; every success at ≤10.3 s.** The gateway gives up
+  around ten seconds.
+- **The same query failed and later succeeded**, minutes apart on the same machine (`5 × 30 ×
+  contexts(50)`). It is a timeout, not a rejection: there is no "this query is not allowed".
+- **The trigger is the number of requested nodes (`repos × limit`), not the query text.** `3 × 100`
+  and `3 × 30` differ by six characters — one fails, one does not. Cutting `contexts(first: 50)` to
+  `5` did not visibly move the boundary, so the multiplier is dominated by PRs × issues, not by
+  checks.
+- A single heavy repo is fine even at `limit = 100` (10.4 s — right on the edge, which is why it is
+  the dangerous configuration: it will pass sometimes).
+
+The remedy follows the shape, in this order:
+
+1. **retry once** — a read is idempotent, and the failure is transient; one retry turns most of these
+   into latency instead of missing data;
+2. **cap the batch by expected cost** (`repos × limit` ≤ ~150 nodes, or lower `limit`): at
+   `limit = 30` with 20 repos per call it stayed at 7.3 s;
+3. **bisect** for the persistent case — which is what `tests/probe_batch_failure_bisect.rs`
+   specifies. Bisection alone would report a repo that sits permanently at eleven seconds as failed:
+   correct, and useless.
+
+**The lesson that generalises**: a red that says "this fails" is half an answer. The other half is
+*what separates the red from the greens* — here, ten seconds and the node count, neither of which is
+visible in the failure message.
+
