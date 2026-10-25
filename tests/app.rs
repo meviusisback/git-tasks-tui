@@ -113,16 +113,17 @@ fn legend_while_running_names_typing_not_app_keys() {
 #[test]
 fn shift_arrows_move_between_boxes_spatially() {
     use Pane::*;
-    // Right column from the left, same row; edges stay put.
+    // Right column from the left, same row; edges stay put. The agent box
+    // is empty here, so arrows into it stay where they are.
     for (from, key, to) in [
         (Repos, Key::ShiftRight, Detail),
-        (List, Key::ShiftRight, Agent),
+        (List, Key::ShiftRight, List),
         (Detail, Key::ShiftLeft, Repos),
         (Agent, Key::ShiftLeft, List),
         (List, Key::ShiftUp, Repos),
         (Agent, Key::ShiftUp, Detail),
         (Repos, Key::ShiftDown, List),
-        (Detail, Key::ShiftDown, Agent),
+        (Detail, Key::ShiftDown, Detail),
         (Detail, Key::ShiftRight, Detail),
         (Repos, Key::ShiftLeft, Repos),
     ] {
@@ -132,6 +133,24 @@ fn shift_arrows_move_between_boxes_spatially() {
         };
         press(&mut app, key);
         assert_eq!(app.pane, to, "{from:?} + {key:?}");
+    }
+}
+
+#[test]
+fn shift_arrows_reach_the_agent_box_only_while_it_holds_something() {
+    use Pane::*;
+    // Same rule as Tab: with a live agent the box is a target.
+    for (from, key, to) in [
+        (List, Key::ShiftRight, Agent),
+        (Detail, Key::ShiftDown, Agent),
+    ] {
+        let mut app = App {
+            pane: from,
+            agent_running: true,
+            ..App::default()
+        };
+        press(&mut app, key);
+        assert_eq!(app.pane, to, "{from:?} + {key:?} with a live agent");
     }
 }
 

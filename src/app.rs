@@ -902,6 +902,8 @@ impl App {
 
     /// Activate tab `idx` (clamped): the detail follows it and loads its
     /// body when missing. A finished record's card yields to the detail.
+    /// The left column is left alone: navigating tabs must not reshuffle
+    /// the repo selection (an "all repos" view stays "all repos").
     pub fn activate_tab(&mut self, idx: usize) {
         self.dismiss_finished_card();
         if self.tabs.is_empty() {
@@ -912,8 +914,6 @@ impl App {
         self.active_tab = Some(idx);
         self.session_dirty = true;
         if let Some(tab) = self.tabs.get(idx).cloned() {
-            // The left column follows the tab, then the body loads for it.
-            self.sync_left_to_tab(&tab.repo, tab.number);
             if let Some(item) = self
                 .items
                 .iter()
@@ -2315,11 +2315,13 @@ impl App {
             // Shift+arrows move between boxes following the screen layout:
             // left column is repos over list, right column detail over agent.
             // At an edge nothing moves — a wrap would land somewhere the
-            // arrow did not point.
+            // arrow did not point. The agent box is a target only while it
+            // holds something (`agent_active`, same rule as Tab): moving
+            // into an empty instructions box is a surprise, not a shortcut.
             Key::ShiftRight => match self.pane {
                 Pane::Repos => self.pane = Pane::Detail,
-                Pane::List => self.pane = Pane::Agent,
-                Pane::Detail | Pane::Agent => {}
+                Pane::List if self.agent_active() => self.pane = Pane::Agent,
+                Pane::Detail | Pane::Agent | Pane::List => {}
             },
             Key::ShiftLeft => match self.pane {
                 Pane::Detail => self.pane = Pane::Repos,
@@ -2333,8 +2335,8 @@ impl App {
             },
             Key::ShiftDown => match self.pane {
                 Pane::Repos => self.pane = Pane::List,
-                Pane::Detail => self.pane = Pane::Agent,
-                Pane::List | Pane::Agent => {}
+                Pane::Detail if self.agent_active() => self.pane = Pane::Agent,
+                Pane::Detail | Pane::List | Pane::Agent => {}
             },
             Key::Right => {
                 // Right column top is the detail; from anywhere on the left,

@@ -5,7 +5,7 @@
 //! The session (`state.json`) keeps pane, cursors, filter, query and tabs so
 //! a temporary exit resumes where the user left off.
 
-use gtasks::app::{App, Key, Msg, Pane};
+use gtasks::app::{App, Key, Msg, Pane, Tab};
 use gtasks::model::{Item, ItemKind};
 
 fn item(repo: &str, number: u64, title: &str) -> Item {
@@ -84,6 +84,40 @@ fn t_cycles_tabs_forward_and_back() {
     assert_eq!(app.active_tab, Some(0), "t wraps to the first tab");
     press(&mut app, Key::Char('T'));
     assert_eq!(app.active_tab, Some(1), "T goes back");
+}
+
+#[test]
+fn activating_a_tab_keeps_the_repo_selection() {
+    let mut app = app_with_items();
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    app.tabs.push(Tab {
+        repo: "me/b".to_string(),
+        number: 2,
+    });
+    // "All" selected: cursor 0, no filter.
+    let cursor = app.repos_cursor;
+    let filter = app.repo_filter.clone();
+    app.activate_tab(1);
+    assert_eq!(app.active_tab, Some(1));
+    assert_eq!(
+        app.effective_item().map(|i| (i.repo.as_str(), i.number)),
+        Some(("me/b", 2)),
+        "the detail follows the tab"
+    );
+    assert_eq!(app.repos_cursor, cursor, "the repo cursor stays");
+    assert_eq!(
+        app.repo_filter, filter,
+        "the filter stays: an all-repos view stays all-repos"
+    );
+    app.activate_tab(0);
+    assert_eq!(app.repos_cursor, cursor);
+    assert_eq!(
+        app.effective_item().map(|i| (i.repo.as_str(), i.number)),
+        Some(("me/a", 1))
+    );
 }
 
 #[test]
@@ -236,7 +270,7 @@ fn opening_a_tab_pulls_the_left_column_onto_it() {
 }
 
 #[test]
-fn switching_tabs_moves_the_left_column_along() {
+fn switching_tabs_leaves_the_left_column_alone() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // me/a #1, the list narrows to me/a
     press(&mut app, Key::Esc); // back to the repos, cursor on me/a
@@ -250,9 +284,9 @@ fn switching_tabs_moves_the_left_column_along() {
     assert!(
         matches!(
             &app.repo_filter,
-            gtasks::app::RepoFilter::One(slug) if slug.as_str() == "me/a"
+            gtasks::app::RepoFilter::One(slug) if slug.as_str() == "me/b"
         ),
-        "the left column followed the tab: {:?}",
+        "the last user selection stays, tabs do not touch it: {:?}",
         app.repo_filter
     );
     assert_eq!(
