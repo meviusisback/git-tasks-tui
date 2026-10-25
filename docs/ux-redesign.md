@@ -329,6 +329,12 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **An unrecorded measurement expires like an unpinned green.** The proof lives
+  as long as the session that produced it; written down, it survives the session.
+  Six trees went unreviewed for eighteen commits not out of laziness but because
+  the evidence was in hand and never written — the specifications that went from
+  red to green, the mutations, the numbers. Write the row when you measure, not
+  when someone asks for the ledger.
 - **The checkable form of "is this test real?": which change would make it
   fail?** If the answer is "none that touches the behaviour it names", the
   assertion is a description. Unlike "write good tests", this can be verified —
