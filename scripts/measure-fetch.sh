@@ -23,7 +23,12 @@
 #     the server's). `env PATH=... ` inside the command string is what works.
 #   * the app resolves `gh` once at startup and refuses a program it cannot
 #     verify (S2), so the wrapper must be a regular executable owned by us with
-#     no group/world write bits — hence 0700 and a temp dir of our own.
+#     no group/world write bits — hence 0700 and a temp dir of our own;
+#   * the app **strips the environment** of the programs it spawns (S16: an
+#     allowlist, not a copy), so the wrapper cannot read the log path from a
+#     variable — it must be written into the wrapper itself. A wrapper that
+#     falls back to a default path silently logs to the wrong place and the run
+#     looks like "no gh calls".
 set -eu
 
 seconds=${1:-20}
