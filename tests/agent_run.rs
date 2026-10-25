@@ -50,7 +50,7 @@ fn pr_app() -> (App, tempfile::TempDir) {
         failures: Vec::new(),
     });
     app.agent_profile = "default".to_string();
-    app.clone_root = Some(root);
+    app.clone_roots = vec![root];
     (app, tmp)
 }
 
@@ -98,7 +98,7 @@ fn plan_refuses_issues_because_they_have_no_branch() {
         ItemKind::Issue,
         None,
         "default",
-        Some(PathBuf::from("/x").as_path()),
+        &[PathBuf::from("/x")],
     )
     .expect_err("issues must be refused");
     assert_eq!(err, "agents start on pull requests — issues have no branch");
@@ -113,7 +113,7 @@ fn plan_refuses_a_pr_without_a_head_branch() {
         ItemKind::Pr,
         None,
         "default",
-        Some(PathBuf::from("/x").as_path()),
+        &[PathBuf::from("/x")],
     )
     .expect_err("a PR without a branch cannot be placed");
     assert_eq!(err, "no head branch for o/r#7 — refresh and try again");
@@ -128,7 +128,7 @@ fn plan_refuses_without_clone_root() {
         ItemKind::Pr,
         Some("fix-foo"),
         "default",
-        None,
+        &[],
     )
     .expect_err("no clone root must be refused");
     assert_eq!(err, "no clone_root configured — agents need local clones");
@@ -145,13 +145,13 @@ fn plan_refuses_a_missing_clone_with_its_place_named() {
         ItemKind::Pr,
         Some("x"),
         "default",
-        Some(missing.as_path()),
+        std::slice::from_ref(&missing),
     )
     .expect_err("a missing clone must be refused");
     assert_eq!(
         err,
         format!(
-            "no local clone for meviusisback/git-tasks-tui under {}",
+            "no local clone for meviusisback/git-tasks-tui under any of: {}",
             missing.display()
         )
     );
@@ -239,7 +239,7 @@ fn a_launch_that_never_starts_still_unlinks_the_seed() {
 #[test]
 fn g_without_clone_root_names_the_missing_config() {
     let (mut app, _tmp) = pr_app();
-    app.clone_root = None;
+    app.clone_roots = Vec::new();
     app.update(Msg::Key(Key::Char('g')));
     assert!(
         app.agent_requested.is_none(),
@@ -285,7 +285,7 @@ fn y_on_an_agent_question_moves_the_agreed_plan_to_the_loop() {
         ItemKind::Pr,
         Some("fix-foo"),
         "default",
-        app.clone_root.as_deref(),
+        &app.clone_roots,
     )
     .expect("the fixture validates");
     let path = PathBuf::from("/tmp/wt/o/r/fix-foo");

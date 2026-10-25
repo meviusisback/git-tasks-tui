@@ -204,7 +204,7 @@ pub fn plan_agent(
     kind: crate::model::ItemKind,
     head_branch: Option<&str>,
     profile: &str,
-    clone_root: Option<&Path>,
+    roots: &[std::path::PathBuf],
 ) -> Result<AgentPlan, String> {
     if kind != crate::model::ItemKind::Pr {
         return Err("agents start on pull requests — issues have no branch".to_string());
@@ -214,20 +214,31 @@ pub fn plan_agent(
             "no head branch for {repo}#{number} — refresh and try again"
         ));
     };
-    let Some(root) = clone_root else {
+    if roots.is_empty() {
         return Err("no clone_root configured — agents need local clones".to_string());
-    };
+    }
     let name = repo.split('/').next_back().unwrap_or(repo);
-    let clone = root.join(name);
-    match std::fs::symlink_metadata(clone.join(".git")) {
-        Ok(meta) if !meta.file_type().is_symlink() => {}
-        _ => {
-            return Err(format!(
-                "no local clone for {repo} under {}",
-                root.display()
-            ));
+    // Every configured root is tried, in order, because clones live in more than one directory.
+    // The clone is the one that exists: searching beats guessing, and the refusal below names
+    // every place that was looked at instead of only the first.
+    let mut tried: Vec<String> = Vec::new();
+    let mut found: Option<std::path::PathBuf> = None;
+    for root in roots {
+        let clone = root.join(name);
+        match std::fs::symlink_metadata(clone.join(".git")) {
+            Ok(meta) if !meta.file_type().is_symlink() => {
+                found = Some(clone);
+                break;
+            }
+            _ => tried.push(root.display().to_string()),
         }
     }
+    let Some(clone) = found else {
+        return Err(format!(
+            "no local clone for {repo} under any of: {}",
+            tried.join(", ")
+        ));
+    };
     Ok(AgentPlan {
         repo: repo.to_string(),
         number,

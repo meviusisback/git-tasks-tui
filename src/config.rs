@@ -30,6 +30,12 @@ pub struct Config {
     /// Directory holding local clones (`<clone_root>/<repo-name>`). `None`
     /// means the agent cannot be placed: refusing beats guessing.
     pub clone_root: Option<PathBuf>,
+    /// Where to look for local clones, in order. This is the shape the old key already had
+    /// (`clone_roots = ["~/repo", "~/repos"]`), and the reason it exists: clones really do live
+    /// in more than one directory, and one path cannot say so. `clone_root`, when set, is tried
+    /// first, so a single-root config keeps working.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clone_roots: Vec<PathBuf>,
 }
 
 impl Default for Config {
@@ -46,11 +52,28 @@ impl Default for Config {
             trust_worktree_rules: false,
             agent_profile: "default".to_string(),
             clone_root: None,
+            clone_roots: Vec::new(),
         }
     }
 }
 
 impl Config {
+    /// The roots to search for a local clone, most specific first: `clone_root` (single) then
+    /// `clone_roots` (list), without duplicates. Empty means agents cannot start — which is what
+    /// the refusal sentence has always said.
+    pub fn agent_roots(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        if let Some(primary) = &self.clone_root {
+            out.push(primary.clone());
+        }
+        for root in &self.clone_roots {
+            if !out.contains(root) {
+                out.push(root.clone());
+            }
+        }
+        out
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(
             (1..=8).contains(&self.parallel),

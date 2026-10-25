@@ -311,7 +311,7 @@ fn run_tui() -> anyhow::Result<()> {
         binaries: Some(binaries.clone()),
         write_timeout: timeout,
         agent_profile: config.agent_profile.clone(),
-        clone_root: config.clone_root.clone(),
+        clone_roots: config.agent_roots(),
         ..App::default()
     };
     // A broken config is a notice, not a whisper in the log: it stays on
