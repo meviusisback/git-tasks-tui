@@ -136,7 +136,14 @@ fn git_always_carries_s16_overrides() {
 #[test]
 fn hung_gh_kills_process_group() {
     let tmp = tempfile::tempdir().unwrap();
-    let program = fake(tmp.path(), "hang", "sleep 25");
+    // The script records its own pid, so the assertion below can name the **group** it
+    // ran in instead of scanning the machine for a command line that happens to match.
+    let pidfile = tmp.path().join("child.pid");
+    let program = fake(
+        tmp.path(),
+        "hang",
+        &format!("echo $$ > {}\nsleep 25", pidfile.display()),
+    );
 
     let started = Instant::now();
     let err = run_pipe(&argv_for(program, tmp.path()), Duration::from_millis(300))
@@ -150,20 +157,87 @@ fn hung_gh_kills_process_group() {
         "timeout must fire promptly"
     );
 
-    // No live `sleep 25` may survive: scan /proc directly (no pgrep
-    // dependency) and ignore zombies, which init has yet to reap.
+    // The runner starts the child with `process_group(0)`, so the group id is its own
+    // pid. Looking at the group — not at the command line — is what makes this probe
+    // about *our* child: a `sleep 25` from anywhere else on the machine is none of its
+    // business, and a leftover from a previous run of this very test used to be
+    // indistinguishable from a survivor.
+    let group: u32 = std::fs::read_to_string(&pidfile)
+        .expect("the fake must record its pid: a timeout that never started is not a timeout")
+        .trim()
+        .parse()
+        .expect("pid");
+
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let live = live_processes_matching("sleep 25");
+        let live = live_in_group(group);
         if live.is_empty() {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "sleepers survived the group kill: {live:?}"
+            "processes in group {group} survived the kill: {live:?}"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// Anti-vacuity for the probe above: if [`live_in_group`] were broken — wrong field,
+/// wrong parse, wrong file — the loop would find an empty group every time and the
+/// timeout test would pass while proving nothing. This control asserts the scanner can
+/// see a group that is demonstrably alive.
+#[test]
+fn the_group_scanner_sees_a_live_group() {
+    use std::os::unix::process::CommandExt;
+
+    let mut decoy = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 5")
+        .process_group(0)
+        .spawn()
+        .expect("spawn decoy");
+    let group = decoy.id();
+
+    let seen = live_in_group(group);
+    let _ = decoy.kill();
+    let _ = decoy.wait();
+
+    assert!(
+        !seen.is_empty(),
+        "the scanner found nothing in group {group}, which was alive: the probe above \
+         would pass by finding nothing anywhere"
+    );
+}
+
+/// Live pids whose **process group** is `group`, zombies excluded.
+fn live_in_group(group: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid): Option<u32> = name.to_string_lossy().parse().ok() else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        // `comm` may contain spaces and parens, so fields are counted from the last ')'.
+        // After it: state, ppid, pgrp, …
+        let Some(i) = stat.rfind(')') else { continue };
+        let rest: Vec<&str> = stat[i + 2..].split(' ').collect();
+        let (Some(state), Some(pgrp)) = (rest.first(), rest.get(2)) else {
+            continue;
+        };
+        if *state == "Z" {
+            continue;
+        }
+        if pgrp.trim().parse::<u32>() == Ok(group) {
+            out.push(pid);
+        }
+    }
+    out
 }
 
 /// Pids whose full command line equals `want` and whose state is not zombie.
