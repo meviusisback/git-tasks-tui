@@ -115,3 +115,19 @@ what they were:
 
 Both were experiments that succeeded; the ledger records them here so `git log`
 does not have to be read as a mystery.
+
+## Rows written by @auditor
+
+The rows above were appended to one table, and every insertion landed on the same
+anchor: three attempts, three conflicts, all resolved by hand. From here each reviewer
+keeps its own section at the end of this file. Nothing in the tooling depends on
+position — `review-state.sh` finds rows by the `| \`` prefix wherever they sit, and
+"newest" is the smallest distance from the tip, not the last line. Earlier rows by this
+reviewer stay where they were written; a ledger is not rewritten.
+
+Every row here says **who measured**, **with what**, and **on which object**.
+
+| tree | sha | verdict | evidence — and who measured what |
+|---|---|---|---|
+| `review/task-13b-r1` | `4597e0c` | **PASS** (perf) | Measured by @auditor on the host, 2026-10-25, with `scripts/measure-startup.sh` (the version in PR #14: `-e` isolation, control screen, 250 ms sampling) plus a fake `gh` first in `PATH` that logs argv and duration. **Before**: `ac41c4f`, binary sha256 `1a849fbb28ef0978`, 69 configured repos → **56 009 ms** to the first item row. **This tree**: `4597e0c`, binary sha256 `10bf864113b6a543`, same config → **5 154 / 5 606 / 4 330 ms** over three runs, control green each time; the ten-second requirement is met and the improvement is 10.7×. **Mechanism, from the argv log, not inferred**: 69 REST calls became **4** `gh api graphql` calls (batch of 20) at 3 546 / 3 807 / 3 850 / 4 474 ms — the wall clock is now the slowest call, not the sum. **Verified on this tree**: `validate_repo_slug` admits only alphanumerics and `._-`, so repo names interpolated into the query cannot escape their quotes, and `batch_argv` passes one `--field` with one argument per word (no shell); a `null` alias is that repo's failure, not the batch's. **Open (MEDIUM, B-1)**: a batch that *fails to run* marks every repo in it as failed (`fetch.rs` → `(Vec::new(), Some("batch {index}: …"))`). Measured with `rust-lang/rust`, `kubernetes/kubernetes`, `torvalds/linux` at `limit = 100`: one call, `gh: HTTP 502` after 11 723 ms, screen reading `0 items from 3 repos · 3 failed`. Before the batching a heavy repo failed alone; now it can take nineteen with it. Fix proposed: bisect a failed batch down to a single repo, on the error path only. **Not measured here**: the coordinator's own timing — that is a separate measurement on the same tree, and it stays his row to write. key-symbol: src/graphql.rs contains "pub fn batch_query" |
+
