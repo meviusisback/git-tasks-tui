@@ -164,9 +164,10 @@ fn help_overlay_lists_the_full_keymap() {
         screen.contains("open the detail box"),
         "full keymap: {screen}"
     );
+    assert!(screen.contains("q          quit"), "quit row: {screen}");
     assert!(
-        screen.contains("quit (with a confirmation"),
-        "quit row: {screen}"
+        screen.contains("Ctrl-C"),
+        "the escape hatch is documented: {screen}"
     );
     assert!(
         screen.contains("coming in the next stages:"),
@@ -471,6 +472,35 @@ fn the_agent_record_shows_at_80_columns() {
         screen.contains("running…"),
         "the live state has its own word: {screen}"
     );
+}
+
+#[test]
+fn the_config_notice_shows_on_screen_until_dismissed() {
+    // The fallback must never be silent: an unreadable and an invalid file
+    // show different sentences in the legend row, at the decisive width.
+    for (notice, first_words) in [
+        (
+            "cannot read config /tmp/x/config.toml: expected `.`, `=`",
+            "cannot read",
+        ),
+        (
+            "invalid config /tmp/x/config.toml: parallel must be 1..=8, got 99",
+            "invalid config",
+        ),
+    ] {
+        let mut app = App::default();
+        app.modal = Some(gtasks::app::Modal::Notice(notice.to_string()));
+        let view = view_for(&app);
+        let screen = render_sized(&app, &view, 80, 24);
+        assert!(
+            screen.contains(first_words) && screen.contains("Esc dismiss"),
+            "the notice stays on screen with its remedy: {screen}"
+        );
+        assert!(
+            screen.contains("config problem"),
+            "the blocker is a box, not just a legend row: {screen}"
+        );
+    }
 }
 
 #[test]

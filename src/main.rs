@@ -94,34 +94,24 @@ fn app_dir() -> Option<PathBuf> {
     Some(base.join("gtasks"))
 }
 
-/// The config from disk when it is valid and non-empty, otherwise the defaults
-/// with one demo repo so the TUI has something to show on a fresh machine.
-fn load_config() -> Config {
+/// The config from disk when it is valid and non-empty, otherwise the demo
+/// repo — plus what went wrong, for the screen. The fallback stays, but it
+/// never stays silent: a missing file is a first run (no message), anything
+/// present but unusable is shown until dismissed.
+fn load_config() -> (Config, Option<String>) {
     let Some(path) = config_path() else {
-        return demo_config();
+        return (gtasks::config::demo_config(), None);
     };
     if !path.exists() {
         tracing::info!(path = %path.display(), "no config, using the demo repo");
-        return demo_config();
+        return (gtasks::config::demo_config(), None);
     }
-    match Config::load(&path) {
-        Ok(config) if config.validate().is_ok() && !config.repos.is_empty() => config,
-        Ok(_) => {
-            tracing::warn!(path = %path.display(), "config has no usable repos");
-            demo_config()
-        }
-        Err(err) => {
-            tracing::warn!(path = %path.display(), error = %err, "cannot read config");
-            demo_config()
-        }
-    }
-}
-
-fn demo_config() -> Config {
-    Config {
-        repos: vec!["meviusisback/git-tasks-tui".to_string()],
-        ..Config::default()
-    }
+    let (config, problem) = gtasks::config::load_or_demo(&path);
+    let message = problem.as_ref().map(|p| {
+        tracing::warn!(path = %path.display(), problem = ?p, "config unusable, demo fallback with a notice");
+        p.message()
+    });
+    (config, message)
 }
 
 /// The loop's half of the agent handoff (`g` validated, `y` agreed).
@@ -309,7 +299,7 @@ fn run_tui() -> anyhow::Result<()> {
         Err(err) => anyhow::bail!("gh and git are required: {err:#}"),
     };
 
-    let config = load_config();
+    let (config, config_notice) = load_config();
     let timeout = Duration::from_secs(config.timeout_s.max(1));
     let parallel = config.parallel;
     let limit = config.limit as usize;
@@ -324,6 +314,11 @@ fn run_tui() -> anyhow::Result<()> {
         clone_root: config.clone_root.clone(),
         ..App::default()
     };
+    // A broken config is a notice, not a whisper in the log: it stays on
+    // screen until dismissed, while the fetch runs behind it.
+    if let Some(notice) = config_notice {
+        app.modal = Some(gtasks::app::Modal::Notice(notice));
+    }
     // The pane lists what the user configured, including repos with no items.
     // A saved selection narrows it; an empty one means "everything". Both
     // lists are validated `RepoSlug`s from here on — `config` was checked at

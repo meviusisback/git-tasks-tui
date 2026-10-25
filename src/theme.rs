@@ -64,6 +64,13 @@ pub fn overlay() -> Style {
     Style::default().fg(WARN)
 }
 
+/// Error overlay frame: the config problem box. Same shape as help, the
+/// error colour instead of the warning one — the kind is visible before
+/// a word is read.
+pub fn alert() -> Style {
+    Style::default().fg(ALERT)
+}
+
 /// Help overlay body.
 pub fn overlay_text() -> Style {
     Style::default().fg(TEXT).bg(MANTLE)

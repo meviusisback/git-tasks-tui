@@ -113,6 +113,9 @@ pub enum Modal {
     Confirm(String),
     RepoMenu(RepoMenu),
     ActionMenu(ActionMenu),
+    /// A startup notice (broken config): information, not a question. `Esc`
+    /// dismisses it, `q` quits through it; nothing else acts while it is up.
+    Notice(String),
 }
 
 /// One row of the actions menu: the fully specified choice. No strings cross
@@ -433,6 +436,9 @@ impl App {
             }
             Some(Modal::ActionMenu(_)) => {
                 return String::from("↑/↓ choose · Enter confirm · Esc cancel");
+            }
+            Some(Modal::Notice(notice)) => {
+                return format!("{}  —  Esc dismiss · q quit", sanitize(notice));
             }
             None => {}
         }
@@ -811,6 +817,17 @@ impl App {
                     Key::Up => self.menu_step_action(-1),
                     Key::Down | Key::Char(' ') => self.menu_step_action(1),
                     Key::Enter => self.apply_action_pick(),
+                    _ => {}
+                }
+                return;
+            }
+            if matches!(self.modal, Some(Modal::Notice(_))) {
+                // Information, not a question: `Esc` puts it away, `q` quits
+                // through it, everything else waits its turn. Quitting must
+                // always work, even on top of bad news.
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Char('q') => self.quit = true,
                     _ => {}
                 }
                 return;

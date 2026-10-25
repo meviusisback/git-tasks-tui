@@ -37,7 +37,8 @@ const HELP_NOW: &[&str] = &[
     "a          first action on the selected item",
     "m          actions menu: method and branch deletion are a choice",
     "?          this keymap",
-    "q          quit (with a confirmation if the agent is running)",
+    "q          quit",
+    "Ctrl-C     quit immediately, from anywhere",
 ];
 
 /// Keys the overlay would lie about if they were listed above: nothing
@@ -101,6 +102,9 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     }
     if let Some(crate::app::Modal::ActionMenu(menu)) = &app.modal {
         draw_action_menu(frame, frame.area(), menu);
+    }
+    if let Some(crate::app::Modal::Notice(notice)) = &app.modal {
+        draw_notice(frame, frame.area(), notice);
     }
 }
 
@@ -347,4 +351,29 @@ fn draw_action_menu(frame: &mut Frame, area: Rect, menu: &crate::app::ActionMenu
         .highlight_style(theme::highlight());
     let mut state = ListState::default().with_selected(Some(menu.cursor));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// A startup blocker: the config on disk cannot be used and the app runs on
+/// the demo fallback. A centered box, not just the legend row — at 80 columns
+/// a long path would push the remedy ("Esc dismiss") off the edge, which is
+/// exactly the silence this notice replaces.
+fn draw_notice(frame: &mut Frame, area: Rect, notice: &str) {
+    let area = centered_rect(70, 80, area);
+    frame.render_widget(Clear, area);
+    let text = vec![
+        ratatui::text::Line::from(sanitize(notice)),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(sanitize("Esc dismiss · q quit")),
+    ];
+    let notice = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" config problem ")
+                .border_style(theme::alert())
+                .title_style(theme::alert()),
+        )
+        .style(theme::overlay_text())
+        .wrap(ratatui::widgets::Wrap { trim: true });
+    frame.render_widget(notice, area);
 }
