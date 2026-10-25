@@ -67,9 +67,14 @@ while IFS= read -r line; do
         || { [ "$verb" = absent ] && [ "$found" = no ]; }; then
         :
     else
-        was=absent; [ "$found" = yes ] && was=present
-        want=present; [ "$verb" = absent ] && want=absent
-        echo "check-claims: FALSE CLAIM — '$path' is $was, the message claims $want: \"$text\"" >&2
+        # Name the right object. Saying "'$path' is absent" made a reviewer check
+        # `git add` for a file that was right there: the verdict is about the
+        # TEXT inside the file, never about the file.
+        if [ "$verb" = contains ]; then
+            echo "check-claims: FALSE CLAIM — '$path' is in this commit but does not contain: \"$text\"" >&2
+        else
+            echo "check-claims: FALSE CLAIM — '$path' does contain: \"$text\", and the message claims it does not" >&2
+        fi
         echo x >> "$failures"
     fi
 done <<EOF
