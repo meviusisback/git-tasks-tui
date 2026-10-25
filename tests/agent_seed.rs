@@ -10,6 +10,77 @@ use std::io::Read;
 
 use gtasks::agent::{SeedFile, ensure_runtime_dir};
 
+/// S8, the half that is easy to miss: the seed file must **never follow a symlink**.
+///
+/// `create_in` uses `create_new` on purpose — `O_CREAT|O_EXCL` fails when the path exists,
+/// *including when it exists as a symlink*, even a dangling one. If it were plain `create`,
+/// a symlink planted at a predictable name (`seed-<pid>-<n>`, and the pid is not a secret)
+/// would make the tool write the seed through it, into a file of someone else's choosing.
+///
+/// The fixture is deterministic: every candidate name for this pid is a symlink to a victim
+/// file, so the creation must fail **and the victim must be untouched**. Then the symlinks
+/// are removed and the same call must succeed — the hinge that says the fixture is not
+/// simply broken.
+#[test]
+fn a_symlink_at_every_candidate_name_is_never_followed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("gtasks");
+    ensure_runtime_dir(&dir).unwrap();
+    assert_eq!(
+        std::fs::symlink_metadata(&dir).unwrap().permissions().mode() & 0o7777,
+        0o700
+    );
+
+    let victim = tmp.path().join("victim.txt");
+    std::fs::write(&victim, "untouched").unwrap();
+
+    let pid = std::process::id();
+    // 1000, not 100: the name counter is a process-wide static and other tests in
+    // this binary have already consumed values, so a narrow range would leave the first
+    // attempted name un-symlinked and the call would simply succeed — a green fixture
+    // that proves nothing about following. (Measured: with 100 names the call succeeded.)
+    let names: Vec<String> = (0..1000).map(|n| format!("seed-{pid}-{n}")).collect();
+    for name in &names {
+        std::os::unix::fs::symlink(&victim, dir.join(name)).unwrap();
+    }
+
+    // `SeedFile` has no `Debug` (nothing to print about a file we refuse to create), so
+    // the error is taken with a match instead of `expect_err`.
+    let created = SeedFile::create_in(&dir, "SECRET-SEED");
+    // The victim is read **before** the refusal is asserted: if the seed went through a
+    // symlink, that is the finding, and the message must say so rather than reporting a
+    // fixture that did not apply.
+    let victim_after = std::fs::read_to_string(&victim).unwrap();
+    assert_eq!(
+        victim_after, "untouched",
+        "the seed was written through the symlink: the victim file changed"
+    );
+    let err = match created {
+        Ok(seed) => panic!(
+            "every candidate name is a symlink, yet a file was created at {} — the loop \
+             picked a name outside the fixture, so this run proves nothing",
+            seed.path().display()
+        ),
+        Err(err) => err,
+    };
+    println!("refused: {err}");
+
+    // Hinge: with the symlinks gone the same call succeeds, so the refusal above was the
+    // symlinks and not a broken fixture.
+    for name in &names {
+        std::fs::remove_file(dir.join(name)).unwrap();
+    }
+    let seed = SeedFile::create_in(&dir, "SECRET-SEED").expect("a fresh name must be usable");
+    assert!(seed.path().exists());
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "untouched",
+        "the successful path must not touch the victim either"
+    );
+}
+
 /// S8/S14: the seed lives in a `0600` file inside a `0700` dir and is
 /// unlinked when the owner drops (normal exit and failure alike).
 #[test]
