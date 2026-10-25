@@ -292,6 +292,12 @@ round trip; they are written here so the next stage does not pay again.
   because nothing is implemented". (Measured: a five-test set went 3 green / 2
   red with the keys *backwards*, and the two green ones were the adversarial
   cases.)
+- **A status line is computed from what the screen draws, never narrated
+  beside it.** `selection saved (0 repos)` was true of the file and false of the
+  list: two sentences about one fact, written in two places, free to disagree.
+  The form that cannot lie derives the sentence from the same collection the
+  panel renders (`"{} repos · {} items"`): if the list is empty the count is 0,
+  and there is nowhere to write "showing all" while showing something else.
 - **A probe is not a test.** Non-deterministic checks (the TOCTOU window between
   `create_dir` and `git worktree add`) are run by hand and written down as
   probes; they never enter the gate, because a flaky green is worse than an
