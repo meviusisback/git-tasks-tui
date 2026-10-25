@@ -208,6 +208,54 @@ pub fn detail_args(repo: &str, kind: ItemKind, number: u64) -> Vec<OsString> {
     ]
 }
 
+/// `gh pr diff <n> --repo <slug>`, argv only. Diffs are pull-request-only:
+/// issues have no diff, so there is no `kind` parameter to get wrong.
+pub fn diff_args(repo: &str, number: u64) -> Vec<OsString> {
+    vec![
+        OsString::from("pr"),
+        OsString::from("diff"),
+        OsString::from(number.to_string()),
+        OsString::from("--repo"),
+        OsString::from(repo),
+    ]
+}
+
+/// Fetch the unified diff of one PR as plain text (no JSON envelope to
+/// parse). The caller caps the lines: a huge diff must not fill memory.
+pub fn fetch_diff(
+    binaries: &Binaries,
+    repo: &str,
+    number: u64,
+    timeout: Duration,
+) -> Result<String, FetchError> {
+    let cwd = std::env::current_dir().map_err(|source| FetchError::Run {
+        repo: repo.to_owned(),
+        source: source.into(),
+    })?;
+    let argv = gh(binaries, &cwd, diff_args(repo, number));
+    fetch_diff_with_caps(&argv, repo, timeout, Caps::default())
+}
+
+pub fn fetch_diff_with_caps(
+    argv: &Argv,
+    repo: &str,
+    timeout: Duration,
+    caps: Caps,
+) -> Result<String, FetchError> {
+    let output = gh::run_pipe_with_caps(argv, timeout, caps).map_err(|err| classify(repo, err))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(FetchError::Run {
+            repo: repo.to_owned(),
+            source: anyhow::anyhow!("{}: {}", output.status, stderr.trim()),
+        });
+    }
+    if output.truncated {
+        return Err(FetchError::OutputCap);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Only the body: the list already carries the metadata, and a smaller JSON
 /// keeps the output well inside `Caps`.
 #[derive(serde::Deserialize)]

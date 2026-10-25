@@ -19,6 +19,7 @@ disagree, the handler is right and this file is a bug.
 | `w` | focus the agent pane (worktree + agent instructions live there) |
 | `R` | repo selection menu: `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
+| `d` | diff of the selected PR in an overlay (`↑`/`↓` scroll, wheel scrolls, `Enter`/`Esc` closes): fetched once, then cached; first 200 lines with the total named when truncated |
 | `o` | open the selected item in the browser |
 | `r` | refresh — it works in every pane, including inside a drilled-in repo |
 | `a` | ask to act on the selected PR: opens a confirmation showing the exact command |

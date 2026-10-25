@@ -450,6 +450,24 @@ fn spawn_detail(
 type DetailResult = Result<String, fetch::FetchError>;
 type PendingDetail = (String, u64, Receiver<DetailResult>);
 
+/// What a diff fetch returns, and the tuple kept while it is in flight.
+type DiffResult = Result<String, fetch::FetchError>;
+type PendingDiff = (String, u64, Receiver<DiffResult>);
+
+fn spawn_diff(
+    binaries: Binaries,
+    repo: String,
+    number: u64,
+    timeout: Duration,
+) -> Receiver<DiffResult> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = fetch::fetch_diff(&binaries, &repo, number, timeout);
+        let _ = tx.send(result);
+    });
+    rx
+}
+
 fn run_tui() -> anyhow::Result<()> {
     install_signal_handlers();
 
@@ -563,6 +581,7 @@ fn run_tui() -> anyhow::Result<()> {
         parallel,
     ));
     let mut pending_detail: Option<PendingDetail> = None;
+    let mut pending_diff: Option<PendingDiff> = None;
     // The embedded agent, if one is running inside the box. Owned here, not
     // in App: the loop polls it, routes keys to it and kills it on quit.
     let mut embedded: Option<EmbeddedSession> = None;
@@ -633,6 +652,33 @@ fn run_tui() -> anyhow::Result<()> {
             }
         }
 
+        // A diff fetch that finished.
+        let mut diff_result: Option<DiffResult> = None;
+        let mut diff_gone = false;
+        if let Some((_, _, rx)) = &pending_diff {
+            match rx.try_recv() {
+                Ok(result) => diff_result = Some(result),
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => diff_gone = true,
+            }
+        }
+        if diff_gone {
+            pending_diff = None;
+            app.diff_requested = None;
+        }
+        if let Some(result) = diff_result {
+            if let Some((repo, number, _)) = pending_diff.take() {
+                if let Err(err) = &result {
+                    // Do not leave the request pending: it would be retried
+                    // on every loop iteration. The modal stays open showing
+                    // the failure (apply_diff writes it), so the status
+                    // line echo is for the record, not the discovery.
+                    app.status = format!("diff failed: {err}");
+                }
+                app.apply_diff(&repo, number, result);
+            }
+        }
+
         // `R`: the key handler already updated the live list; the file is
         // the loop's job, atomically and 0600, like every private write.
         // An empty check means "everything", like an empty state file: one
@@ -696,6 +742,17 @@ fn run_tui() -> anyhow::Result<()> {
                     repo.clone(),
                     number,
                     spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
+                ));
+            }
+        }
+
+        // A diff request from the key handler.
+        if pending_diff.is_none() {
+            if let Some((repo, number)) = app.diff_requested.clone() {
+                pending_diff = Some((
+                    repo.clone(),
+                    number,
+                    spawn_diff(binaries.clone(), repo, number, timeout),
                 ));
             }
         }
@@ -824,7 +881,18 @@ fn run_tui() -> anyhow::Result<()> {
                 // the agent's input: with mouse capture on, the terminal no
                 // longer turns the wheel into arrow keys.
                 Event::Mouse(me) => {
-                    if app.modal.is_none() {
+                    if matches!(app.modal, Some(Modal::Diff)) {
+                        // The diff owns the wheel while open.
+                        match me.kind {
+                            MouseEventKind::ScrollUp => {
+                                app.diff_scroll = app.diff_scroll.saturating_add(3)
+                            }
+                            MouseEventKind::ScrollDown => {
+                                app.diff_scroll = app.diff_scroll.saturating_sub(3)
+                            }
+                            _ => {}
+                        }
+                    } else if app.modal.is_none() {
                         if let MouseEventKind::Down(MouseButton::Left) = me.kind {
                             let area = Rect::new(0, 0, term_size.0, term_size.1);
                             if let Some(idx) = ui::tab_at(&app, area, me.column, me.row) {
@@ -832,25 +900,27 @@ fn run_tui() -> anyhow::Result<()> {
                             }
                         }
                     }
-                    let box_shown = app.agent_active() || app.pane == gtasks::app::Pane::Agent;
-                    match me.kind {
-                        MouseEventKind::ScrollUp if box_shown => {
-                            if let Some(sess) = embedded.as_mut() {
-                                sess.scroll(3);
-                                app.agent_screen = sess.snapshot();
-                            } else {
-                                app.agent_scroll = app.agent_scroll.saturating_add(3);
+                    if !matches!(app.modal, Some(Modal::Diff)) {
+                        let box_shown = app.agent_active() || app.pane == gtasks::app::Pane::Agent;
+                        match me.kind {
+                            MouseEventKind::ScrollUp if box_shown => {
+                                if let Some(sess) = embedded.as_mut() {
+                                    sess.scroll(3);
+                                    app.agent_screen = sess.snapshot();
+                                } else {
+                                    app.agent_scroll = app.agent_scroll.saturating_add(3);
+                                }
                             }
-                        }
-                        MouseEventKind::ScrollDown if box_shown => {
-                            if let Some(sess) = embedded.as_mut() {
-                                sess.scroll(-3);
-                                app.agent_screen = sess.snapshot();
-                            } else {
-                                app.agent_scroll = app.agent_scroll.saturating_sub(3);
+                            MouseEventKind::ScrollDown if box_shown => {
+                                if let Some(sess) = embedded.as_mut() {
+                                    sess.scroll(-3);
+                                    app.agent_screen = sess.snapshot();
+                                } else {
+                                    app.agent_scroll = app.agent_scroll.saturating_sub(3);
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
                 _ => {}

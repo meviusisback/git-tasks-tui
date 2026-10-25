@@ -61,7 +61,7 @@ const HELP_NOW: &[&str] = &[
     "← / →      move between the columns · wheel scrolls the agent box",
     "Shift + ←/↑/↓/→  move between the four boxes",
     "↑ / ↓      move the selection, or scroll detail/agent",
-    "Enter      open a tab + open the detail box",
+    "Enter      open a tab + open the detail box · d diff",
     "t / T      next / previous tab",
     "x / X      close the active tab, then the agent record",
     "w          focus the agent pane (worktree + agent instructions)",
@@ -236,6 +236,9 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     }
     if let Some(crate::app::Modal::NameInput(input)) = &app.modal {
         draw_name_input(frame, frame.area(), input);
+    }
+    if matches!(app.modal, Some(crate::app::Modal::Diff)) {
+        draw_diff(frame, frame.area(), app);
     }
 }
 
@@ -842,6 +845,57 @@ fn draw_worktrees_menu(frame: &mut Frame, area: Rect, menu: &crate::app::Worktre
         .highlight_style(theme::highlight());
     let mut state = ListState::default().with_selected(Some(menu.cursor));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// The diff overlay: the PR's unified diff, one screenful at the scroll
+/// offset, additions green, removals red, hunk headers bright. Long lines
+/// are clipped by the widget (code reads better unwrapped than rewrapped).
+/// A truncation note leads when the fetch kept only the head.
+fn draw_diff(frame: &mut Frame, area: Rect, app: &crate::app::App) {
+    let area = centered_rect(88, 88, area);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(
+            " diff {} — ↑/↓ scroll · Esc close ",
+            app.diff_for
+                .as_ref()
+                .map(|(repo, number)| format!("{repo}#{number}"))
+                .unwrap_or_default(),
+        ))
+        .border_style(theme::overlay())
+        .title_style(theme::overlay())
+        .style(theme::overlay_text());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    if app.diff_truncated {
+        rows.push(Line::from(Span::styled(
+            format!(
+                "…showing the first {} of {} lines…",
+                crate::app::App::DIFF_MAX_LINES,
+                app.diff_total
+            ),
+            Style::default().fg(theme::SUBTEXT),
+        )));
+    }
+    rows.extend(app.diff_text.lines().skip(app.diff_scroll).map(|line| {
+        let text = sanitize(line);
+        let style = if line.starts_with('+') && !line.starts_with("+++") {
+            Style::default().fg(theme::OK)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            Style::default().fg(theme::ALERT)
+        } else if line.starts_with("@@") {
+            Style::default()
+                .fg(theme::FOCUSED)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        Line::from(Span::styled(text, style))
+    }));
+    let visible = Paragraph::new(rows);
+    frame.render_widget(visible, inner);
 }
 
 /// The name prompt: create or rename, with the suggestion prepopulated so

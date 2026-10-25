@@ -8,7 +8,7 @@ use crate::agent::{
     AgentChoice, AgentId, AgentPlan, AgentRecord, AgentStatus, PlanInputs, plan_agent,
 };
 use crate::binaries::Binaries;
-use crate::fetch::FetchOutcome;
+use crate::fetch::{FetchError, FetchOutcome};
 use crate::gh::CheckedArgv;
 use crate::model::Item;
 use crate::sanitize::sanitize;
@@ -156,6 +156,10 @@ pub enum Modal {
     /// A startup notice (broken config): information, not a question. `Esc`
     /// dismisses it, `q` quits through it; nothing else acts while it is up.
     Notice(String),
+    /// The diff overlay: read-only, `Esc` (or `Enter`) closes it, `↑`/`↓`
+    /// scroll, `q` quits through it like the notice. No payload — the text
+    /// lives in the diff fields below, keyed by `diff_for`.
+    Diff,
 }
 
 /// The `g` menu: one row per installed agent binary, cursor, and the
@@ -316,6 +320,18 @@ pub struct App {
     pub detail_for: Option<(String, u64)>,
     /// Set by the key handler: the loop fetches this body.
     pub detail_requested: Option<(String, u64)>,
+    /// Unified diff of the selected PR, capped at `DIFF_MAX_LINES`.
+    pub diff_text: String,
+    /// How many lines the diff really has (before the cap).
+    pub diff_total: usize,
+    /// True when `diff_text` holds only the head of a longer diff.
+    pub diff_truncated: bool,
+    /// Which item `diff_text` belongs to, so the same diff is not fetched twice.
+    pub diff_for: Option<(String, u64)>,
+    /// Set by the key handler: the loop fetches this diff.
+    pub diff_requested: Option<(String, u64)>,
+    /// How far down the diff overlay scrolled (lines).
+    pub diff_scroll: usize,
     /// Set by `o`: the loop launches the browser.
     pub open_requested: Option<String>,
     /// The `?` overlay with the full keymap is on screen.
@@ -421,6 +437,12 @@ impl Default for App {
             detail: String::new(),
             detail_for: None,
             detail_requested: None,
+            diff_text: String::new(),
+            diff_total: 0,
+            diff_truncated: false,
+            diff_for: None,
+            diff_requested: None,
+            diff_scroll: 0,
             open_requested: None,
             show_help: false,
             tabs: Vec::new(),
@@ -593,6 +615,9 @@ impl App {
             Some(Modal::NameInput(_)) => {
                 return String::from("type the name · Enter confirm · Esc cancel");
             }
+            Some(Modal::Diff) => {
+                return String::from("↑/↓ scroll · Enter/Esc close · q quit");
+            }
             Some(Modal::Notice(_)) => {
                 // The box above says what is wrong, in full. The row only
                 // keeps the remedy: repeating the message here would truncate
@@ -612,7 +637,7 @@ impl App {
         // legend in this one row would push every message off the edge.
         let text = if self.pane == Pane::Detail {
             String::from(
-                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · W trees · Enter body",
+                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · W trees · d diff · Enter body",
             )
         } else if self.pane == Pane::Agent {
             // While the agent runs, every key but Esc is agent input —
@@ -629,11 +654,11 @@ impl App {
             String::from("q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · x close")
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent · W trees",
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent · W trees · d diff",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees",
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees · d diff",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -1422,6 +1447,76 @@ impl App {
         }
     }
 
+    /// How many diff lines the overlay keeps: a huge diff must not fill
+    /// memory, and nobody reads ten thousand lines in a box anyway.
+    pub const DIFF_MAX_LINES: usize = 200;
+
+    /// `d` on the selected row: show the PR's diff in an overlay. Fetched
+    /// once per item (like the body) and cached; reopening the same PR
+    /// shows the cache instead of hitting the network again. Issues have
+    /// no diff and are refused with the reason.
+    /// Follows the active tab when one is open.
+    pub fn request_diff(&mut self) {
+        let Some(item) = self.effective_item().cloned() else {
+            self.status = "nothing selected".to_string();
+            return;
+        };
+        if item.kind != crate::model::ItemKind::Pr {
+            self.status = "diffs are for pull requests — issues have no diff".to_string();
+            return;
+        }
+        let key = (item.repo.clone(), item.number);
+        self.diff_scroll = 0;
+        if self.diff_for.as_ref() == Some(&key) {
+            self.modal = Some(Modal::Diff);
+        } else {
+            self.diff_text = "loading the diff…".to_string();
+            self.diff_total = 0;
+            self.diff_truncated = false;
+            self.diff_for = None;
+            self.diff_requested = Some(key);
+            self.modal = Some(Modal::Diff);
+        }
+    }
+
+    /// Store a diff that arrived for `(repo, number)`; a late answer for a
+    /// previous selection is dropped instead of overwriting the current
+    /// one. The text is capped at `DIFF_MAX_LINES` with the total kept, so
+    /// the overlay can say how much it hides.
+    pub fn apply_diff(&mut self, repo: &str, number: u64, result: Result<String, FetchError>) {
+        let key = (repo.to_string(), number);
+        if let Some(pending) = &self.diff_requested {
+            if pending != &key {
+                return;
+            }
+        }
+        self.diff_requested = None;
+        match result {
+            Ok(text) => {
+                let lines: Vec<&str> = text.lines().collect();
+                let total = lines.len();
+                if lines.is_empty() {
+                    self.diff_text = "(no changes)".to_string();
+                    self.diff_total = 0;
+                    self.diff_truncated = false;
+                } else {
+                    let kept: Vec<&str> = lines.into_iter().take(Self::DIFF_MAX_LINES).collect();
+                    self.diff_truncated = total > kept.len();
+                    self.diff_total = total;
+                    self.diff_text = kept.join("\n");
+                }
+                self.diff_for = Some(key);
+            }
+            Err(err) => {
+                self.diff_for = None;
+                self.diff_text = format!("diff failed: {err}");
+                self.diff_total = 0;
+                self.diff_truncated = false;
+            }
+        }
+        self.diff_scroll = 0;
+    }
+
     /// `g` asks for an agent handoff on the selected row. Validation happens
     /// here; the terminal, git and the seed file belong to the loop, which
     /// consumes `agent_requested` (outbox, like `detail_requested`). Nothing
@@ -1907,6 +2002,18 @@ impl App {
                 }
                 return;
             }
+            if matches!(self.modal, Some(Modal::Diff)) {
+                // Read-only overlay: `Esc`/`Enter` put it away, `↑`/`↓`
+                // scroll, `q` quits through it like the notice.
+                match key {
+                    Key::Esc | Key::Enter => self.modal = None,
+                    Key::Up => self.diff_scroll = self.diff_scroll.saturating_sub(1),
+                    Key::Down => self.diff_scroll = self.diff_scroll.saturating_add(1),
+                    Key::Char('q') => self.quit = true,
+                    _ => {}
+                }
+                return;
+            }
             match key {
                 Key::Esc | Key::Char('n') => self.modal = None,
                 Key::Char('y') => {
@@ -2037,6 +2144,10 @@ impl App {
                 self.refresh_requested = true;
                 self.status = "refreshing…".to_string();
             }
+            // `d` shows the selected PR's diff in an overlay (fetched once,
+            // then cached). With a running agent focused this key types
+            // into the agent instead — it never reaches here.
+            Key::Char('d') => self.request_diff(),
             // Esc climbs one level and stops at the first: it never quits.
             // The match is exhaustive on purpose, so a new pane is a compile
             // error here instead of silently inheriting an exit.
