@@ -40,10 +40,16 @@ const HELP_NOW: &[&str] = &[
 /// Keys the overlay would lie about if they were listed above: nothing
 /// happens yet, so they get their own section with the stage that brings
 /// them, instead of reading as available today (X-1).
-const HELP_NEXT: &[&str] = &[
-    "m          actions menu (stage 14)",
-    "w          worktree menu (stage 15)",
-    "s          agent sessions (stage 16)",
+///
+/// One list, two readers: the overlay formats from `PLANNED` and the test
+/// iterates over `PLANNED` — so a newly promised key is watched from the
+/// day it is promised, not from the day someone remembers the test.
+/// `pub` (not `pub(crate)`) because the second reader is an integration
+/// test, outside the crate.
+pub const PLANNED: &[(char, &str)] = &[
+    ('m', "actions menu (stage 14)"),
+    ('w', "worktree menu (stage 15)"),
+    ('s', "agent sessions (stage 16)"),
 ];
 
 pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
@@ -257,11 +263,9 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         .chain(std::iter::once(ratatui::text::Line::from(sanitize(
             "coming in the next stages:",
         ))))
-        .chain(
-            HELP_NEXT
-                .iter()
-                .map(|line| ratatui::text::Line::from(sanitize(line))),
-        )
+        .chain(PLANNED.iter().map(|(key, what)| {
+            ratatui::text::Line::from(sanitize(&format!("{key}          {what}")))
+        }))
         .collect();
     let help = Paragraph::new(text)
         .block(

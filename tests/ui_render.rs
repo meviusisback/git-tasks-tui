@@ -309,11 +309,14 @@ fn detail_box_shows_structured_fields_at_80_columns() {
 #[test]
 fn coming_next_keys_produce_no_screen_change() {
     // The auditor's proof: every key in the overlay's "coming in the next
-    // stages" section must be a no-op today. When a later stage binds one
-    // of them, this test fails — the overlay section must shrink then, not
-    // keep promising what the screen already does. (`R` left this list the
-    // day the repo menu landed.)
-    for key in [Key::Char('m'), Key::Char('w'), Key::Char('s')] {
+    // stages" section must be a no-op today. The keys come from the same
+    // PLANNED list the overlay formats — a fourth promise is watched from
+    // the day it is added, not from the day someone remembers this test.
+    // When a later stage binds one of them, this test fails — the overlay
+    // section must shrink then, not keep promising what the screen already
+    // does. (`R` left this list the day the repo menu landed.)
+    for (key, _) in gtasks::ui::PLANNED {
+        let key = Key::Char(*key);
         let (mut app, view) = sample();
         let before = render(&app, &view);
         let before_wide = render_sized(&app, &view, 120, 30);
