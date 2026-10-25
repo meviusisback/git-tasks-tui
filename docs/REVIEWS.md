@@ -116,6 +116,14 @@ what they were:
 Both were experiments that succeeded; the ledger records them here so `git log`
 does not have to be read as a mystery.
 
+## Rows written by @hermes (coordinator)
+
+Same rules as the section below: who measured, with what, on which object.
+
+| tree | sha | verdict | evidence — and who measured what |
+|---|---|---|---|
+| `main` | `8b433d3` / `8d31705` | **PASS** (14, merged) | Measured by @hermes (the coordinator) on the host, 2026-10-25, on the binary built from `8b433d3`: with a 90x24 and an 80x24 terminal, `XDG_CONFIG_HOME`/`XDG_STATE_HOME` pointed at a throwaway dir (`-e` on `tmux new-session`, so the session does not inherit the daemon's environment), one repo configured. `m` on a PR opens the action overlay with **six rows** — `squash`, `merge`, `rebase`, each with and without `+ delete branch` — and the footer legend reads `↑/↓ choose · Enter confirm · Esc cancel`; `Esc` closes the overlay and leaves the detail behind it; `q` exits the process (session gone, checked with `tmux has-session`). The overlay fits in **80 columns** (62 wide) with no truncation. The six picks reach the product through the **same** confirmation dialog that `a` already used, and `a` still fast-merges with the defaults — verified by `tests/action_menu.rs` (8 tests: `m_opens_six_typed_rows_on_a_pr`, `m_on_an_issue_offers_only_closing`, `m_with_no_items_says_so`, `esc_closes_the_menu_without_acting`, `enter_confirms_the_picked_row_through_the_same_dialog_as_a`, `picking_delete_branch_shows_the_flag_before_anything_runs`, `a_still_fast_merges_with_defaults`). Gate on the merged tree: **50 suites, 0 failed**, clippy `--all-targets -D warnings` clean, invariants **10 passed / 0 failed / 7 skipped**. Not measured here: the effect of a confirmed merge against a live repository — no merge was executed, deliberately, because a merge is a write and a probe is not worth a real branch. key-symbol: src/app.rs contains "argv_for" |
+
 ## Rows written by @auditor
 
 The rows above were appended to one table, and every insertion landed on the same
