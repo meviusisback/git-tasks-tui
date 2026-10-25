@@ -75,6 +75,7 @@ spawn_sites_found() { # spawn_sites_found <root> → files containing Command::n
 # above a call site does not fail the invariant, while a **new** call in an existing file
 # still does: two doors in one file are two doors.
 ARGV_SITES_ALLOWED='src/actions.rs|1|an action becomes an argv here, through the allowlist
+src/agent.rs|1|the agent launch becomes an argv here: every part generated or validated, the prompt as a path
 src/fetch.rs|1|the batch read is a query the builder vouches for'
 
 argv_sites_found() { # argv_sites_found <root> → "file:count" per file, sorted

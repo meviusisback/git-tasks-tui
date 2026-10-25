@@ -24,6 +24,8 @@ fn defaults_are_sane() {
     assert_eq!(config.limit, 30);
     assert!(!config.trust_worktree_rules);
     assert!(config.repos.is_empty());
+    assert_eq!(config.agent_profile, "default");
+    assert!(config.clone_root.is_none());
 }
 
 #[test]
@@ -82,6 +84,8 @@ fn validation_rejects_out_of_range_values() {
         Box::new(|c| c.limit = 31),
         Box::new(|c| c.repos = vec!["../etc".into()]),
         Box::new(|c| c.default_profile = Some("Bad Profile".into())),
+        Box::new(|c| c.agent_profile = "Bad Profile".into()),
+        Box::new(|c| c.agent_profile = String::new()),
     ];
     for mutate in cases {
         let mut config = Config::default();

@@ -99,6 +99,67 @@ fn gh_env_knobs_present() {
     assert!(has_no_git_vars(&env));
 }
 
+/// The interactive child gets the agent allowlist too, not the parent's
+/// environment: it works inside an untrusted worktree, where a planted
+/// instruction reading `GH_TOKEN` out of the environment is the simplest
+/// exfiltration there is (F2). The test spawns exactly what the handoff
+/// spawns — same builder — and reads what the child really saw, because
+/// `Command` exposes no environment getter.
+#[test]
+fn interactive_child_gets_no_tokens() {
+    use gtasks::gh::{Argv, CheckedArgv, interactive_command};
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dump = tmp.path().join("child-env.txt");
+    let script = tmp.path().join("dump-env.sh");
+    std::fs::write(&script, format!("#!/bin/sh\nenv > {}\n", dump.display())).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let dirty = parent(&[
+        ("PATH", "/usr/bin:/bin"),
+        ("HOME", tmp.path().to_str().unwrap()),
+        ("TERM", "xterm-256color"),
+        ("GH_TOKEN", "s3cr3t"),
+        ("GITHUB_TOKEN", "s3cr3t-2"),
+        ("GIT_DIR", "/x"),
+    ]);
+    let argv = CheckedArgv::unchecked_for_tests(Argv {
+        program: script.clone(),
+        args: Vec::new(),
+        env: Vec::new(),
+        cwd: tmp.path().to_path_buf(),
+    });
+    let status = interactive_command(&script, &argv, &dirty)
+        .spawn()
+        .expect("the dump script spawns")
+        .wait()
+        .expect("the dump script is reaped");
+    assert!(status.success(), "the dump script exits 0");
+    let text = std::fs::read_to_string(&dump).expect("the child dumped its env");
+    let child_env: Vec<(OsString, OsString)> = text
+        .lines()
+        .filter_map(|line| {
+            line.split_once('=')
+                .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        })
+        .collect();
+    assert!(
+        !child_env
+            .iter()
+            .any(|(k, _)| k == "GH_TOKEN" || k == "GITHUB_TOKEN"),
+        "no token reaches the interactive child: {text}"
+    );
+    assert!(
+        gtasks::env::has_no_git_vars(&child_env),
+        "no GIT_* reaches the interactive child: {text}"
+    );
+    assert!(
+        child_env.iter().any(|(k, _)| k == "PATH"),
+        "the allowlist still carries the basics: {text}"
+    );
+}
+
 /// `GIT_CONFIG_COUNT` injection is stripped by the wrapper env.
 /// Control (no wrapper): the same injection visibly alters real git, so the
 /// stripped assertion cannot pass vacuously.

@@ -9,17 +9,20 @@
 //! process-wide: sharing a binary with other tests would let this one change their behaviour.
 
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gtasks::tui::Tui;
 
 fn counter() -> (Arc<AtomicUsize>, Box<dyn FnMut() + Send>) {
     let n = Arc::new(AtomicUsize::new(0));
     let for_restore = Arc::clone(&n);
-    (n, Box::new(move || {
-        for_restore.fetch_add(1, Ordering::SeqCst);
-    }))
+    (
+        n,
+        Box::new(move || {
+            for_restore.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
 }
 
 #[test]

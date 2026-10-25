@@ -15,7 +15,8 @@ use std::time::Duration;
 use clap::Parser;
 use gtasks::actions;
 use gtasks::actions::RepoSlug;
-use gtasks::app::{App, Msg};
+use gtasks::agent::{self, AgentPlan};
+use gtasks::app::{App, Modal, Msg, Pending};
 use gtasks::binaries::Binaries;
 use gtasks::config::Config;
 use gtasks::fetch::{self, FetchOutcome};
@@ -145,6 +146,138 @@ fn demo_config() -> Config {
     }
 }
 
+/// The loop's half of the agent handoff (`g` validated, `y` agreed).
+/// `agreed` is `Some` when the user already said yes to creating the tree;
+/// `None` means resolve first and ask before writing. Returns whether the
+/// terminal was handed over — the loop repaints everything after that.
+fn start_agent(
+    app: &mut App,
+    binaries: &Binaries,
+    config: &Config,
+    plan: AgentPlan,
+    agreed: Option<PathBuf>,
+) -> bool {
+    let root = match config.worktree_root.clone() {
+        Some(root) => root,
+        None => match gtasks::worktree::default_root() {
+            Ok(root) => root,
+            Err(err) => {
+                app.status = format!("cannot locate the worktree root: {err:#}");
+                return false;
+            }
+        },
+    };
+    // The root is ours (data dir), not the user's: create it on first use so
+    // `create` — which canonicalises and refuses to invent parents — has a
+    // real directory to start from. A configured root must already exist:
+    // silently building a tree under a typo'd path would hide the typo.
+    if config.worktree_root.is_none() {
+        if let Err(err) = gtasks::logging::ensure_state_dir(&root) {
+            app.status = format!("cannot prepare the worktree root: {err:#}");
+            return false;
+        }
+    }
+    let slug = match RepoSlug::parse(&plan.repo) {
+        Ok(slug) => slug,
+        Err(_) => {
+            app.status = format!("cannot place the agent: invalid repo {}", plan.repo);
+            return false;
+        }
+    };
+    let branch = match gtasks::worktree::BranchName::parse(&plan.branch) {
+        Ok(branch) => branch,
+        Err(_) => {
+            app.status = format!("cannot place the agent: invalid branch {}", plan.branch);
+            return false;
+        }
+    };
+    let target = match gtasks::worktree::resolve_in(&root, &plan.clone, &slug, &branch) {
+        Ok(target) => target,
+        Err(err) => {
+            app.status = format!("cannot place the agent: {err:#}");
+            return false;
+        }
+    };
+    // An agreed creation goes straight to git; anything else is asked first
+    // — a write to disk is never a side effect of pressing `g`.
+    if agreed.is_some() {
+        match gtasks::worktree::create(&root, &plan.clone, &slug, &branch, binaries) {
+            Ok(created) => return launch_agent(app, binaries, &plan, &created.path),
+            // The refusal goes to the screen as it is: no sentence of ours
+            // around it, or a check failure becomes indistinguishable from a
+            // bug in the check.
+            Err(err) => {
+                app.status = format!("{err:#}");
+                return false;
+            }
+        }
+    }
+    match agent::next_step(target) {
+        agent::AgentNext::Launch(path) => launch_agent(app, binaries, &plan, &path),
+        agent::AgentNext::AskToCreate(path) => {
+            let question = format!(
+                "no worktree for {}@{} — create it and start the agent?",
+                slug.as_str(),
+                branch.as_str()
+            );
+            app.modal = Some(Modal::Confirm(question));
+            app.pending = Some(Pending::Agent(plan, path));
+            false
+        }
+    }
+}
+
+/// Run the handoff the user validated: seed file, suspended TUI, agent on
+/// the terminal, record on return. The seed dies with the run on every path.
+/// Returns whether the terminal was handed over.
+fn launch_agent(
+    app: &mut App,
+    binaries: &Binaries,
+    plan: &AgentPlan,
+    path: &std::path::Path,
+) -> bool {
+    let Some(hermes) = binaries.hermes.as_deref() else {
+        app.status = "no agent binary (hermes) found".to_string();
+        return false;
+    };
+    let seeds = match gtasks::agent::seeds_dir() {
+        Ok(seeds) => seeds,
+        Err(err) => {
+            app.status = format!("cannot prepare the seed directory: {err:#}");
+            return false;
+        }
+    };
+    let body = agent::agent_seed_body(&plan.repo, plan.number, &plan.url, None);
+    let lines = body.lines().count();
+    let seed = match gtasks::agent::SeedFile::create_in(&seeds, &body) {
+        Ok(seed) => seed,
+        Err(err) => {
+            app.status = format!("cannot write the agent seed: {err:#}");
+            return false;
+        }
+    };
+    let argv = agent::agent_argv(hermes, &plan.profile, seed.path(), path);
+    // The handoff ran in both arms below: the screen always needs a full
+    // repaint, even when the run itself failed.
+    match agent::run_agent_handoff(&argv, seed, lines) {
+        Ok((status, _)) => {
+            let summary = status.summary();
+            app.agent_record = Some(gtasks::agent::AgentRecord {
+                repo: plan.repo.clone(),
+                number: plan.number,
+                profile: plan.profile.clone(),
+                worktree: path.to_path_buf(),
+                seed_lines: lines,
+                status,
+            });
+            app.agent_dismissed_for = None;
+            app.status = format!("agent on {}#{}: {}", plan.repo, plan.number, summary);
+        }
+        Err(err) => app.status = format!("cannot run the agent: {err:#}"),
+    }
+    true
+}
+
 /// Start one batched fetch in the background. Dropping the receiver with the app
 /// means a late result is simply discarded.
 fn spawn_fetch(
@@ -212,6 +345,8 @@ fn run_tui() -> anyhow::Result<()> {
         // Resolved once at startup: the same paths the fetch uses.
         binaries: Some(binaries.clone()),
         write_timeout: timeout,
+        agent_profile: config.agent_profile.clone(),
+        clone_root: config.clone_root.clone(),
         ..App::default()
     };
     // The pane lists what the user configured, including repos with no items.
@@ -369,6 +504,21 @@ fn run_tui() -> anyhow::Result<()> {
                 timeout,
                 parallel,
             ));
+        }
+
+        // `g` (validated by the key handler) and `y` (agreed worktree
+        // creation): the loop owns git, the seed file and the terminal.
+        // After a handoff the alternate screen is re-entered but ratatui's
+        // diff buffer is stale, so the loop repaints everything once.
+        let mut resumed = false;
+        if let Some(plan) = app.agent_requested.take() {
+            resumed |= start_agent(&mut app, &binaries, &config, plan, None);
+        }
+        if let Some((plan, path)) = app.agent_go.take() {
+            resumed |= start_agent(&mut app, &binaries, &config, plan, Some(path));
+        }
+        if resumed {
+            terminal.clear()?;
         }
 
         let view = ui::view_for(&app);
