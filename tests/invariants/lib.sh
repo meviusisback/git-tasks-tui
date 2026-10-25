@@ -209,3 +209,64 @@ $declared
 EOF
   return $rc
 }
+
+# The hook that polices claims had no test of its own, which is how a guard ends up
+# trusted rather than checked. This runs the battery in a throwaway repository: copy the
+# hook and the script, stage one file, and try one commit per claim.
+#
+# Each case is `expected|claim|why`. `expected` is the exit code the hook must produce:
+# 0 accepted, 1 refused. A case that disagrees is reported with **what the hook said**, so
+# the failure is attributable and not just a red line.
+check_claim_verdicts() { # check_claim_verdicts <root> → 0 all agree, 1 disagreement
+  local root=$1 rc=0
+  local tmp found=0 expected claim why actual said
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/claims-battery.XXXXXX") || return 1
+  (
+    cd "$tmp" || exit 1
+    git init -q . >/dev/null 2>&1 || exit 1
+    git config user.email battery@example.invalid
+    git config user.name battery
+    mkdir -p .githooks scripts
+    cp "$root/.githooks/commit-msg" .githooks/ || exit 1
+    cp "$root/scripts/check-claims.sh" scripts/ || exit 1
+    chmod +x .githooks/commit-msg
+    git config core.hooksPath "$tmp/.githooks"
+    printf 'alpha beta\ngamma delta\n' > witness.txt
+    git add witness.txt
+
+    while IFS='|' read -r expected claim why; do
+      [ -n "${expected:-}" ] || continue
+      printf 'subject\n\nClaims: %s\n' "$claim" > .msg
+      # No reset between cases: the staged tree is what the hook reads, and it does not
+      # change. Resetting would also fail on the very first commit (no HEAD~1), which is a
+      # confusing way to learn that the loop is fine.
+      if git commit -q --allow-empty -F .msg >/dev/null 2>.err; then
+        actual=0
+      else
+        actual=1
+      fi
+      found=$((found + 1))
+      if [ "$actual" != "$expected" ]; then
+        said=$(head -1 .err)
+        printf 'claim %s → hook said %s, expected %s (rc=%s) %s\n' \
+          "\"$claim\"" "${said:-<accepted>}" "$expected" "$actual" "· $why" >&2
+        exit 3
+      fi
+    done <<'CASES'
+0|witness.txt contains "beta gamma"|a phrase wrapped across a newline is still a phrase
+0|witness.txt contains "alpha beta"|a phrase that is there, on one line
+0|witness.txt absent "zeta"|an honest absence
+1|witness.txt contains "gamma beta"|the words are there, in the wrong order
+1|witness.txt contains "not in the file"|a claim the tree does not show
+1|witness.txt contains ""|an empty text matches every file: it certifies nothing
+1|witness.txt contains " "|whitespace-only matches nearly every file
+1|witness.txt contains "  "|and squeezing does not make it a fact either
+1| contains "alpha"|no witness named
+CASES
+    [ "$found" -ge 9 ] || { printf 'the battery ran %s cases, expected 9 — the here-doc is broken\n' "$found" >&2; exit 4; }
+    exit 0
+  )
+  rc=$?
+  rm -rf "$tmp"
+  return $rc
+}

@@ -49,9 +49,23 @@ while IFS= read -r line; do
     esac
 
     path=$(printf '%s' "$path" | sed 's/^ *//; s/ *$//')
+    # An empty path names no witness. Refused before the check can pass on nothing.
+    if [ -z "$path" ]; then
+        echo "check-claims: cannot check '$line' — no path before '$verb'" >&2
+        echo x >> "$failures"
+        continue
+    fi
     # Keep only what is inside the quotes: prose after the closing quote must not
     # be able to change the verdict.
     text=$(printf '%s' "$text" | sed 's/^ *//; s/^"//; s/".*$//')
+    # An **empty text matches everything** (`grep -F ""` succeeds on any file), so
+    # `Claims: <path> contains ""` used to certify nothing and be accepted — the one
+    # claim in the battery that passed without being true. Refused here.
+    if [ -z "$text" ]; then
+        echo "check-claims: cannot check '$line' — the quoted text is empty, and an empty text matches every file" >&2
+        echo x >> "$failures"
+        continue
+    fi
 
     # A file that is not in the commit witnesses nothing — same rule as K-1 in
     # review-state.sh, and for the same reason.
@@ -69,6 +83,14 @@ while IFS= read -r line; do
     # the verdict from depending on where the paragraph happens to wrap.
     squeeze() { tr '\n' ' ' | tr -s '[:space:]' ' '; }
     want=$(printf '%s' "$text" | squeeze)
+    # After squeezing, a "text" made only of whitespace matches any file with two words
+    # in it. `Claims: <path> contains " "` passed the first version of this guard
+    # (measured): non-empty, and true of nearly every file. Refused on what it means.
+    if [ -z "$(printf '%s' "$want" | tr -d '[:space:]')" ]; then
+        echo "check-claims: cannot check '$line' — the quoted text is only whitespace, so it matches nearly every file" >&2
+        echo x >> "$failures"
+        continue
+    fi
     if git show ":$path" | squeeze | grep -qF -- "$want"; then found=yes; else found=no; fi
 
     if { [ "$verb" = contains ] && [ "$found" = yes ]; } \
