@@ -54,3 +54,24 @@ fn the_marker_is_shorter_than_the_message() {
         "the marker is a state, not the message: {legend:?}"
     );
 }
+
+/// The flag follows the load, not the past: a clean load starts clear, so a
+/// marker can never outlive the problem that raised it. The only writer is
+/// startup (`config_fallback: problem.is_some()`), which is why this pins
+/// both ends available to tests — the default and the clean load.
+#[test]
+fn the_flag_follows_the_load_not_the_past() {
+    assert!(
+        !App::default().config_fallback,
+        "a fresh app never claims a fallback"
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("gtasks/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "repos = [\"o/r\"]\n").unwrap();
+    let (_, problem) = gtasks::config::load_or_demo(&path);
+    assert!(
+        problem.is_none(),
+        "a clean load carries no problem, so the flag starts clear: {problem:?}"
+    );
+}
