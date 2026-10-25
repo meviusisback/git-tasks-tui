@@ -329,6 +329,17 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **A list of things to delete is re-read at the moment of deleting, not carried
+  along.** Measured 2026-10-25: a branch list two rounds old was used to delete
+  19 branches, and two new branches had appeared in between — one of them the
+  head of an open pull request, which closed itself. Nothing was lost only
+  because the work existed in two places. Deletion is the one operation a
+  `revert` does not undo, so `git ls-remote` immediately before, every time.
+- **An open PR is a claim about push history, not about the tree.** A branch
+  pushed again from a stale view reopens its pull request, and the queue then
+  shows work that already landed. `git merge-base --is-ancestor <head>
+  origin/main` answers the question the queue cannot: three PRs were closed
+  that way in one hour, each with its proof.
 - **When the subject of the measurement is `main`, the command names it.** A
   fifth form of the same family, found 2026-10-25: `git log -1 --format='%s'`
   without a revision answers "where is HEAD", which is a different question from
