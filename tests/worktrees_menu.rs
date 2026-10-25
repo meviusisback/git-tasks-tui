@@ -267,6 +267,97 @@ fn n_names_a_parallel_tree_r_renames_d_deletes() {
 }
 
 #[test]
+fn w_opens_the_worktree_menu_without_any_agent() {
+    let (mut app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    let path = plant_worktree(&root, "fix-foo");
+    press(&mut app, Key::Char('W'));
+    let Some(Modal::Worktrees(menu)) = app.modal.as_ref() else {
+        panic!("W opens the worktree menu, got {:?}", app.modal);
+    };
+    assert!(menu.agent.is_none(), "no agent picked yet");
+    assert_eq!(menu.rows.len(), 1);
+    assert_eq!(menu.rows[0].path, path);
+    assert!(
+        app.agent_requested.is_none(),
+        "nothing launches from listing"
+    );
+}
+
+#[test]
+fn w_with_no_trees_still_opens_the_menu() {
+    let (mut app, _tmp) = pr_app();
+    press(&mut app, Key::Char('W'));
+    assert!(
+        matches!(app.modal, Some(Modal::Worktrees(_))),
+        "even empty: the menu is where `n` lives, got {:?}",
+        app.modal
+    );
+}
+
+#[test]
+fn w_refuses_issues_like_g_does() {
+    let (mut app, _tmp) = pr_app();
+    app.apply_outcome(FetchOutcome {
+        items: vec![item("o/r", 9, ItemKind::Issue, None)],
+        failures: Vec::new(),
+    });
+    press(&mut app, Key::Char('W'));
+    assert!(app.modal.is_none(), "no menu without a branch");
+    assert!(
+        app.status.contains("no branch"),
+        "the reason is on screen: {}",
+        app.status
+    );
+}
+
+#[test]
+fn standalone_use_leads_to_the_agent_menu_with_the_tree_preset() {
+    let (mut app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    let path = plant_worktree(&root, "fix-foo");
+    press(&mut app, Key::Char('W'));
+    press(&mut app, Key::Enter);
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("using a tree asks which agent, got {:?}", app.modal);
+    };
+    assert_eq!(menu.place.as_deref(), Some(path.as_path()));
+    assert_eq!(menu.plan.branch, "fix-foo");
+    press(&mut app, Key::Enter);
+    let (plan, place) = app
+        .agent_place
+        .as_ref()
+        .expect("confirming the agent launches on the preset tree");
+    assert_eq!(plan.branch, "fix-foo");
+    assert_eq!(place, &path);
+    assert_eq!(plan.agent.id, AgentId::Hermes, "first row, hermes");
+}
+
+#[test]
+fn standalone_new_names_then_picks_the_agent() {
+    let (mut app, _tmp) = pr_app();
+    press(&mut app, Key::Char('W'));
+    press(&mut app, Key::Char('n'));
+    // The head branch is the suggestion: confirming untouched keeps it.
+    press(&mut app, Key::Enter);
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("naming a tree asks which agent, got {:?}", app.modal);
+    };
+    assert_eq!(menu.plan.branch, "fix-foo");
+    assert!(menu.place.is_some(), "the named path travels along");
+    assert!(
+        app.agent_requested.is_none(),
+        "no launch before the agent pick"
+    );
+    press(&mut app, Key::Enter);
+    let (plan, _place) = app
+        .agent_place
+        .as_ref()
+        .expect("confirming the agent launches on the named tree");
+    assert_eq!(plan.branch, "fix-foo");
+}
+
+#[test]
 fn the_list_marks_items_that_have_a_worktree() {
     let (app, tmp) = pr_app();
     plant_worktree(&tmp.path().join("wt"), "fix-foo");

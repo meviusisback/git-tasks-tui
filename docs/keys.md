@@ -25,6 +25,7 @@ disagree, the handler is right and this file is a bug.
 | `y` | in the confirmation: run the command |
 | `n` / `Esc` | in the confirmation: cancel — nothing runs |
 | `g` | choose the agent + worktree for the selected PR: first the agent menu (hermes, pi, omp, opencode, agy — only installed ones), then the worktree — use an existing tree, `n` name a new parallel one (head branch suggested), `r` rename, `d` delete (asks first, the branch stays) |
+| `W` | the worktree menu directly, without the agent flow: the same list/use/new/rename/delete for the selected PR; picking a tree for work leads to the agent menu with that tree preset |
 | click on a tab | opens it (same strip the keyboard uses; separators switch nothing, clicks while a dialog is open are ignored) |
 
 `a` on an **issue** does nothing and says why: issues are not merged. The merge

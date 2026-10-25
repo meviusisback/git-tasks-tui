@@ -159,31 +159,37 @@ pub enum Modal {
 }
 
 /// The `g` menu: one row per installed agent binary, cursor, and the
-/// validated plan the pick applies to.
+/// validated plan the pick applies to. `place` is set when the tree was
+/// already chosen (the `W` worktree menu): confirming an agent then
+/// launches straight there instead of asking for a tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentMenu {
     pub rows: Vec<crate::agent::AgentChoice>,
     pub cursor: usize,
     pub plan: AgentPlan,
+    pub place: Option<std::path::PathBuf>,
 }
 
-/// The worktree picker for one repo: existing trees plus the agent and plan
-/// the choice applies to. The current item's branch (if any tree matches it)
-/// is marked at draw time by comparing branches — no stored flag to go stale.
+/// The worktree picker for one repo: existing trees plus the plan the
+/// choice applies to. `agent` is `Some` inside the `g` flow and `None` when
+/// opened directly with `W`: using a tree then leads to the agent menu
+/// first, while rename/delete work either way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeMenu {
-    pub agent: crate::agent::AgentChoice,
+    pub agent: Option<crate::agent::AgentChoice>,
     pub plan: AgentPlan,
     pub rows: Vec<crate::worktree::WorktreeRow>,
     pub cursor: usize,
 }
 
 /// What the name being typed is for: a fresh worktree (agent + plan wait
-/// for it) or a rename (the old tree waits for its new name).
+/// for it) or a rename (the old tree waits for its new name). `agent` is
+/// `None` when the prompt was opened from the standalone worktree menu:
+/// confirming then leads to the agent menu instead of launching.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamePurpose {
     Create {
-        agent: crate::agent::AgentChoice,
+        agent: Option<crate::agent::AgentChoice>,
         plan: AgentPlan,
     },
     Rename {
@@ -606,7 +612,7 @@ impl App {
         // legend in this one row would push every message off the edge.
         let text = if self.pane == Pane::Detail {
             String::from(
-                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · Enter body",
+                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · W trees · Enter body",
             )
         } else if self.pane == Pane::Agent {
             // While the agent runs, every key but Esc is agent input —
@@ -623,11 +629,11 @@ impl App {
             String::from("q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · x close")
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent",
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent · W trees",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent",
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -1126,20 +1132,42 @@ impl App {
         }
     }
 
-    /// `Enter` on a worktree row: work on it — the plan takes the row's
-    /// branch and the loop launches on the row's path. The path travels
-    /// with the choice instead of being re-derived from the branch: after
-    /// an outside rename the two no longer match.
+    /// `Enter` on a worktree row: work on it. Inside the `g` flow the agent
+    /// is already picked and the loop launches on the row's path; opened
+    /// directly with `W`, the agent menu comes first with the tree preset.
+    /// The path travels with the choice instead of being re-derived from
+    /// the branch: after an outside rename the two no longer match.
     fn use_worktree_row(&mut self) {
         if let Some(Modal::Worktrees(menu)) = self.modal.take() {
             let Some(row) = menu.rows.get(menu.cursor).cloned() else {
                 self.modal = Some(Modal::Worktrees(menu));
                 return;
             };
-            let mut plan = menu.plan;
-            plan.branch = row.branch.as_str().to_string();
-            plan.agent = menu.agent;
-            self.agent_place = Some((plan, row.path));
+            match menu.agent {
+                Some(agent) => {
+                    let mut plan = menu.plan;
+                    plan.branch = row.branch.as_str().to_string();
+                    plan.agent = agent;
+                    self.agent_place = Some((plan, row.path));
+                }
+                None => {
+                    let rows = self.agent_choices();
+                    if rows.is_empty() {
+                        self.status =
+                            "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
+                        return;
+                    }
+                    let mut plan = menu.plan;
+                    plan.branch = row.branch.as_str().to_string();
+                    let place = row.path;
+                    self.modal = Some(Modal::AgentMenu(AgentMenu {
+                        rows,
+                        cursor: 0,
+                        plan,
+                        place: Some(place),
+                    }));
+                }
+            }
         }
     }
 
@@ -1220,10 +1248,59 @@ impl App {
                 match crate::worktree::BranchName::parse(name) {
                     Ok(branch) => {
                         plan.branch = branch.as_str().to_string();
-                        plan.agent = agent;
-                        // The loop decides: existing tree launches straight
-                        // in, missing tree gets the creation question.
-                        self.agent_requested = Some(plan);
+                        match agent {
+                            // The `g` flow: the loop decides — existing
+                            // tree launches straight in, missing tree gets
+                            // the creation question.
+                            Some(agent) => {
+                                plan.agent = agent;
+                                self.agent_requested = Some(plan);
+                            }
+                            // The standalone menu: the agent menu comes
+                            // next, with this tree's path preset. The loop
+                            // then launches or asks, same as above.
+                            None => {
+                                let root = match self.worktree_root.clone() {
+                                    Some(root) => root,
+                                    None => {
+                                        self.status =
+                                            "no worktree root — cannot place the name".to_string();
+                                        return;
+                                    }
+                                };
+                                let slug = match crate::actions::RepoSlug::parse(&plan.repo) {
+                                    Ok(slug) => slug,
+                                    Err(_) => {
+                                        self.status =
+                                            format!("cannot place a tree in {}", plan.repo);
+                                        return;
+                                    }
+                                };
+                                match crate::worktree::resolve_in(
+                                    &root,
+                                    &plan.clone,
+                                    &slug,
+                                    &branch,
+                                ) {
+                                    Ok(place) => {
+                                        let rows = self.agent_choices();
+                                        if rows.is_empty() {
+                                            self.status = "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
+                                            return;
+                                        }
+                                        self.modal = Some(Modal::AgentMenu(AgentMenu {
+                                            rows,
+                                            cursor: 0,
+                                            plan,
+                                            place: Some(place),
+                                        }));
+                                    }
+                                    Err(err) => {
+                                        self.status = format!("bad worktree name: {err:#}");
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(err) => {
                         self.status = format!("bad worktree name: {err:#}");
@@ -1421,7 +1498,55 @@ impl App {
             rows,
             cursor: 0,
             plan,
+            place: None,
         }));
+    }
+
+    /// `W` on the selected row: the worktree menu directly, without going
+    /// through the agent menu first. Managing trees (rename, delete, or
+    /// picking where to work) is not launching an agent.
+    pub fn open_worktree_menu(&mut self) {
+        // No agent_running refusal: managing trees is not launching one.
+        // Launching a second agent stays refused, and the loop owns that.
+        let Some(item) = self.effective_item().cloned() else {
+            self.status = "nothing selected".to_string();
+            return;
+        };
+        let hermes = match self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
+            Some(hermes) => AgentChoice {
+                id: AgentId::Hermes,
+                program: hermes,
+            },
+            None => AgentChoice {
+                id: AgentId::Hermes,
+                program: std::path::PathBuf::from("hermes"),
+            },
+        };
+        // The agent inside is a placeholder until a row is confirmed: the
+        // menu replaces it with the pick (or never reads it, for r/d).
+        match plan_agent(
+            &item.repo,
+            item.number,
+            &item.url,
+            item.kind,
+            item.head_ref_name.as_deref(),
+            PlanInputs {
+                profile: &self.agent_profile,
+                roots: &self.clone_roots,
+                default_agent: hermes,
+            },
+        ) {
+            Ok(plan) => {
+                let rows = self.repo_worktrees(&plan);
+                self.modal = Some(Modal::Worktrees(WorktreeMenu {
+                    agent: None,
+                    plan,
+                    rows,
+                    cursor: 0,
+                }));
+            }
+            Err(reason) => self.status = reason,
+        }
     }
 
     /// An agent row was confirmed: with existing worktrees the user picks
@@ -1431,11 +1556,14 @@ impl App {
         if rows.is_empty() {
             self.modal = Some(Modal::NameInput(NameInput {
                 value: plan.branch.clone(),
-                purpose: NamePurpose::Create { agent, plan },
+                purpose: NamePurpose::Create {
+                    agent: Some(agent),
+                    plan,
+                },
             }));
         } else {
             self.modal = Some(Modal::Worktrees(WorktreeMenu {
-                agent,
+                agent: Some(agent),
                 plan,
                 rows,
                 cursor: 0,
@@ -1717,7 +1845,17 @@ impl App {
                     Key::Enter => {
                         if let Some(Modal::AgentMenu(menu)) = self.modal.take() {
                             if let Some(row) = menu.rows.get(menu.cursor).cloned() {
-                                self.pick_agent(row, menu.plan);
+                                match menu.place {
+                                    // The tree was already chosen in the
+                                    // worktree menu: launch straight there.
+                                    Some(place) => {
+                                        let mut plan = menu.plan;
+                                        plan.agent = row;
+                                        self.agent_place = Some((plan, place));
+                                    }
+                                    // The `g` flow: the tree choice comes next.
+                                    None => self.pick_agent(row, menu.plan),
+                                }
                             }
                         }
                     }
@@ -1851,6 +1989,10 @@ impl App {
             // `g` hands the selected PR to an agent (the loop owns the
             // terminal, so this only validates and asks).
             Key::Char('g') => self.request_agent(),
+            // `W` manages worktrees without launching anything: list, use,
+            // rename, delete — the agent menu only appears when a tree is
+            // picked for work.
+            Key::Char('W') => self.open_worktree_menu(),
             // `x`/`X` close the active tab first, then the agent record.
             // Tabs are the newest layer; without tabs this is the old `x`.
             Key::Char('x') | Key::Char('X') => self.close_tab_or_record(),

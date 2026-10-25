@@ -68,7 +68,7 @@ const HELP_NOW: &[&str] = &[
     "Esc        back one level: overlay → agent → detail → list (never quits)",
     "R          repo selection menu (Space mark · a all · n none)",
     "o          open the selected item in the browser",
-    "g          choose the agent + worktree for the selected PR",
+    "g / W      agent + worktree for the PR · worktrees alone",
     "/          filter the visible list",
     "r          refresh",
     "a          first action on the selected item",
