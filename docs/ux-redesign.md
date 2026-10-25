@@ -329,6 +329,12 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **When a decision is born from a comment, measure what the comment
+  describes first.** Twice in one day a comment said what the code did and was
+  wrong — the agent's environment ("inherits everything" — it was already
+  allowlisted) and the signal handlers ("belong to the same restore" — they
+  already ended in `Drop`). Both cost a round of deciding to apply something
+  already applied. Ten minutes of measuring beats a day of believing.
 - **Commit before you mutate.** Four times in this project a `checkout --`,
   `reset --hard` or an abandoned rebase destroyed work that was not committed —
   by both humans and agents. A copy in `/tmp` is luck; a commit is a guarantee.
