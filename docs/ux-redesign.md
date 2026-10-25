@@ -263,6 +263,18 @@ round trip; they are written here so the next stage does not pay again.
 - **Fields come from data that was actually fetched.** A field with no source is
   omitted, never defaulted: `checks: none` and `checks: never asked` are
   different statements, and only one of them is honest.
+- **A rejection test needs a positive hinge.** If a test can be green while the
+  function does not exist, it is not measuring the function — a stub that refuses
+  everything satisfies "it must fail" and "it wrote nothing outside". Every
+  refusal test therefore carries, in the same fixture, a clean operation that
+  must succeed: that is what tells "refused for the right reason" from "refused
+  because nothing is implemented". (Measured: a five-test set went 3 green / 2
+  red with the keys *backwards*, and the two green ones were the adversarial
+  cases.)
+- **A probe is not a test.** Non-deterministic checks (the TOCTOU window between
+  `create_dir` and `git worktree add`) are run by hand and written down as
+  probes; they never enter the gate, because a flaky green is worse than an
+  absent check.
 
 Theme: Catppuccin Mocha tokens in one module (`src/theme.rs`), no colour literals
 elsewhere; the legend and the status line share the same palette.
