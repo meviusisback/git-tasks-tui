@@ -6,6 +6,7 @@ use gtasks::theme;
 use gtasks::ui::{ViewModel, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::style::Color;
 
 fn render(app: &App, view: &ViewModel) -> String {
     render_sized(app, view, 80, 12)
@@ -232,6 +233,20 @@ fn recovery_keys_survive_narrow_widths() {
 }
 
 #[test]
+fn status_messages_survive_at_80_columns() {
+    // S-6a repro: at 80 columns the status used to drown behind a ~100-cell
+    // legend. `r` is the honest path — it sets a real message, no fields.
+    let (mut app, view) = sample();
+    app.update(Msg::Key(Key::Char('r')));
+    assert_eq!(app.status, "refreshing…");
+    let screen = render(&app, &view);
+    assert!(
+        screen.contains("refreshing…"),
+        "80 cols must show the status: {screen}"
+    );
+}
+
+#[test]
 fn coming_next_keys_produce_no_screen_change() {
     // The auditor's proof: every key in the overlay's "coming in the next
     // stages" section must be a no-op today. When a later stage binds one
@@ -241,12 +256,23 @@ fn coming_next_keys_produce_no_screen_change() {
     for key in [Key::Char('m'), Key::Char('w'), Key::Char('s')] {
         let (mut app, view) = sample();
         let before = render(&app, &view);
+        let before_wide = render_sized(&app, &view, 120, 30);
+        let before_status = app.status.clone();
         app.update(Msg::Key(key));
         assert!(!app.quit, "{key:?} must not quit");
         assert!(app.modal.is_none(), "{key:?} must not open anything");
         assert!(!app.show_help, "{key:?} must not open the overlay");
+        assert_eq!(
+            app.status, before_status,
+            "{key:?} must not touch the status"
+        );
         let after = render(&app, &view);
         assert_eq!(before, after, "{key:?} must not change the screen");
+        let after_wide = render_sized(&app, &view, 120, 30);
+        assert_eq!(
+            before_wide, after_wide,
+            "{key:?} must not change the screen at full width either"
+        );
     }
 }
 
@@ -292,6 +318,9 @@ fn no_colour_literal_outside_the_theme_module() {
         offenders.is_empty(),
         "colour literals outside the theme module: {offenders:?}"
     );
+    // The token resolves to the Mocha base colour: the theme is not just
+    // present, it carries the value the design names.
+    assert_eq!(theme::BASE, Color::Rgb(0x1e, 0x1e, 0x2e));
 }
 
 #[test]
