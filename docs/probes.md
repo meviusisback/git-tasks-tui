@@ -359,10 +359,25 @@ What the numbers say:
   around ten seconds.
 - **The same query failed and later succeeded**, minutes apart on the same machine (`5 × 30 ×
   contexts(50)`). It is a timeout, not a rejection: there is no "this query is not allowed".
-- **The trigger is the number of requested nodes (`repos × limit`), not the query text.** `3 × 100`
-  and `3 × 30` differ by six characters — one fails, one does not. Cutting `contexts(first: 50)` to
-  `5` did not visibly move the boundary, so the multiplier is dominated by PRs × issues, not by
-  checks.
+- **The trigger is the per-repo `limit`, not the number of repos and not the query text.**
+  Four further measurements settled it after an earlier reading of these three had suggested
+  `repos × limit`:
+
+  | repos | `limit` | result |
+  |---|---|---|
+  | 1 | 100 | ok 6.7 s *(10.4 s in an earlier run: the edge is noisy)* |
+  | 2 | 100 | **HTTP 504** 11.4 s |
+  | 2 | 60 | **HTTP 502** 10.9 s |
+  | 3 | 100 | **HTTP 502** 11.0 s |
+  | 3 | 30 | ok |
+  | 20 | 30 | ok 7.3 s |
+
+  **600 requested items in one call pass (`20 × 30`); 120 items fail (`2 × 60`).** So the product
+  is not the lever: at `limit ≥ 60` two repos are enough to fail, at `limit = 30` twenty repos are
+  fine. Cutting `contexts(first: 50)` to `5` did not move the boundary either, so the cost is
+  dominated by PRs × issues at the requested depth, not by checks.
+- **The failure arrives as 502 *or* 504** — a gateway giving up, not a rejection of the query. Same
+  family, same remedy.
 - A single heavy repo is fine even at `limit = 100` (10.4 s — right on the edge, which is why it is
   the dangerous configuration: it will pass sometimes).
 
@@ -370,8 +385,10 @@ The remedy follows the shape, in this order:
 
 1. **retry once** — a read is idempotent, and the failure is transient; one retry turns most of these
    into latency instead of missing data;
-2. **cap the batch by expected cost** (`repos × limit` ≤ ~150 nodes, or lower `limit`): at
-   `limit = 30` with 20 repos per call it stayed at 7.3 s;
+2. **cap the `limit` per call, not the product** — capping `repos × limit` would cut repos per
+   batch, i.e. more round trips and a slower startup for everyone, paying for this defect with the
+   batching gain. `limit = 30` with 20 repos per call stayed at 7.3 s; and no call should be designed
+   to sit near ten seconds, which is where all three failures lived;
 3. **bisect** for the persistent case — which is what `tests/probe_batch_failure_bisect.rs`
    specifies. Bisection alone would report a repo that sits permanently at eleven seconds as failed:
    correct, and useless.
