@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub repos: Vec<String>,
-    pub clone_roots: Vec<PathBuf>,
     pub worktree_root: Option<PathBuf>,
     pub parallel: usize,
     pub timeout_s: u64,
@@ -37,7 +36,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             repos: Vec::new(),
-            clone_roots: Vec::new(),
             worktree_root: None,
             parallel: 4,
             timeout_s: 30,
