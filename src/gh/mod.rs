@@ -336,12 +336,14 @@ fn resolve_program(program: &Path) -> anyhow::Result<PathBuf> {
 /// foreground while it runs. Same [`CheckedArgv`] gate as every spawn — the
 /// argv was validated at construction; this only chooses how it runs.
 ///
-/// Two deliberate differences from [`run_pipe`]:
-/// - the environment is inherited whole. An interactive agent IS the user's
-///   session (it needs HOME, TERM, PATH, auth); a pipe child gets the S3
-///   allowlist because it never meets the user.
-/// - there is no timeout: the agent works as long as it needs. Ctrl-C goes
-///   to the child's group only, so it never takes gtasks with it.
+/// The environment is `agent_env()`, not the parent's: the child works inside
+/// an untrusted repository worktree, where an injected instruction reading
+/// the environment and posting it elsewhere is the simplest exfiltration
+/// payload there is (F2). No `GH_TOKEN`, no `GIT_*` — the agent asks the user
+/// through its own approvals instead of borrowing their credentials.
+///
+/// There is no timeout: the agent works as long as it needs. Ctrl-C goes to
+/// the child's group only, so it never takes gtasks with it.
 ///
 /// Fail closed when the terminal cannot be handed over (no TTY, EPERM): the
 /// child would stop on its first terminal read and signals would land on
@@ -349,26 +351,20 @@ fn resolve_program(program: &Path) -> anyhow::Result<PathBuf> {
 /// parent's `tcsetpgrp` — but ENOTTY fails fast: retrying a missing terminal
 /// never produces one.
 pub fn run_interactive(argv: &CheckedArgv) -> anyhow::Result<std::process::ExitStatus> {
+    use std::collections::HashMap;
+    run_interactive_from(argv, &std::env::vars().collect::<HashMap<String, String>>())
+}
+
+/// The `_from` core: the parent environment as a value, so tests can plant a
+/// dirty parent (tokens, `GIT_DIR`) without touching the process environment.
+pub fn run_interactive_from(
+    argv: &CheckedArgv,
+    parent: &std::collections::HashMap<String, String>,
+) -> anyhow::Result<std::process::ExitStatus> {
     use anyhow::Context;
-    use std::os::unix::process::CommandExt;
 
     let program = resolve_program(&argv.program)?;
-    let mut cmd = std::process::Command::new(&program);
-    cmd.args(&argv.args)
-        .current_dir(&argv.cwd)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
-    cmd.process_group(0);
-    // S11, same as pipe children: no orphan agent if gtasks dies.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    let mut cmd = interactive_command(&program, argv, parent);
     let mut child = spawn_retry(&mut cmd, &program)?;
     // SAFETY: `id()` is the child's pid; the child set its own group to it
     // via `process_group(0)`, so the group is ours to signal.
@@ -387,6 +383,41 @@ pub fn run_interactive(argv: &CheckedArgv) -> anyhow::Result<std::process::ExitS
         }
     }
     Ok(status)
+}
+
+/// Build the interactive `Command`: cleared environment plus the agent
+/// allowlist, inherited stdio, own process group, parent-death signal.
+/// Public so tests can spawn exactly what the handoff spawns and read what
+/// the child really saw — `Command` exposes no environment getter, so the
+/// property is asserted on a dump file, not on the builder's word.
+pub fn interactive_command(
+    program: &std::path::Path,
+    argv: &CheckedArgv,
+    parent: &std::collections::HashMap<String, String>,
+) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&argv.args)
+        .current_dir(&argv.cwd)
+        .env_clear()
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    for (key, value) in crate::env::agent_env_from(parent) {
+        cmd.env(key, value);
+    }
+    cmd.process_group(0);
+    // S11, same as pipe children: no orphan agent if gtasks dies.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd
 }
 
 /// Hand the terminal foreground to `pgid`, retrying the fork/setpgid race.
