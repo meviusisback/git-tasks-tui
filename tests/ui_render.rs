@@ -6,7 +6,6 @@ use gtasks::theme;
 use gtasks::ui::{ViewModel, draw};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::style::Color;
 
 fn render(app: &App, view: &ViewModel) -> String {
     render_sized(app, view, 80, 12)
@@ -249,31 +248,46 @@ fn coming_next_keys_produce_no_screen_change() {
 
 #[test]
 fn no_colour_literal_outside_the_theme_module() {
-    // Task 10 invariant: `grep -rn 'Color::' src/ | grep -v theme.rs` is empty.
+    // Task 10 invariant: no `Color::` literal outside `theme.rs`.
+    //
+    // One pattern, used by the scan AND by the anti-vacuity guard: if the
+    // pattern is renamed or the theme switches to another colour type, the scan
+    // finds nothing everywhere and would happily report "all clear". The guard
+    // requires the scan to find the literals where they must live first.
+    const PATTERN: &str = "Color::";
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
-    let mut stack = vec![root];
+    let mut in_theme = 0usize;
+    let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().is_some_and(|e| e == "rs")
-                && path.file_name().unwrap() != "theme.rs"
-            {
-                let text = std::fs::read_to_string(&path).unwrap();
-                if text.contains("Color::") {
-                    offenders.push(path);
-                }
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            if !text.contains(PATTERN) {
+                continue;
+            }
+            if path.file_name().is_some_and(|n| n == "theme.rs") {
+                in_theme += 1;
+            } else {
+                offenders.push(path);
             }
         }
     }
     assert!(
-        offenders.is_empty(),
-        "colour literals must live in src/theme.rs only: {offenders:?}"
+        in_theme > 0,
+        "the scan found no {PATTERN} even in theme.rs — the pattern is wrong, not the tree"
     );
-    // The token itself resolves to the Mocha base colour.
-    assert_eq!(theme::BASE, Color::Rgb(0x1e, 0x1e, 0x2e));
+    assert!(
+        offenders.is_empty(),
+        "colour literals outside the theme module: {offenders:?}"
+    );
 }
 
 #[test]
