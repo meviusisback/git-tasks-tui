@@ -126,6 +126,16 @@ Same rules as the section below: who measured, with what, on which object.
 
 ## Rows written by @auditor
 
+**How these rows are written, and the one number that was missing from them.** Each row names
+the tree, the command and the human who ran it. From this point they also carry the gate's
+**exit code** next to its counts (`gate: rc=0 · 50/0`), because the counts and the exit code
+answer two different questions: a gate may refuse for a reason the tests cannot see — the
+review hooks not installed in this clone, for instance — and in that state it prints
+`suites failed: 0` and exits 1. Measured on `6dd7b56` both ways: with the hooks unset the gate
+answered `rc=1 · 50 suites / 0 failed` and named the cause and the remedy; after
+`sh scripts/install-hooks.sh` the same tree answered `rc=0 · 50 / 0`. A row that records only
+the counts would have called both of those green.
+
 The rows above were appended to one table, and every insertion landed on the same
 anchor: three attempts, three conflicts, all resolved by hand. From here each reviewer
 keeps its own section at the end of this file. Nothing in the tooling depends on
