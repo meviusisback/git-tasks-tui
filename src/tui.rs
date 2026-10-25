@@ -26,10 +26,21 @@
 //! nothing at all. The guard owns the **action**; the hook is a client of it, not a second
 //! owner.
 //!
-//! Signal handlers are deliberately **not** here yet: a signal does not unwind, so it needs a
-//! restore path that does not go through `Drop`. They belong to the same `restore()` and must
-//! move here when stage 16 adds the second suspend/resume cycle — this module says what it
-//! covers, and does not pretend to cover them.
+//! ## Signals: already single-owner, and the claim that used to be here was wrong
+//!
+//! The first version of this note said the SIGHUP/SIGTERM/SIGINT handlers "belong to the same
+//! `restore()` and must move here". Read against `main.rs`, that is **not** what they do and not
+//! what they need: the handler stores into an atomic (`TERMINATE`) — the only async-signal-safe
+//! thing it must do — and the event loop's condition (`while !app.quit && !TERMINATE.load(..)`)
+//! leaves the loop, which drops this guard, which restores. There is no second restore path to
+//! consolidate: the signal path already ends in `Drop`.
+//!
+//! What the handlers must **never** do is call the terminal functions themselves: `disable_raw_mode`
+//! and `execute!` allocate and lock, and neither is async-signal-safe. A handler that "restored"
+//! directly would look more robust and be the fragile version.
+//!
+//! So what remains unsaid is not ownership but **witness**: no test exercises the signal path,
+//! because the loop lives in the binary. It is declared here rather than pretended.
 
 use std::io;
 use std::panic::{self, PanicHookInfo};
