@@ -48,6 +48,16 @@ impl RepoRow {
     }
 }
 
+/// "1 item", "2 items", "1 repo", "3 repos": counts are born right, so no
+/// message can grow a "1 items" it never re-reads.
+pub fn plural(count: usize, one: &str, many: &str) -> String {
+    if count == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{count} {many}")
+    }
+}
+
 /// The keys the app cares about, independent of the terminal backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -226,16 +236,30 @@ impl App {
             }
         }
         self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.refresh_status();
+    }
+
+    /// The single writer of the list summary: every path that changes what the
+    /// list shows (fetch, filter, menu) ends here, so the line always
+    /// describes the current view — never the previous one. Transient event
+    /// lines (saved, failed, loading) belong to their event, not here.
+    pub fn refresh_status(&mut self) {
+        let shown = self.visible_items().len();
         // Row 0 is the "all repos" selector, not a repository: do not count it.
         let configured = self.repos.len().saturating_sub(1);
-        self.status = match self.failed {
-            0 => format!("{} items from {} repos", self.items.len(), configured),
-            failed => format!(
-                "{} items from {} repos · {} failed",
-                self.items.len(),
-                configured,
-                failed
-            ),
+        let items = plural(self.items.len(), "item", "items");
+        let repos = plural(configured, "repo", "repos");
+        self.status = match &self.repo_filter {
+            RepoFilter::One(slug) => {
+                format!("{} in {slug}", plural(shown, "item", "items"))
+            }
+            RepoFilter::All => match self.failed {
+                0 => format!("{items} from {repos}"),
+                failed => format!(
+                    "{items} from {repos} · {}",
+                    plural(failed, "failed", "failed")
+                ),
+            },
         };
     }
 
@@ -271,11 +295,20 @@ impl App {
         self.detail.clear();
         self.detail_for = None;
         self.detail_requested = None;
-        let shown = self.visible_items().len();
-        self.status = match &self.repo_filter {
-            RepoFilter::One(slug) => format!("{shown} items in {slug}"),
-            RepoFilter::All => format!("— all repos — · {shown} items"),
-        };
+        self.refresh_status();
+    }
+
+    /// The transient line the loop sets after the menu applies: what just
+    /// happened (cleared vs narrowed), counted from the same list the panel
+    /// draws. Lives here — not in main — so tests can reach it: a sentence
+    /// composed where it cannot be tested rots unnoticed.
+    pub fn selection_summary(&self, cleared: bool) -> String {
+        let shown = plural(self.repos.len().saturating_sub(1), "repo", "repos");
+        if cleared {
+            format!("selection cleared — showing all {shown}")
+        } else {
+            format!("selection saved — {shown}")
+        }
     }
 
     /// Items matching the search box. Case-insensitive on the title and the

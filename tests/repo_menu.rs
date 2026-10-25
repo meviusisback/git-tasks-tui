@@ -177,3 +177,27 @@ fn applying_a_selection_resets_the_repo_cursor() {
     app.update(Msg::Key(Key::Enter)); // apply, selection unchanged
     assert_eq!(app.repos_cursor, 0, "a new list starts at the top");
 }
+
+#[test]
+fn the_menu_event_lines_count_singular_when_narrow() {
+    // Sites four and five live in App now (selection_summary) so tests can
+    // reach them: the loop only copies the string to the status line.
+    let mut app = app_with_three_repos();
+    // Narrow to one repo: both sentences must read singular.
+    open_menu(&mut app); // cursor starts at row 0 (me/a), all marked
+    app.update(Msg::Key(Key::Down)); // row 1: me/b
+    app.update(Msg::Key(Key::Char(' '))); // unmark me/b
+    app.update(Msg::Key(Key::Down)); // row 2: me/c
+    app.update(Msg::Key(Key::Char(' '))); // unmark me/c
+    app.update(Msg::Key(Key::Enter)); // apply: only me/a
+    assert_eq!(app.selection_summary(false), "selection saved — 1 repo");
+    // Clear everything: the cleared sentence, singular too.
+    assert_eq!(
+        App {
+            repos: vec![gtasks::app::RepoRow::All],
+            ..App::default()
+        }
+        .selection_summary(true),
+        "selection cleared — showing all 0 repos"
+    );
+}

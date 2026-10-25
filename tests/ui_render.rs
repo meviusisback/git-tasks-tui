@@ -291,7 +291,8 @@ fn detail_box_shows_structured_fields_at_80_columns() {
     // only at 120 certifies a screen that was never broken); 24 rows hold
     // the whole box, so this test watches the detail pane, all of it.
     // Stable lines only — the relative clock is pinned in `detail_fields`
-    // unit tests, not here.
+    // unit tests, not here. No body is loaded, so the pane must say how to
+    // fetch it instead of leaving a blank zone.
     let screen = render_sized(&app, &view, 80, 24);
     for line in [
         "state: OPEN",
@@ -301,9 +302,56 @@ fn detail_box_shows_structured_fields_at_80_columns() {
         "checks: 0 passed, 1 failed (ci)",
         "mergeable: MERGEABLE",
         "url: https://github.com/o/r/pull/12",
+        "Enter — body",
     ] {
         assert!(screen.contains(line), "80x24 shows {line}: {screen}");
     }
+}
+
+#[test]
+fn a_body_belonging_to_another_item_is_not_shown() {
+    // Moving the cursor must not drag the old body under the new fields:
+    // the pane shows this item's body, or how to fetch it — never another
+    // item's text.
+    use gtasks::model::{Author, Item, ItemKind};
+    let slug = gtasks::actions::RepoSlug::parse("o/r").expect("valid slug");
+    let mut app = App {
+        repos: vec![gtasks::app::RepoRow::All, gtasks::app::RepoRow::Repo(slug)],
+        ..App::default()
+    };
+    let mk = |number: u64| Item {
+        number,
+        title: format!("t{number}"),
+        state: "OPEN".to_string(),
+        is_draft: None,
+        author: Some(Author {
+            login: "alberto".to_string(),
+        }),
+        labels: vec![],
+        assignees: vec![],
+        created_at: String::new(),
+        updated_at: String::new(),
+        url: String::new(),
+        head_ref_name: None,
+        base_ref_name: None,
+        review_decision: None,
+        mergeable: None,
+        status_check_rollup: vec![],
+        closing_issues_references: vec![],
+        repo: "o/r".to_string(),
+        kind: ItemKind::Pr,
+    };
+    app.items = vec![mk(1), mk(2)];
+    app.detail = "stale body".to_string();
+    app.detail_for = Some(("o/r".to_string(), 1));
+    app.list_cursor = 1; // looking at #2, whose body was never fetched
+    let view = view_for(&app);
+    assert!(
+        !view.detail.contains("stale body"),
+        "another item's body leaked: {}",
+        view.detail
+    );
+    assert!(view.detail.contains("Enter — body"));
 }
 
 #[test]

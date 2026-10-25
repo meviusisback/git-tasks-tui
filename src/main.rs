@@ -325,13 +325,11 @@ fn run_tui() -> anyhow::Result<()> {
                     Ok(()) => {
                         // Both sentences are computed from what the panel draws,
                         // never narrated beside it: a status line that reads the
-                        // same collection cannot contradict the list.
-                        let shown = app.repos.len().saturating_sub(1);
-                        app.status = if cleared {
-                            format!("selection cleared — showing all {shown} repos")
-                        } else {
-                            format!("selection saved — {shown} repos")
-                        };
+                        // same collection cannot contradict the list. The base
+                        // is recomputed first, so the transient below describes
+                        // the same list the panel draws.
+                        app.refresh_status();
+                        app.status = app.selection_summary(cleared);
                     }
                     Err(err) => app.status = format!("cannot save selection: {err:#}"),
                 },

@@ -102,7 +102,9 @@ pub fn view_for(app: &App) -> ViewModel {
         .map(|item| format!("#{} {}", item.number, item.title))
         .collect();
     // Structured fields from the item, always; the fetched body below them
-    // when it exists. A missing field is omitted, never blank.
+    // only when it belongs to this item. A missing field is omitted, never
+    // blank — and a missing body says how to fetch it instead of leaving a
+    // blank zone ("Enter — body").
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -111,9 +113,12 @@ pub fn view_for(app: &App) -> ViewModel {
         .get(app.list_cursor)
         .map(|item| {
             let mut text = item.detail_fields(now).join("\n");
-            if !app.detail.trim().is_empty() {
+            let key = (item.repo.clone(), item.number);
+            if app.detail_for.as_ref() == Some(&key) && !app.detail.trim().is_empty() {
                 text.push_str("\n\n");
                 text.push_str(&app.detail);
+            } else if app.detail_requested.as_ref() != Some(&key) {
+                text.push_str("\n\nEnter — body");
             }
             text
         })

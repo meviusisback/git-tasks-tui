@@ -153,7 +153,24 @@ fn status_says_where_you_are() {
     app.update(Msg::Key(Key::Down)); // row 1: me/empty
     assert_eq!(app.status, "0 items in me/empty");
     app.update(Msg::Key(Key::Up)); // row 0: all
-    assert_eq!(app.status, "— all repos — · 1 items");
+    assert_eq!(app.status, "1 item from 2 repos");
+}
+
+#[test]
+fn one_repo_and_one_item_read_singular() {
+    // The acceptance case: with 1 repo and 1 element the line says "1 repo"
+    // and "1 item" — never "repos" or "items".
+    let mut app = App::default();
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("me/only").expect("valid slug"),
+    ]);
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![item("me/only", 1, "one")],
+        failures: Vec::new(),
+    });
+    assert_eq!(app.status, "1 item from 1 repo");
+    assert!(!app.status.contains("items"), "singular: {}", app.status);
+    assert!(!app.status.contains("repos"), "singular: {}", app.status);
 }
 
 #[test]
@@ -196,7 +213,7 @@ fn esc_in_the_repos_pane_with_a_filter_clears_it() {
     assert_eq!(app.pane, gtasks::app::Pane::Repos);
     assert_eq!(app.repos_cursor, 0, "Esc goes home to row 0");
     assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::All));
-    assert_eq!(app.status, "— all repos — · 1 items");
+    assert_eq!(app.status, "1 item from 2 repos");
 
     app.update(Msg::Key(Key::Esc)); // no filter: no-op, no quit
     assert!(!app.quit);
