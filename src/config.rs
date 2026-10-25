@@ -126,13 +126,30 @@ impl ConfigProblem {
     pub fn message(&self) -> String {
         match self {
             ConfigProblem::Unreadable { path, reason } => {
-                format!("cannot read config {}: {reason}", path.display())
+                format!("cannot read config {}: {}", path.display(), elide(reason))
             }
             ConfigProblem::Invalid { path, reason } => {
-                format!("invalid config {}: {reason}", path.display())
+                format!("invalid config {}: {}", path.display(), elide(reason))
             }
         }
     }
+}
+
+/// Bound a reason so the notice fits the box it is shown in.
+///
+/// A `toml` parse error repeats the offending line, so a 400-character token produces a
+/// ~1000-character sentence. The head of that sentence carries everything a person needs — file,
+/// line, column — and the tail is the line itself, printed twice. Keep the head: the first line,
+/// and at most 200 characters of it.
+fn elide(reason: &str) -> String {
+    const MAX: usize = 200;
+    let first = reason.lines().next().unwrap_or("");
+    if first.chars().count() <= MAX {
+        return first.to_string();
+    }
+    let mut out: String = first.chars().take(MAX).collect();
+    out.push('…');
+    out
 }
 
 /// Load the config, falling back to the demo repo when the file cannot be
