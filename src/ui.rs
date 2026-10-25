@@ -331,9 +331,20 @@ fn repos_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     };
     let highlight = app.pane == Pane::Repos;
     let focused = highlight;
+    let icon = icons::repo();
     let items: Vec<ListItem> = rows
         .into_iter()
-        .map(|entry| ListItem::new(sanitize(entry.as_str())))
+        .map(|entry| {
+            // The icon gets the directory colour; the name stays plain —
+            // one coloured glyph per row, never a coloured sentence.
+            match entry.strip_prefix(icon) {
+                Some(rest) => ListItem::new(Line::from(vec![
+                    Span::styled(icon, theme::repo_icon()),
+                    Span::raw(sanitize(rest)),
+                ])),
+                None => ListItem::new(sanitize(entry.as_str())),
+            }
+        })
         .collect();
     let widget = List::new(items)
         .block(

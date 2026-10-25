@@ -143,10 +143,17 @@ pub fn overlay() -> Style {
     Style::default().fg(WARN)
 }
 
-/// The worktree marker in the issues list: dimmer than the kind colour,
-/// because it is metadata about the row, not the row itself.
+/// The worktree marker in the issues list: mauve, so it stands apart from
+/// the green/yellow kind colours and the white titles. It is metadata about
+/// the row, not the row itself — visible, but never shouting.
 pub fn worktree_marker() -> Style {
-    Style::default().fg(SUBTEXT)
+    Style::default().fg(MAUVE)
+}
+
+/// The repo folder icon: sky, the colour of directories. Same glyph with
+/// and without a Nerd Font (folder vs triangle), same colour either way.
+pub fn repo_icon() -> Style {
+    Style::default().fg(SKY)
 }
 
 /// Error overlay frame: the config problem box. Same shape as help, the
