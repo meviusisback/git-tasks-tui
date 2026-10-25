@@ -326,7 +326,7 @@ fn run_tui() -> anyhow::Result<()> {
                 Some(path) => match state.save(path) {
                     Ok(()) => {
                         app.status = if cleared {
-                            "selection cleared — showing all repos".to_string()
+                            "no repo marked — showing all".to_string()
                         } else {
                             format!("selection saved ({} repos)", state.selected_repos.len())
                         };
