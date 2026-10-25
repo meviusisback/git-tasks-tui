@@ -221,3 +221,47 @@ fn a_clean_create_succeeds_on_the_branch_the_type_names() {
     assert!(registered(&f, &created.path));
     assert_outside_is_empty(&f);
 }
+
+// 6 — a second `add` on the same branch is refused, not silently reused.
+#[test]
+fn a_second_add_on_the_same_branch_is_refused() {
+    let f = fixture();
+    let first = worktree::create(&f.root, &f.clone, &slug(), &branch(), &binaries())
+        .expect("the first create must succeed");
+
+    // `item-1` is now checked out in `first`: asking again must not hand the
+    // caller the same directory as if it were a fresh one (W-1: two branches
+    // must never share a directory).
+    let err = worktree::create(&f.root, &f.clone, &slug(), &branch(), &binaries())
+        .expect_err("a branch that is already checked out must be refused");
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("already") || text.contains("checked out") || text.contains("exists"),
+        "the refusal must say why: {text}"
+    );
+
+    // And the first worktree is untouched.
+    assert!(first.path.exists());
+    assert_eq!(
+        git(&first.path, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "item-1"
+    );
+}
+
+// 7 — after a successful add, the registry lists that directory exactly once.
+#[test]
+fn a_created_worktree_appears_once_in_the_registry() {
+    let f = fixture();
+    let created = worktree::create(&f.root, &f.clone, &slug(), &branch(), &binaries())
+        .expect("a clean create must succeed");
+
+    let listing = git(&f.clone, &["worktree", "list", "--porcelain"]);
+    let hits = listing
+        .lines()
+        .filter(|l| l.trim() == format!("worktree {}", created.path.display()))
+        .count();
+    assert_eq!(
+        hits, 1,
+        "the registry must show the directory exactly once, got {hits}:\n{listing}"
+    );
+}
