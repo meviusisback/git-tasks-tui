@@ -2,26 +2,21 @@
 
 use std::time::Duration;
 
+use gtasks::actions::RepoSlug;
 use gtasks::binaries::Binaries;
-use gtasks::fetch::fetch_one;
-use gtasks::model::ItemKind;
+use gtasks::fetch::fetch_graphql_many;
 
 #[test]
 #[ignore = "needs network and an authenticated gh"]
 fn a_real_repo_can_be_fetched() {
     let binaries = Binaries::detect().expect("gh and git on PATH");
-    match fetch_one(
-        &binaries,
-        "cli/cli",
-        ItemKind::Pr,
-        5,
-        Duration::from_secs(30),
-    ) {
-        Ok(items) => {
-            println!("fetched {} items", items.len());
-            assert!(!items.is_empty(), "cli/cli has open PRs");
-            assert!(items.iter().all(|i| i.repo == "cli/cli"));
-        }
-        Err(err) => panic!("fetch failed: {err:#}"),
-    }
+    let repos = vec![RepoSlug::parse("cli/cli").expect("valid slug")];
+    let outcome = fetch_graphql_many(&binaries, &repos, 5, Duration::from_secs(30), 1);
+    assert!(
+        outcome.failures.is_empty(),
+        "fetch failed: {:?}",
+        outcome.failures
+    );
+    assert!(!outcome.items.is_empty(), "cli/cli has open PRs");
+    assert!(outcome.items.iter().all(|i| i.repo == "cli/cli"));
 }
