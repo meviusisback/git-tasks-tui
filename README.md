@@ -8,6 +8,11 @@ The keymap is in [`docs/keys.md`](docs/keys.md); the agent contract in
 [`docs/agent-cli.md`](docs/agent-cli.md); the security invariants in
 [`docs/security.md`](docs/security.md).
 
+![gtasks in action: repos, PR list, and detail with checks and review state](docs/assets/screenshot.png)
+
+A shareable overview lives in [`docs/assets/promo-poster.png`](docs/assets/promo-poster.png)
+(editable source: [`docs/assets/promo.html`](docs/assets/promo.html)).
+
 ## What it does
 
 - Follow repositories (`R` menu, saved to `state.json`); one list across repos with search.

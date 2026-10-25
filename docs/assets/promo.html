@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gtasks — the triage desk for GitHub maintainers</title>
+<meta name="description" content="gtasks is a terminal UI that follows your GitHub repos, shows every pull request with checks and review state, and hands the picked one to your coding agent in a fresh worktree.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+<style>
+  :root{
+    --bg:#181818; --panel:#1F1F1F; --card:#272727; --line:#313131;
+    --text:#FFFFFF; --muted:#9B9B9B;
+    --mauve:#CBA6F7; --sky:#89DCEB; --green:#A6E3A1; --red:#F38BA8; --peach:#FAB387;
+    --ease:cubic-bezier(0.32,0.72,0,1);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:'Poppins',system-ui,sans-serif;font-size:16px;line-height:24px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 48px}
+  section{padding:64px 0}
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:14px;line-height:20px;color:var(--sky);font-weight:600;letter-spacing:.04em;margin-bottom:16px}
+  h1{font-size:48px;line-height:1;max-width:680px;text-wrap:balance;font-weight:700;
+     background:linear-gradient(90deg,#FFFFFF,#9B9B9B);-webkit-background-clip:text;background-clip:text;color:transparent}
+  h2{font-size:30px;line-height:36px;text-wrap:balance;font-weight:600;max-width:680px}
+  .sub{font-size:20px;line-height:28px;color:var(--muted);max-width:680px;margin-top:16px;text-wrap:pretty}
+  .cta-row{display:flex;gap:16px;margin-top:32px;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--mauve);color:#181818;font-size:16px;font-weight:600;
+       padding:8px 12px;border-radius:8px;text-decoration:none;transition:transform 700ms var(--ease),background 700ms var(--ease)}
+  .btn:hover{background:#d8bcfa;transform:translateY(-1px)}
+  .btn:active{transform:scale(0.98)}
+  .btn:focus-visible{outline:2px solid var(--sky);outline-offset:2px}
+  .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  .proof{margin-top:24px;font-size:14px;line-height:20px;color:var(--muted);display:flex;gap:8px;align-items:center}
+  .shot-frame{margin-top:48px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px}
+  .shot-frame img{display:block;width:100%;border-radius:4px}
+  .shot-cap{font-size:14px;line-height:20px;color:var(--muted);margin-top:12px;display:flex;gap:8px;align-items:center}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:32px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:32px}
+  .card i{font-size:28px;color:var(--mauve)}
+  .card h3{font-size:20px;line-height:28px;margin:16px 0 8px;font-weight:600}
+  .card p{font-size:16px;line-height:24px;color:var(--muted);text-wrap:pretty}
+  .card kbd{font-family:'Geist Mono',monospace;font-size:14px;background:#181818;border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--sky)}
+  .steps{display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin-top:32px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:32px}
+  .step .n{font-family:'Geist Mono',monospace;font-size:14px;color:var(--sky)}
+  .step h3{font-size:20px;line-height:28px;margin:16px 0 8px}
+  .step p{font-size:16px;line-height:24px;color:var(--muted);text-wrap:pretty}
+  .tagline{font-size:36px;line-height:40px;font-weight:600;text-align:center;max-width:680px;margin:0 auto;text-wrap:balance}
+  .tagline .w{opacity:.3;transition:opacity 700ms var(--ease),color 700ms var(--ease)}
+  .tagline .w.on{opacity:1}
+  .faq{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:32px}
+  .faq .card h3{font-size:16px;line-height:24px}
+  footer{border-top:1px solid var(--line);padding:32px 0 48px;display:flex;justify-content:space-between;align-items:center;font-size:14px;color:var(--muted)}
+  footer a{color:var(--sky);text-decoration:none}
+  .rv{opacity:0;transform:translateY(64px);filter:blur(8px);transition:opacity 800ms var(--ease),transform 800ms var(--ease),filter 800ms var(--ease)}
+  .rv.in{opacity:1;transform:none;filter:none}
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <div class="wrap">
+      <span class="eyebrow rv"><i class="ph ph-terminal-window"></i>gtasks · terminal UI for GitHub</span>
+      <h1 class="rv">The triage desk for GitHub maintainers</h1>
+      <p class="sub rv">One screen follows every repo you care about, shows each pull request with checks and review state, and hands the picked one to your coding agent in a fresh worktree.</p>
+      <div class="cta-row rv">
+        <a class="btn" href="https://github.com/meviusisback/git-tasks-tui"><i class="ph ph-star"></i>Star on GitHub</a>
+        <a class="btn ghost" href="https://github.com/meviusisback/git-tasks-tui#readme"><i class="ph ph-book-open"></i>Read the docs</a>
+      </div>
+      <p class="proof rv"><i class="ph ph-shield-check"></i>69 test suites green · security audited · written in Rust</p>
+      <div class="shot-frame rv">
+        <img src="screenshot.png" alt="gtasks terminal UI showing repos, pull request list, and PR detail with checks and review state">
+        <p class="shot-cap"><i class="ph ph-monitor"></i>Live view: repos, the working set, and PR detail with checks, review state, and full description.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2 class="rv">Why maintainers keep it open all day</h2>
+      <div class="grid2">
+        <div class="card rv"><i class="ph ph-columns-plus-left"></i><h3>See the whole queue at once</h3><p>Repos, list, and full detail with state pill, meta table, and description. No hopping between CLI and browser.</p></div>
+        <div class="card rv"><i class="ph ph-git-diff"></i><h3>Read the change before you delegate</h3><p>Full diff overlay on <kbd>d</kbd>, first 200 lines in red and green, cached per item so it opens instantly.</p></div>
+        <div class="card rv"><i class="ph ph-robot"></i><h3>Hand off to your agent in one key</h3><p><kbd>g</kbd> starts Hermes, Pi, Opencode, Agy, or Codex in the embedded box, on a fresh worktree with the branch ready. Sandboxed mode included.</p></div>
+        <div class="card rv"><i class="ph ph-lock-key"></i><h3>Safe where it matters</h3><p>No shell anywhere, tokens never reach the agent, atomic writes with symlink checks. Audited end to end.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <p class="tagline" id="tagline">Every repo you follow. Every thread that needs you. One screen. Zero inbox.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2 class="rv">From zero to first handoff in three steps</h2>
+      <div class="steps">
+        <div class="step rv"><span class="n">01</span><h3>Follow repos</h3><p>Press <kbd>R</kbd>, pick repos. The list fills from GraphQL and stays fresh from disk cache.</p></div>
+        <div class="step rv"><span class="n">02</span><h3>Read and decide</h3><p>Move through the list while bodies preload. <kbd>d</kbd> shows the diff, <kbd>m</kbd> offers review actions.</p></div>
+        <div class="step rv"><span class="n">03</span><h3>Delegate</h3><p><kbd>g</kbd> starts your agent in its own worktree. <kbd>W</kbd> manages trees without the agent flow.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2 class="rv">Questions, answered</h2>
+      <div class="faq">
+        <div class="card rv"><h3>What do I need to run it?</h3><p>The gh CLI logged in, plus any of the five supported agents. Linux terminal, Nerd Font optional.</p></div>
+        <div class="card rv"><h3>Which agents work?</h3><p>Hermes, Pi, Opencode, Agy, and Codex, each streaming into the embedded agent box.</p></div>
+        <div class="card rv"><h3>Is it safe with hostile PRs?</h3><p>Titles, bodies, and diffs are sanitised before render, and the agent child never sees your tokens.</p></div>
+        <div class="card rv"><h3>What does it cost?</h3><p>Free and open source under MIT. Star the repo if it earns its place in your day.</p></div>
+      </div>
+      <div class="cta-row rv">
+        <a class="btn" href="https://github.com/meviusisback/git-tasks-tui"><i class="ph ph-star"></i>Star gtasks on GitHub</a>
+      </div>
+    </div>
+  </section>
+</main>
+<footer>
+  <div class="wrap" style="display:flex;justify-content:space-between;width:100%">
+    <span>gtasks · MIT licence</span>
+    <a href="https://github.com/meviusisback/git-tasks-tui">github.com/meviusisback/git-tasks-tui</a>
+  </div>
+</footer>
+<script>
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), {threshold: 0.15});
+  document.querySelectorAll('.rv').forEach(el => io.observe(el));
+  setTimeout(() => document.querySelectorAll('.rv').forEach(el => el.classList.add('in')), 2500);
+  const tag = document.getElementById('tagline');
+  tag.innerHTML = tag.textContent.trim().split(/\s+/).map(w => '<span class="w">' + w + '</span>').join(' ');
+  const words = [...tag.querySelectorAll('.w')];
+  const wio = new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting) return;
+    const i = words.indexOf(e.target);
+    words.slice(0, i + 1).forEach(w => w.classList.add('on'));
+    if (i === words.length - 1) wio.disconnect();
+  }), {threshold: 0.6});
+  words.forEach(w => wio.observe(w));
+  setTimeout(() => words.forEach(w => w.classList.add('on')), 4000);
+</script>
+</body>
+</html>
