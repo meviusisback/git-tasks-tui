@@ -325,10 +325,14 @@ fn run_tui() -> anyhow::Result<()> {
             match state_path.as_deref() {
                 Some(path) => match state.save(path) {
                     Ok(()) => {
+                        // Both sentences are computed from what the panel draws,
+                        // never narrated beside it: a status line that reads the
+                        // same collection cannot contradict the list.
+                        let shown = app.repos.len().saturating_sub(1);
                         app.status = if cleared {
-                            "selection cleared — showing all repos".to_string()
+                            format!("selection cleared — showing all {shown} repos")
                         } else {
-                            format!("selection saved ({} repos)", state.selected_repos.len())
+                            format!("selection saved — {shown} repos")
                         };
                     }
                     Err(err) => app.status = format!("cannot save selection: {err:#}"),

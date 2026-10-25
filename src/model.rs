@@ -41,6 +41,17 @@ pub struct Check {
     pub conclusion: Option<String>,
 }
 
+/// One entry of `closingIssuesReferences`; shape varies, so everything is
+/// optional and unknown keys are ignored — same discipline as `Check`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosingRef {
+    #[serde(default)]
+    pub number: Option<u64>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
 /// A pull request or an issue, as returned by the pinned `--json` field list.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +65,8 @@ pub struct Item {
     pub author: Option<Author>,
     #[serde(default)]
     pub labels: Vec<Label>,
+    #[serde(default)]
+    pub assignees: Vec<Author>,
     /// RFC3339 timestamps from `gh`; compared lexicographically (same `Z` form).
     #[serde(default)]
     pub updated_at: String,
@@ -64,11 +77,15 @@ pub struct Item {
     #[serde(default)]
     pub head_ref_name: Option<String>,
     #[serde(default)]
+    pub base_ref_name: Option<String>,
+    #[serde(default)]
     pub review_decision: Option<String>,
     #[serde(default)]
     pub mergeable: Option<String>,
     #[serde(default)]
     pub status_check_rollup: Vec<Check>,
+    #[serde(default)]
+    pub closing_issues_references: Vec<ClosingRef>,
     /// Set by the fetcher: the payload does not say which repo it came from.
     #[serde(skip)]
     pub repo: String,
@@ -81,6 +98,181 @@ pub struct Item {
 /// panics, however malformed the payload.
 pub fn parse_list(json: &str) -> anyhow::Result<Vec<Item>> {
     serde_json::from_str(json).map_err(|e| anyhow::anyhow!("cannot parse gh JSON: {e}"))
+}
+
+/// Days since the civil date (Howard Hinnant's algorithm): the only calendar
+/// math `relative_time` needs, so "3 days ago" does not need a date crate.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn parse_rfc3339_utc(text: &str) -> Option<u64> {
+    let (date, time) = text.split_once('T')?;
+    let time = time.strip_suffix('Z')?;
+    let mut d = date.split('-');
+    let (y, m, day) = (
+        d.next()?.parse::<i64>().ok()?,
+        d.next()?.parse::<i64>().ok()?,
+        d.next()?.parse::<i64>().ok()?,
+    );
+    let mut t = time.split(':');
+    let (hh, mm, ss) = (
+        t.next()?.parse::<i64>().ok()?,
+        t.next()?.parse::<i64>().ok()?,
+        t.next()?.parse::<i64>().ok()?,
+    );
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 60 {
+        return None;
+    }
+    let days = days_from_civil(y, m, day);
+    days.checked_mul(86_400)?
+        .checked_add(hh * 3600 + mm * 60 + ss)
+        .and_then(|s| u64::try_from(s).ok())
+}
+
+/// Coarse relative time for the detail box ("5m ago", "3h ago", "4d ago").
+/// `None` when the timestamp does not parse: the caller omits the field
+/// instead of showing a wrong one. The future reads as "just now" — a
+/// skewed clock is not a time machine.
+pub fn relative_time(now_unix: u64, rfc3339: &str) -> Option<String> {
+    let then = parse_rfc3339_utc(rfc3339)?;
+    let diff = now_unix.saturating_sub(then);
+    let text = if diff < 60 {
+        format!("{diff}s ago")
+    } else if diff < 3_600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86_400 {
+        format!("{}h ago", diff / 3_600)
+    } else {
+        format!("{}d ago", diff / 86_400)
+    };
+    Some(if then > now_unix {
+        "just now".to_string()
+    } else {
+        text
+    })
+}
+
+impl Item {
+    /// `gh` says "missing" two ways: JSON null and the empty string
+    /// (`reviewDecision: ""` on an unreviewed PR). Both mean absent: a blank
+    /// line would claim the review exists and says nothing.
+    fn present(field: &Option<String>) -> Option<&str> {
+        field.as_deref().filter(|s| !s.is_empty())
+    }
+
+    /// Structured detail rows, one per present field. Empty fields are
+    /// *omitted*, never blank: a blank line would claim "none".
+    pub fn detail_fields(&self, now_unix: u64) -> Vec<String> {
+        let mut rows = vec![format!("#{} {}", self.number, self.title)];
+        let mut state = format!("state: {}", self.state);
+        if self.is_draft == Some(true) {
+            state.push_str(" (draft)");
+        }
+        rows.push(state);
+        if let Some(author) = &self.author {
+            rows.push(format!("author: {}", author.login));
+        }
+        if !self.labels.is_empty() {
+            rows.push(format!(
+                "labels: {}",
+                self.labels
+                    .iter()
+                    .map(|label| label.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !self.assignees.is_empty() {
+            rows.push(format!(
+                "assignees: {}",
+                self.assignees
+                    .iter()
+                    .map(|a| a.login.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        let mut when = Vec::new();
+        if let Some(ago) = relative_time(now_unix, &self.created_at) {
+            when.push(format!("created {ago}"));
+        }
+        if let Some(ago) = relative_time(now_unix, &self.updated_at) {
+            when.push(format!("updated {ago}"));
+        }
+        if !when.is_empty() {
+            rows.push(when.join(" · "));
+        }
+        match (
+            Self::present(&self.head_ref_name),
+            Self::present(&self.base_ref_name),
+        ) {
+            (Some(head), Some(base)) => rows.push(format!("{head} → {base}")),
+            (Some(head), None) => rows.push(format!("head: {head}")),
+            (None, Some(base)) => rows.push(format!("base: {base}")),
+            (None, None) => {}
+        }
+        if !self.status_check_rollup.is_empty() {
+            let mut failed = Vec::new();
+            let (mut passed, mut pending) = (0, 0);
+            for check in &self.status_check_rollup {
+                // `gh` spells these SUCCESS/FAILURE; compare loosely so a
+                // provider that prefers lowercase still counts.
+                let conclusion = check.conclusion.as_deref().unwrap_or("");
+                if conclusion.eq_ignore_ascii_case("success") {
+                    passed += 1;
+                } else if conclusion.eq_ignore_ascii_case("failure") {
+                    failed.push(check.name.as_deref().unwrap_or("unknown").to_string());
+                } else {
+                    pending += 1;
+                }
+            }
+            let mut line = format!("checks: {passed} passed");
+            if !failed.is_empty() {
+                line.push_str(&format!(
+                    ", {} failed ({})",
+                    failed.len(),
+                    failed.join(", ")
+                ));
+            }
+            if pending > 0 {
+                line.push_str(&format!(", {pending} pending"));
+            }
+            rows.push(line);
+        }
+        if let Some(mergeable) = Self::present(&self.mergeable) {
+            rows.push(format!("mergeable: {mergeable}"));
+        }
+        if let Some(review) = Self::present(&self.review_decision) {
+            rows.push(format!("review: {review}"));
+        }
+        let linked: Vec<String> = self
+            .closing_issues_references
+            .iter()
+            .filter_map(|r| {
+                r.number.map(|n| match &r.title {
+                    Some(t) => format!("#{n} {t}"),
+                    None => format!("#{n}"),
+                })
+            })
+            .collect();
+        if !linked.is_empty() {
+            rows.push(format!("linked: {}", linked.join(", ")));
+        }
+        if !self.url.is_empty() {
+            rows.push(format!("url: {}", self.url));
+        }
+        if !self.repo.is_empty() {
+            rows.push(format!("repo: {}", self.repo));
+        }
+        rows
+    }
 }
 
 /// Case-insensitive substring match over number, title, author and labels.
