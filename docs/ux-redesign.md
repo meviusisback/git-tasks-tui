@@ -329,6 +329,13 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **When a measurement contradicts a report, the first hypothesis is not "I
+  was wrong" — it is "which tree did I measure".** And to answer that, look at
+  the *parent* of the commit that introduced the code. Measured 2026-10-25: a
+  reviewer measured the child's environment, found no tokens, and concluded the
+  finding had never existed — the tree already contained the fix. On its parent
+  (`82083d5`) the function did not exist at all. This form is the most insidious
+  of the three because it reads as good news.
 - **When a decision is born from a comment, measure what the comment
   describes first.** Twice in one day a comment said what the code did and was
   wrong — the agent's environment ("inherits everything" — it was already
