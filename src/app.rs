@@ -169,11 +169,13 @@ pub enum Modal {
     Settings(SettingsMenu),
 }
 
-/// One toggleable setting. A single variant today (sandboxed agents); the
-/// menu grows by adding variants here, not by special-casing the draw.
+/// One toggleable setting. The menu grows by adding variants here, not by
+/// special-casing the draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
     SandboxAgents,
+    FontSize,
+    FontFamily,
 }
 
 impl Setting {
@@ -181,6 +183,8 @@ impl Setting {
     pub fn title(&self) -> &'static str {
         match self {
             Setting::SandboxAgents => "sandboxed agents",
+            Setting::FontSize => "terminal font size",
+            Setting::FontFamily => "terminal font",
         }
     }
 
@@ -190,13 +194,27 @@ impl Setting {
             Setting::SandboxAgents => {
                 "launch through the `<agent>-sandboxed` wrappers (omp YOLO, hermes Smart, pi contained)"
             }
+            Setting::FontSize => {
+                "whole-terminal glyph size: Small 9px · Medium 11px · Large 14px. Restart the terminal to apply."
+            }
+            Setting::FontFamily => {
+                "whole-terminal typeface, from the installed monospace fonts. Needs a Nerd Font for the glyphs, otherwise the markers fall back. Restart the terminal to apply."
+            }
         }
     }
 
-    /// The current state, read from the app at draw and toggle time.
-    pub fn is_on(&self, app: &App) -> bool {
+    /// The current value, read from the app at draw and toggle time.
+    pub fn state_text(&self, app: &App) -> String {
         match self {
-            Setting::SandboxAgents => app.sandbox_agents,
+            Setting::SandboxAgents => {
+                if app.sandbox_agents {
+                    "on".to_string()
+                } else {
+                    "off".to_string()
+                }
+            }
+            Setting::FontSize => app.font_size.name().to_string(),
+            Setting::FontFamily => app.font_family.clone(),
         }
     }
 }
@@ -404,6 +422,17 @@ pub struct App {
     /// Set when a settings toggle flips: the loop writes `config.toml`.
     /// The key handler never touches the disk itself.
     pub config_save_requested: bool,
+    /// Set with `config_save_requested` by the font toggles only: the loop
+    /// also rewrites the Foot `font=` line. Kept separate so a sandbox-only
+    /// toggle never touches the terminal config.
+    pub font_save_requested: bool,
+    /// Terminal font size (whole terminal — a TUI cannot resize its glyphs).
+    pub font_size: crate::config::FontSize,
+    /// Terminal typeface, from the installed monospace fonts.
+    pub font_family: String,
+    /// Installed monospace families, discovered once at startup: the font
+    /// toggle cycles through these.
+    pub fonts: Vec<String>,
     /// Where to look for local clones, in order (`<root>/<repo-name>`); empty refuses.
     /// A list, not a path: clones really do live in more than one directory, and one path
     /// cannot say so without making the other directory invisible.
@@ -479,6 +508,10 @@ impl Default for App {
             agent_profile: String::from("default"),
             sandbox_agents: false,
             config_save_requested: false,
+            font_save_requested: false,
+            font_size: crate::config::FontSize::default(),
+            font_family: String::from("monospace"),
+            fonts: Vec::new(),
             clone_roots: Vec::new(),
             config_fallback: false,
             agent_record: None,
@@ -548,6 +581,9 @@ impl App {
             }
         }
         self.set_lengths(self.repos.len(), self.visible_items().len());
+        // A fresh list means a fresh selection to describe: start its body
+        // at once, quietly — Enter stays the loud, explicit ask.
+        self.preload_detail();
         self.refresh_status();
     }
 
@@ -607,6 +643,9 @@ impl App {
         self.detail.clear();
         self.detail_for = None;
         self.detail_requested = None;
+        // ... but the new first row starts loading at once: the description
+        // is on its way before anyone presses Enter.
+        self.preload_detail();
         self.refresh_status();
     }
 
@@ -896,10 +935,14 @@ impl App {
         }
         self.session_dirty = true;
         // The left column is the user's: opening a tab never reshapes it.
-        // Load the body for the newly active tab when missing.
+        // Load the body for the newly active tab when missing. Opening a tab
+        // is explicit, so the status says so even when a quiet preload got
+        // there first — same upgrade as `request_detail`.
         let key = (item.repo.clone(), item.number);
-        if self.detail_for.as_ref() != Some(&key) && self.detail_requested.as_ref() != Some(&key) {
-            self.detail_requested = Some(key);
+        if self.detail_for.as_ref() != Some(&key) {
+            if self.detail_requested.as_ref() != Some(&key) {
+                self.detail_requested = Some(key);
+            }
             self.status = format!("loading #{}…", item.number);
         }
     }
@@ -1164,6 +1207,12 @@ impl App {
     /// `m` opens the menu on the selected item. Issues offer only closing;
     /// anything without a parseable repo cannot be acted on at all.
     pub fn open_action_menu(&mut self) {
+        // The actions belong to the list box: from anywhere else (detail,
+        // agent, repos) the key is a mistake, not a shortcut.
+        if self.pane != Pane::List {
+            self.status = "move to the list first".to_string();
+            return;
+        }
         let Some(item) = self.effective_item() else {
             self.status = "nothing selected".to_string();
             return;
@@ -1450,6 +1499,24 @@ impl App {
         }
     }
 
+    /// The quiet request: like `request_detail` but without the status line.
+    /// Cursor moves, filter changes and fresh fetches call this, so the
+    /// body is on its way before anyone presses Enter; Enter keeps the loud
+    /// one because an explicit ask deserves a visible answer.
+    pub fn preload_detail(&mut self) {
+        let Some(item) = self.effective_item().cloned() else {
+            return;
+        };
+        let key = (item.repo.clone(), item.number);
+        if self.detail_for.as_ref() == Some(&key) {
+            return;
+        }
+        if self.detail_requested.as_ref() == Some(&key) {
+            return;
+        }
+        self.detail_requested = Some(key);
+    }
+
     /// Ask for the selected item's body, unless it is already loaded.
     /// Follows the active tab when one is open.
     pub fn request_detail(&mut self) {
@@ -1462,6 +1529,9 @@ impl App {
             return;
         }
         if self.detail_requested.as_ref() == Some(&key) {
+            // Already on its way (preloaded): an explicit Enter still gets
+            // the visible answer.
+            self.status = format!("loading #{number}…");
             return;
         }
         self.detail_requested = Some(key);
@@ -1652,12 +1722,17 @@ impl App {
     pub fn open_settings(&mut self) {
         self.modal = Some(Modal::Settings(SettingsMenu {
             cursor: 0,
-            rows: vec![Setting::SandboxAgents],
+            rows: vec![
+                Setting::SandboxAgents,
+                Setting::FontSize,
+                Setting::FontFamily,
+            ],
         }));
     }
 
     /// Flip the setting under the cursor. The menu stays open on the new
-    /// state; the loop persists it (`config_save_requested`).
+    /// state; the loop persists it (`config_save_requested`, plus the Foot
+    /// `font=` line for the font rows).
     fn toggle_setting(&mut self) {
         let Some(Modal::Settings(menu)) = &self.modal else {
             return;
@@ -1673,6 +1748,26 @@ impl App {
                 } else {
                     "sandboxed agents off".to_string()
                 };
+            }
+            Setting::FontSize => {
+                self.font_size = self.font_size.next();
+                self.status = format!("terminal font size: {}", self.font_size.name());
+                self.font_save_requested = true;
+            }
+            Setting::FontFamily => {
+                if self.fonts.is_empty() {
+                    self.status = "no monospace fonts found".to_string();
+                    return;
+                }
+                let pos = self
+                    .fonts
+                    .iter()
+                    .position(|f| f == &self.font_family)
+                    .map(|i| (i + 1) % self.fonts.len())
+                    .unwrap_or(0);
+                self.font_family = self.fonts[pos].clone();
+                self.status = format!("terminal font: {}", self.font_family);
+                self.font_save_requested = true;
             }
         }
         self.config_save_requested = true;
@@ -2347,16 +2442,16 @@ impl App {
             // Shift+arrows move between boxes following the screen layout:
             // left column is repos over list, right column detail over agent.
             // At an edge nothing moves — a wrap would land somewhere the
-            // arrow did not point. The agent box is a target only while it
-            // holds something (`agent_active`, same rule as Tab): moving
-            // into an empty instructions box is a surprise, not a shortcut.
+            // arrow did not point. Right from the list goes to the detail
+            // (the PR box on the right), never into the agent box: the agent
+            // is reached from the detail, or with Tab/`w` when it is live.
             Key::ShiftRight => match self.pane {
                 Pane::Repos => self.pane = Pane::Detail,
-                Pane::List if self.agent_active() => self.pane = Pane::Agent,
-                Pane::Detail | Pane::Agent | Pane::List => {}
+                Pane::List => self.pane = Pane::Detail,
+                Pane::Detail | Pane::Agent => {}
             },
             Key::ShiftLeft => match self.pane {
-                Pane::Detail => self.pane = Pane::Repos,
+                Pane::Detail => self.pane = Pane::List,
                 Pane::Agent => self.pane = Pane::List,
                 Pane::Repos | Pane::List => {}
             },
@@ -2409,6 +2504,9 @@ impl App {
             Pane::List => {
                 self.list_cursor = step(self.list_cursor, delta, self.list_len);
                 self.dismiss_finished_card();
+                // Landing on a row starts its body: by the time the user
+                // reads the fields, the description is already on its way.
+                self.preload_detail();
             }
             Pane::Detail => {
                 let next = self.detail_scroll as i32 + delta;

@@ -145,13 +145,21 @@ fn render_200x30(app: &App, view: &gtasks::ui::ViewModel) -> String {
 }
 
 #[test]
-fn a_fetch_alone_requests_no_body() {
-    // Lazy detail: the body rides only on explicit request (Enter), never as
-    // a side effect of a fetch — the first paint must not wait for markdown
-    // the user may never look at.
+fn a_fetch_starts_the_first_body_quietly() {
+    // Eager detail: the first row's body starts on fetch, without waiting
+    // for Enter — but quietly, with no loading line: nobody asked out loud.
     let mut app = App::default();
     app.apply_outcome(outcome());
-    assert_eq!(app.detail_requested, None, "a fetch requests no body");
+    assert_eq!(
+        app.detail_requested,
+        Some(("acme/one".to_string(), 2)),
+        "the first row loads at once"
+    );
+    assert!(
+        !app.status.contains("loading"),
+        "quiet: no loading line: {}",
+        app.status
+    );
 
     app.update(Msg::Key(Key::Enter));
     assert_eq!(

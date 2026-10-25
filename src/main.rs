@@ -540,6 +540,9 @@ fn run_tui() -> anyhow::Result<()> {
         write_timeout: timeout,
         agent_profile: config.agent_profile.clone(),
         sandbox_agents: config.sandbox_agents,
+        font_size: config.font_size,
+        font_family: config.font_family.clone(),
+        fonts: gtasks::config::mono_fonts(),
         clone_roots: config.agent_roots(),
         config_fallback,
         // The list icons and the worktree picker read it; `None` means no
@@ -554,6 +557,15 @@ fn run_tui() -> anyhow::Result<()> {
     // screen until dismissed, while the fetch runs behind it.
     if let Some(notice) = config_notice {
         app.modal = Some(gtasks::app::Modal::Notice(notice));
+    }
+    // The terminal owns the glyphs: show what Foot really uses, not what the
+    // config file says — the two drift when the file is hand-edited. A
+    // no-op toggle then writes back exactly what is there.
+    if let Some(path) = gtasks::config::foot_ini_path() {
+        if let Some((family, px)) = gtasks::config::read_foot_font(&path) {
+            app.font_family = family;
+            app.font_size = gtasks::config::FontSize::from_px(px);
+        }
     }
     // The pane lists what the user configured, including repos with no items.
     // A saved selection narrows it; an empty one means "everything". Both
@@ -752,28 +764,59 @@ fn run_tui() -> anyhow::Result<()> {
 
         // A settings toggle: the key handler flips the flag, the loop writes
         // `config.toml` (0600, atomic, like every private write). A broken
-        // config is never overwritten — fix it first, then toggle.
+        // config is never overwritten — fix it first, then toggle. Font
+        // toggles also rewrite the Foot `font=` line, but only when a font
+        // row moved: a sandbox-only toggle never touches the terminal.
         if app.config_save_requested {
             app.config_save_requested = false;
             if config_fallback {
                 app.status =
                     "the config file is broken — fix it before saving settings".to_string();
+                app.font_save_requested = false;
             } else if let Some(path) = config_path() {
                 config.sandbox_agents = app.sandbox_agents;
+                config.font_size = app.font_size;
+                config.font_family = app.font_family.clone();
                 match config.save(&path) {
                     Ok(()) => {
-                        app.status = format!(
-                            "sandboxed agents {} — saved to {}",
-                            if app.sandbox_agents { "on" } else { "off" },
-                            path.display()
-                        );
+                        app.status = format!("settings saved to {}", path.display());
+                        if app.font_save_requested {
+                            app.font_save_requested = false;
+                            match gtasks::config::foot_ini_path() {
+                                Some(foot) => {
+                                    match gtasks::config::set_foot_font(
+                                        &foot,
+                                        &app.font_family,
+                                        app.font_size.px(),
+                                    ) {
+                                        Ok(true) => {
+                                            app.status.push_str(
+                                                " · font saved — restart the terminal to apply",
+                                            );
+                                        }
+                                        Ok(false) => {
+                                            app.status.push_str(" · font already set");
+                                        }
+                                        Err(err) => {
+                                            app.status = format!("cannot save the font: {err:#}");
+                                        }
+                                    }
+                                }
+                                None => {
+                                    app.status =
+                                        "cannot save the font: no config directory".to_string();
+                                }
+                            }
+                        }
                     }
                     Err(err) => {
                         app.status = format!("cannot save the config: {err:#}");
+                        app.font_save_requested = false;
                     }
                 }
             } else {
                 app.status = "cannot save the settings: no config directory".to_string();
+                app.font_save_requested = false;
             }
         }
 

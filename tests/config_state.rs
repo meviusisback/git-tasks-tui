@@ -184,3 +184,92 @@ fn validators_reject_traversal_and_bad_profiles() {
     validate_profile("coder").unwrap();
     validate_profile("9lives").unwrap();
 }
+
+#[test]
+fn font_size_steps_map_cycle_and_parse() {
+    use gtasks::config::FontSize;
+    assert_eq!(FontSize::Small.px(), 9);
+    assert_eq!(FontSize::Medium.px(), 11);
+    assert_eq!(FontSize::Large.px(), 14);
+    assert_eq!(FontSize::Small.next(), FontSize::Medium);
+    assert_eq!(FontSize::Medium.next(), FontSize::Large);
+    assert_eq!(FontSize::Large.next(), FontSize::Small);
+    assert_eq!(FontSize::from_px(9), FontSize::Small);
+    assert_eq!(FontSize::from_px(11), FontSize::Medium);
+    assert_eq!(FontSize::from_px(14), FontSize::Large);
+    assert_eq!(FontSize::from_px(13), FontSize::Large);
+}
+
+#[test]
+fn fc_list_parses_aliases_and_dedupes() {
+    let fonts = gtasks::config::parse_fc_list(
+        "JetBrainsMono Nerd Font,JetBrainsMono NF
+DejaVu Sans Mono
+
+JetBrainsMono Nerd Font
+",
+    );
+    assert_eq!(
+        fonts,
+        vec![
+            "DejaVu Sans Mono".to_string(),
+            "JetBrainsMono NF".to_string(),
+            "JetBrainsMono Nerd Font".to_string(),
+        ]
+    );
+    assert!(gtasks::config::parse_fc_list("").is_empty());
+}
+
+#[test]
+fn foot_font_roundtrips_preserving_the_rest() {
+    use gtasks::config::{read_foot_font, set_foot_font};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("foot.ini");
+    std::fs::write(
+        &path,
+        "[main]
+include=~/theme/foot.ini
+font=JetBrainsMono Nerd Font:size=11
+pad=14x14
+",
+    )
+    .unwrap();
+    assert_eq!(
+        read_foot_font(&path),
+        Some(("JetBrainsMono Nerd Font".to_string(), 11))
+    );
+    // Same values: nothing to do.
+    assert!(!set_foot_font(&path, "JetBrainsMono Nerd Font", 11).unwrap());
+    // New size keeps the file, changes the line.
+    assert!(set_foot_font(&path, "JetBrainsMono Nerd Font", 14).unwrap());
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("font=JetBrainsMono Nerd Font:size=14"),
+        "{text}"
+    );
+    assert!(text.contains("pad=14x14"), "untouched lines stay: {text}");
+    // New family, style suffix preserved.
+    std::fs::write(
+        &path,
+        "[main]
+font=Old:size=11:style=Bold
+",
+    )
+    .unwrap();
+    set_foot_font(&path, "New", 9).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("font=New:size=9:style=Bold"), "{text}");
+    // Missing file grows a minimal section; comments are skipped.
+    let fresh = dir.path().join("fresh.ini");
+    set_foot_font(&fresh, "Mono", 9).unwrap();
+    let text = std::fs::read_to_string(&fresh).unwrap();
+    assert!(
+        text.contains("[main]") && text.contains("font=Mono:size=9"),
+        "{text}"
+    );
+    assert!(read_foot_font(&fresh) == Some(("Mono".to_string(), 9)));
+    // A symlink is refused, never followed.
+    let link = dir.path().join("link.ini");
+    std::os::unix::fs::symlink(&path, &link).unwrap();
+    assert!(set_foot_font(&link, "Mono", 9).is_err());
+}

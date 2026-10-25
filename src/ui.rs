@@ -404,11 +404,18 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
                 Some(ItemKind::Issue) => icons::kind_issue(),
                 None => "",
             };
+            // Titles read bold: the number carries the kind colour, the
+            // title carries the weight — at a glance rows scan as titles
+            // first, numbers second. (Glyph size itself is the terminal's,
+            // not the app's: no box can be bigger than the terminal font.)
             let mut spans = vec![
                 Span::styled(icon, kind_style(*kind)),
                 Span::styled(sanitize(&number), kind_style(*kind)),
                 Span::raw(" "),
-                Span::raw(sanitize(&title)),
+                Span::styled(
+                    sanitize(&title),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
             ];
             if icon.is_empty() {
                 spans.remove(0);
@@ -1084,8 +1091,8 @@ fn draw_settings(
         .enumerate()
         .map(|(i, setting)| {
             let mark = if i == menu.cursor { "▸" } else { " " };
-            let state = if setting.is_on(app) { "[on]" } else { "[off]" };
-            ListItem::new(sanitize(&format!("{mark} {} {state}", setting.title())))
+            let state = setting.state_text(app);
+            ListItem::new(sanitize(&format!("{mark} {} [{state}]", setting.title())))
         })
         .collect();
     let rows = items.len().max(1);

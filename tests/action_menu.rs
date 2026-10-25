@@ -49,6 +49,16 @@ fn pr_app() -> App {
 }
 
 #[test]
+fn m_outside_the_list_refuses_instead_of_opening() {
+    use gtasks::app::Pane;
+    let mut app = pr_app();
+    app.pane = Pane::Detail;
+    app.update(Msg::Key(Key::Char('m')));
+    assert!(app.modal.is_none(), "the menu belongs to the list box");
+    assert_eq!(app.status, "move to the list first");
+}
+
+#[test]
 fn m_opens_six_typed_rows_on_a_pr() {
     let mut app = pr_app();
     app.update(Msg::Key(Key::Char('m')));

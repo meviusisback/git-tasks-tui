@@ -32,6 +32,13 @@ pub struct Config {
     /// `approvals.mode`), pi has no equivalent flag. Off means the plain
     /// binaries with their normal approval prompts.
     pub sandbox_agents: bool,
+    /// Terminal font size for the whole terminal (a TUI cannot resize its
+    /// own glyphs): Small 9px, Medium 11px, Large 14px.
+    pub font_size: FontSize,
+    /// Terminal typeface for the whole terminal, from the installed
+    /// monospace fonts. Needs a Nerd Font for the glyphs, otherwise the
+    /// markers fall back.
+    pub font_family: String,
     /// Profile the agent handoff (`g`) passes to `hermes -p`. Validated like
     /// every profile: lowercase, digits, `_`/`-`, starting alphanumeric.
     pub agent_profile: String,
@@ -59,10 +66,203 @@ impl Default for Config {
             default_profile: None,
             trust_worktree_rules: false,
             sandbox_agents: false,
+            font_size: FontSize::default(),
+            font_family: "monospace".to_string(),
             agent_profile: "default".to_string(),
             clone_root: None,
             clone_roots: Vec::new(),
         }
+    }
+}
+/// Terminal font size: the whole terminal, because a TUI cannot resize its
+/// own glyphs — the terminal owns every pixel. Small is 9px, Medium is 11px
+/// (Foot's default), Large is 14px.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FontSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl FontSize {
+    /// Pixels for the Foot `font=…:size=` line.
+    pub fn px(self) -> u32 {
+        match self {
+            FontSize::Small => 9,
+            FontSize::Medium => 11,
+            FontSize::Large => 14,
+        }
+    }
+
+    /// Short name for the settings row.
+    pub fn name(self) -> &'static str {
+        match self {
+            FontSize::Small => "Small",
+            FontSize::Medium => "Medium",
+            FontSize::Large => "Large",
+        }
+    }
+
+    /// Cycle for the settings toggle: Small → Medium → Large → Small.
+    pub fn next(self) -> Self {
+        match self {
+            FontSize::Small => FontSize::Medium,
+            FontSize::Medium => FontSize::Large,
+            FontSize::Large => FontSize::Small,
+        }
+    }
+
+    /// Nearest step for a size read from Foot (users edit it by hand too).
+    pub fn from_px(px: u32) -> Self {
+        if px <= 10 {
+            FontSize::Small
+        } else if px <= 12 {
+            FontSize::Medium
+        } else {
+            FontSize::Large
+        }
+    }
+}
+
+/// Where Foot keeps its config: `$XDG_CONFIG_HOME/foot/foot.ini`, falling
+/// back to `~/.config`.
+pub fn foot_ini_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(base.join("foot").join("foot.ini"))
+}
+
+/// The `font=` line of a Foot config: `(family, size)`. `None` when the
+/// file is missing or sets no font — then Foot's own default applies and
+/// there is nothing to show. Only the first uncommented `font=` line
+/// counts; a `:style=` suffix is preserved, not parsed.
+pub fn read_foot_font(path: &Path) -> Option<(String, u32)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(value) = line.strip_prefix("font=") else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let (family, size) = match value.split_once(":size=") {
+            Some((family, rest)) => {
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                (family.trim(), digits.parse::<u32>().ok()?)
+            }
+            None => (value, 11),
+        };
+        if family.is_empty() {
+            continue;
+        }
+        return Some((family.to_string(), size));
+    }
+    None
+}
+
+/// Set the `font=` line to `family:size=px`, preserving every other line,
+/// the file mode and any `:style=` suffix. A symlink is refused (same rule
+/// as every private write). A missing file or missing line grows a minimal
+/// `[main]` section — Foot merges it with its defaults, so nothing else
+/// changes. Returns true when the file changed.
+pub fn set_foot_font(path: &Path, family: &str, px: u32) -> anyhow::Result<bool> {
+    let family = family.trim();
+    ensure!(!family.is_empty(), "font family must not be empty");
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        ensure!(
+            !meta.file_type().is_symlink(),
+            "refusing to write through a symlink: {}",
+            path.display()
+        );
+    }
+    let old = std::fs::read_to_string(path).unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    let mut done = false;
+    let mut in_main = false;
+    let mut has_main = false;
+    for line in old.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_main = trimmed == "[main]";
+            if in_main {
+                has_main = true;
+            }
+            out.push(line.to_string());
+            continue;
+        }
+        if !done
+            && in_main
+            && !trimmed.starts_with('#')
+            && let Some(value) = trimmed.strip_prefix("font=")
+        {
+            let suffix = match value.split_once(":size=") {
+                Some((_, rest)) => {
+                    let cut = rest
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(rest.len());
+                    rest[cut..].to_string()
+                }
+                None => String::new(),
+            };
+            out.push(format!("font={family}:size={px}{suffix}"));
+            done = true;
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !done {
+        if !has_main {
+            out.push("[main]".to_string());
+        }
+        out.push(format!("font={family}:size={px}"));
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    if text == old {
+        return Ok(false);
+    }
+    std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(true)
+}
+
+/// Parse `fc-list :spacing=mono family`: one family per line, aliases comma
+/// separated. Sorted, deduped, blanks dropped.
+pub fn parse_fc_list(output: &str) -> Vec<String> {
+    let mut families: Vec<String> = output
+        .lines()
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect();
+    families.sort();
+    families.dedup();
+    families
+}
+
+/// The installed monospace families for the font toggle. A failed or empty
+/// query falls back to `monospace` — the toggle always has somewhere to go.
+pub fn mono_fonts() -> Vec<String> {
+    let output = std::process::Command::new("fc-list")
+        .args([":spacing=mono", "family"])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let fonts = parse_fc_list(&String::from_utf8_lossy(&out.stdout));
+            if fonts.is_empty() {
+                vec!["monospace".to_string()]
+            } else {
+                fonts
+            }
+        }
+        _ => vec!["monospace".to_string()],
     }
 }
 

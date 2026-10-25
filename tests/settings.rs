@@ -14,7 +14,14 @@ fn s_opens_the_settings_menu_with_the_sandbox_row() {
     let Some(Modal::Settings(menu)) = app.modal.as_ref() else {
         panic!("s opens settings, got {:?}", app.modal);
     };
-    assert_eq!(menu.rows, vec![Setting::SandboxAgents]);
+    assert_eq!(
+        menu.rows,
+        vec![
+            Setting::SandboxAgents,
+            Setting::FontSize,
+            Setting::FontFamily
+        ]
+    );
     assert_eq!(menu.cursor, 0);
 }
 
@@ -47,6 +54,42 @@ fn space_flips_too_and_cursor_stays_inside() {
         panic!("still open");
     };
     assert_eq!(menu.cursor, 0, "one row: the cursor clamps, never leaves");
+}
+
+#[test]
+fn font_rows_cycle_without_touching_the_disk() {
+    use gtasks::app::Setting;
+    let mut app = settings_app();
+    app.fonts = vec!["A".to_string(), "B".to_string()];
+    app.font_family = "A".to_string();
+    assert_eq!(Setting::FontSize.state_text(&app), "Medium", "Foot default");
+    app.update(Msg::Key(Key::Char('s')));
+    let rows = match app.modal.as_ref() {
+        Some(Modal::Settings(menu)) => menu.rows.clone(),
+        other => panic!("settings, got {other:?}"),
+    };
+    assert_eq!(
+        rows,
+        vec![
+            Setting::SandboxAgents,
+            Setting::FontSize,
+            Setting::FontFamily
+        ]
+    );
+    // Cursor onto the size row, Enter cycles Small -> Medium -> Large.
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.font_size, gtasks::config::FontSize::Large);
+    assert!(app.font_save_requested, "the loop owns the Foot write");
+    assert!(app.config_save_requested);
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.font_size, gtasks::config::FontSize::Small);
+    // Cursor onto the family row, Enter cycles the discovered fonts.
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.font_family, "B");
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.font_family, "A", "wraps around");
 }
 
 #[test]
