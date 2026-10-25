@@ -318,6 +318,16 @@ round trip; they are written here so the next stage does not pay again.
   compare at 2% the rule is *idle machine, three runs, median*. And the release
   binary is reproducible here (same source → same `sha256`), which is what makes
   two machines' numbers comparable at all.
+- **A 502 from the batched read is a timeout, not a refusal — so the remedy is
+  retry first, cap second, bisect third.** Measured (2026-10-25): every failure
+  landed between 10.6 s and 11.0 s and every success at or under 10.3 s, and one
+  identical query failed once and then succeeded minutes later. The trigger is
+  the requested node count (`repos × limit`), not the text of the query: 3×100
+  and 3×30 differ by six characters and one of them fails. Therefore: (1) retry
+  a 502 once — the reads are idempotent and that turns most of them into
+  latency; (2) keep each call well under the edge, capping `repos × limit`
+  (~150 nodes) or lowering `contexts(first:)`; (3) bisect only what still fails,
+  and then report **one** repo failed, never twenty.
 - **A probe is not a test.** Non-deterministic checks (the TOCTOU window between
   `create_dir` and `git worktree add`) are run by hand and written down as
   probes; they never enter the gate, because a flaky green is worse than an
