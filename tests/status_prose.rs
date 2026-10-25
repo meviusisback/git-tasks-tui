@@ -123,12 +123,20 @@ fn the_all_repos_message_uses_the_same_counting() {
     let mut app = app_with(&["me/one"], vec![item("me/one", 1, "a")]);
     app.update(Msg::Key(Key::Tab));
     app.update(Msg::Key(Key::Down)); // filter to me/one
+    // A sentinel first: after the messages were unified, the "all repos" text is
+    // identical to the fetch text, so without this the assertion below cannot tell
+    // "the cursor refreshed the status" from "the status was left over".
+    app.status = "SENTINEL".to_string();
     app.update(Msg::Key(Key::Up)); // back to "all repos", one item still
     assert!(
         matches!(app.repo_filter, RepoFilter::All),
         "row 0 means everything"
     );
     println!("all-repos status: {:?}", app.status);
+    assert_ne!(
+        app.status, "SENTINEL",
+        "moving the cursor must refresh the status, not leave the previous one"
+    );
     assert!(
         app.status.contains("1 item"),
         "one item must be singular here too: {:?}",
