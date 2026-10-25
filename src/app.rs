@@ -230,6 +230,11 @@ pub struct App {
     /// A list, not a path: clones really do live in more than one directory, and one path
     /// cannot say so without making the other directory invisible.
     pub clone_roots: Vec<std::path::PathBuf>,
+    /// True when the config on disk could not be used and the app is running on the demo fallback.
+    /// The notice says it once; this is how the status line can keep saying it, because a decision
+    /// taken once must not become a thing forgotten: after `Esc` the list holds a repository the
+    /// user never chose, and nothing else on screen remembers why.
+    pub config_fallback: bool,
     /// The last agent run, if any. It stays after the exit: `Esc` hides the
     /// card, `x` deletes the record, a new run replaces it.
     pub agent_record: Option<AgentRecord>,
@@ -273,6 +278,7 @@ impl Default for App {
             pending: None,
             agent_profile: String::from("default"),
             clone_roots: Vec::new(),
+            config_fallback: false,
             agent_record: None,
             agent_dismissed_for: None,
             agent_requested: None,
