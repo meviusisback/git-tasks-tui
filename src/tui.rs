@@ -53,9 +53,15 @@ type Restore = Box<dyn FnMut() + Send>;
 
 type HookFn = dyn Fn(&PanicHookInfo<'_>) + Send + Sync + 'static;
 
+type Enable = Box<dyn FnMut() -> io::Result<()> + Send>;
+
 struct Shared {
+    enable_raw: Mutex<Enable>,
+    enable_screen: Mutex<Enable>,
     restore: Mutex<Restore>,
-    done: AtomicBool,
+    /// True while the terminal belongs to this guard. `restore_once` and `resume` swap it, so
+    /// each ownership window restores exactly once — two windows, two restores, never three.
+    live: AtomicBool,
 }
 
 impl Shared {
@@ -64,7 +70,7 @@ impl Shared {
     /// against each other (the visible symptom is the error message printed *after* leaving the
     /// alternate screen, where nobody reads it).
     fn restore_once(&self) {
-        if self.done.swap(true, Ordering::SeqCst) {
+        if !self.live.swap(false, Ordering::SeqCst) {
             return;
         }
         if let Ok(mut restore) = self.restore.lock() {
@@ -135,10 +141,10 @@ impl Tui {
 
     /// Enter with the actions supplied by the caller — the shape that makes the guard testable,
     /// and the only difference between this and [`Tui::enter`].
-    pub fn enter_with<A, B>(enable_raw: A, enable_screen: B, restore: Restore) -> io::Result<Self>
+    pub fn enter_with<A, B>(mut enable_raw: A, mut enable_screen: B, restore: Restore) -> io::Result<Self>
     where
-        A: FnOnce() -> io::Result<()>,
-        B: FnOnce() -> io::Result<()>,
+        A: FnMut() -> io::Result<()> + Send + 'static,
+        B: FnMut() -> io::Result<()> + Send + 'static,
     {
         // 1. Nothing changed yet, so a failure here restores nothing.
         enable_raw()?;
@@ -155,13 +161,60 @@ impl Tui {
         // 3. Only now is there something to guard.
         install_hook();
         let shared = Arc::new(Shared {
+            enable_raw: Mutex::new(Box::new(enable_raw)),
+            enable_screen: Mutex::new(Box::new(enable_screen)),
             restore: Mutex::new(restore),
-            done: AtomicBool::new(false),
+            live: AtomicBool::new(true),
         });
         if let Ok(mut slot) = active().lock() {
             *slot = Arc::downgrade(&shared);
         }
         Ok(Self { shared })
+    }
+}
+
+impl Tui {
+    /// Hand the terminal over: leave raw mode and the alternate screen, **once**. The guard
+    /// keeps nothing and claims nothing until [`Tui::resume`]; a panic in between restores
+    /// nothing, because there is nothing of ours to restore.
+    pub fn suspend(&self) {
+        self.shared.restore_once();
+    }
+
+    /// Take the terminal back after [`Tui::suspend`]. The half-entry rule applies again: if the
+    /// second step fails, the first is undone before the error travels, and the guard stays
+    /// not-live — so a later `drop` does not restore a terminal it does not own.
+    pub fn resume(&self) -> io::Result<()> {
+        let raw = {
+            let mut f = self
+                .shared
+                .enable_raw
+                .lock()
+                .map_err(|_| io::Error::other("enable_raw lock poisoned"))?;
+            (f)()
+        };
+        raw?;
+        let screen = {
+            let mut f = self
+                .shared
+                .enable_screen
+                .lock()
+                .map_err(|_| io::Error::other("enable_screen lock poisoned"))?;
+            (f)()
+        };
+        match screen {
+            Ok(()) => {
+                self.shared.live.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            Err(err) => {
+                // Undo the raw-mode step we just did, and stay not-live.
+                if let Ok(mut restore) = self.shared.restore.lock() {
+                    (restore)();
+                }
+                Err(err)
+            }
+        }
     }
 }
 
