@@ -86,6 +86,17 @@ impl std::fmt::Display for BranchName {
     }
 }
 
+/// The default worktree root: `$XDG_DATA_HOME/gtasks/worktrees`. The caller
+/// applies the configured `worktree_root` when set. One function, so every
+/// path computation starts from the same base.
+pub fn default_root() -> anyhow::Result<PathBuf> {
+    let base = directories::ProjectDirs::from("", "", "gtasks")
+        .context("cannot locate data directory")?
+        .data_dir()
+        .to_path_buf();
+    Ok(base.join("worktrees"))
+}
+
 /// Where a worktree for `branch` of `clone` will live: under
 /// `$XDG_DATA_HOME/gtasks/worktrees` (pure: the base comes from the
 /// environment, nothing is touched on disk).

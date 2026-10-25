@@ -23,7 +23,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gtasks::actions::{argv_for, Action, MergeMethod};
+use gtasks::actions::{Action, MergeMethod, argv_for};
 use gtasks::binaries::Binaries;
 
 /// Strings that try to become a flag, plus empty and whitespace-only ones.

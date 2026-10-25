@@ -240,7 +240,6 @@ fn live_in_group(group: u32) -> Vec<u32> {
     out
 }
 
-
 /// S12: a stderr flood is capped, and the flag says so.
 #[test]
 fn stderr_flood_capped() {

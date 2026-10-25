@@ -332,6 +332,81 @@ fn resolve_program(program: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
+/// Run an INTERACTIVE child: stdio inherited, own process group, terminal
+/// foreground while it runs. Same [`CheckedArgv`] gate as every spawn — the
+/// argv was validated at construction; this only chooses how it runs.
+///
+/// Two deliberate differences from [`run_pipe`]:
+/// - the environment is inherited whole. An interactive agent IS the user's
+///   session (it needs HOME, TERM, PATH, auth); a pipe child gets the S3
+///   allowlist because it never meets the user.
+/// - there is no timeout: the agent works as long as it needs. Ctrl-C goes
+///   to the child's group only, so it never takes gtasks with it.
+///
+/// Fail closed when the terminal cannot be handed over (no TTY, EPERM): the
+/// child would stop on its first terminal read and signals would land on
+/// gtasks. The give is retried briefly — `setpgid` in the child races the
+/// parent's `tcsetpgrp` — but ENOTTY fails fast: retrying a missing terminal
+/// never produces one.
+pub fn run_interactive(argv: &CheckedArgv) -> anyhow::Result<std::process::ExitStatus> {
+    use anyhow::Context;
+    use std::os::unix::process::CommandExt;
+
+    let program = resolve_program(&argv.program)?;
+    let mut cmd = std::process::Command::new(&program);
+    cmd.args(&argv.args)
+        .current_dir(&argv.cwd)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    cmd.process_group(0);
+    // S11, same as pipe children: no orphan agent if gtasks dies.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = spawn_retry(&mut cmd, &program)?;
+    // SAFETY: `id()` is the child's pid; the child set its own group to it
+    // via `process_group(0)`, so the group is ours to signal.
+    let pid = child.id() as libc::pid_t;
+    let mut guard = GroupGuard::new(pid);
+    let own_group = unsafe { libc::getpgrp() };
+    // A failed handoff kills the just-spawned child on drop (GroupGuard):
+    // nothing is left running without a terminal.
+    give_foreground(pid)?;
+    let status = child.wait().context("cannot wait for the agent")?;
+    guard.disarm();
+    unsafe {
+        if libc::tcsetpgrp(libc::STDIN_FILENO, own_group) != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("agent ran but the terminal foreground could not be restored");
+        }
+    }
+    Ok(status)
+}
+
+/// Hand the terminal foreground to `pgid`, retrying the fork/setpgid race.
+/// ENOTTY (no terminal at all) fails immediately.
+fn give_foreground(pgid: libc::pid_t) -> anyhow::Result<()> {
+    use anyhow::Context;
+    for _ in 0..100 {
+        let rc = unsafe { libc::tcsetpgrp(libc::STDIN_FILENO, pgid) };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENOTTY) {
+            return Err(err).context("no terminal to hand to the agent");
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    Err(std::io::Error::last_os_error()).context("cannot hand the terminal to the agent")
+}
+
 /// Spawn with a bounded retry on `ETXTBSY` ("Text file busy"): executing a
 /// file that was *just* written can transiently fail on a loaded machine
 /// (measured flakes under parallel test load). Anything else fails fast.
