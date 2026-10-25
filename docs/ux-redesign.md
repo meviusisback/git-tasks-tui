@@ -224,10 +224,37 @@ for `gh` applies here too.
 | 2 | `task/11-drilldown` | repo → items, `Esc` back, filter kept on the way out | drill in/out with arrows (`Tab` until the shell lands) |
 | 3 | `task/12-repo-menu` | `selected_repos` in config, `R` multi-select menu, list filtered | toggling a repo changes the list after restart |
 | 4 | `task/13-detail` | structured detail box with the fields above | every field is either true or absent |
+
 | 5 | `task/14-actions` | `m` actions menu on `CheckedArgv` (merge method, delete branch, comment, close) | the confirmation still shows the exact argv |
 | 6 | `task/15-worktree` | `w` menu, create/switch, path safety | traversal tests green |
 | 7 | `task/16-agent` | right-column agent, process group, session menu, 70% width | agent survives a timeout and the UI resumes |
 | 8 | `task/17-polish` | Catppuccin Mocha, per-section colors, final legend | a screenshot pass with no unreadable pair |
+
+**What stages 1–3 taught us, and what stage 4 inherits.** Each of these cost a
+round trip; they are written here so the next stage does not pay again.
+
+- **The width that decides is 80 columns.** A test rendered at 120 certifies a
+  screen that was never broken. Any test that asserts "this text is visible"
+  renders at 80×24; 120×30 is a second case, never the one that decides.
+- **A test that watches the thing you are improving cannot see the thing you are
+  breaking.** Every asserted screen part names the part it watches; the status
+  line has its own test because it disappears on its own.
+- **"Not refetched" and "the cursor does not move" are different claims.** `r`
+  refreshes in every mode, so any list position kept as an index is a bug waiting
+  for a refresh: keep the object, or keep nothing.
+- **One value, one meaning.** Empty `selected_repos` means *all*; so a menu where
+  nothing is marked must also mean *all*, said in the status line at apply time.
+  A state that means one thing now and another after a restart is the same class
+  of defect as a path that believes it identifies a tree.
+- **Carried debt (`RepoRow`).** The repo pane builds `RepoFilter` from a string
+  row and a sentinel (`"— all repos —"`) through `RepoSlug::parse(..).expect(..)`.
+  Unreachable today only because `Config::load` validates first. Stage 4 touches
+  `app.rs` anyway: make the row `enum RepoRow { All, Repo(RepoSlug) }` **before**
+  any list arrives from `gh` rather than from the config, or the `expect` fires.
+  A field that must be true is a type, not an `expect`.
+- **Fields come from data that was actually fetched.** A field with no source is
+  omitted, never defaulted: `checks: none` and `checks: never asked` are
+  different statements, and only one of them is honest.
 
 Theme: Catppuccin Mocha tokens in one module (`src/theme.rs`), no colour literals
 elsewhere; the legend and the status line share the same palette.
