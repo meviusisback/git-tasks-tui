@@ -328,6 +328,14 @@ round trip; they are written here so the next stage does not pay again.
   latency; (2) keep each call well under the edge, capping `repos × limit`
   (~150 nodes) or lowering `contexts(first:)`; (3) bisect only what still fails,
   and then report **one** repo failed, never twenty.
+- **The checkable form of "is this test real?": which change would make it
+  fail?** If the answer is "none that touches the behaviour it names", the
+  assertion is a description. Unlike "write good tests", this can be verified —
+  by making that change and watching. Measured (2026-10-25): unifying two status
+  messages made the "all repos" test assert a string it could no longer fail on;
+  a sentinel (`status = "SENTINEL"`, move, `assert_ne!`) restored the ability to
+  tell "refreshed" from "left over", and removing the refresh makes two of the
+  three tests go red.
 - **A probe is not a test.** Non-deterministic checks (the TOCTOU window between
   `create_dir` and `git worktree add`) are run by hand and written down as
   probes; they never enter the gate, because a flaky green is worse than an
