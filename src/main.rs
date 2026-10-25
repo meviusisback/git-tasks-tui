@@ -317,13 +317,19 @@ fn run_tui() -> anyhow::Result<()> {
 
         // `R`: the key handler already updated the live list; the file is
         // the loop's job, atomically and 0600, like every private write.
+        // An empty check means "everything", like an empty state file: one
+        // meaning, said out loud — not "0 repos" with all of them shown.
         if let Some(selected) = app.selection_applied.take() {
+            let cleared = selected.is_empty();
             state.selected_repos = selected;
             match state_path.as_deref() {
                 Some(path) => match state.save(path) {
                     Ok(()) => {
-                        app.status =
+                        app.status = if cleared {
+                            "selection cleared — showing all repos".to_string()
+                        } else {
                             format!("selection saved ({} repos)", state.selected_repos.len())
+                        };
                     }
                     Err(err) => app.status = format!("cannot save selection: {err:#}"),
                 },
