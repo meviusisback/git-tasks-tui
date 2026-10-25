@@ -342,6 +342,15 @@ round trip; they are written here so the next stage does not pay again.
   allowlisted) and the signal handlers ("belong to the same restore" — they
   already ended in `Drop`). Both cost a round of deciding to apply something
   already applied. Ten minutes of measuring beats a day of believing.
+- **A valid config is not a working config.** `validate()` says the values are
+  inside their ranges; it does not say the program can do its job with them.
+  Measured 2026-10-25: after a migration the config was *valid* (the key was
+  simply absent), so no notice appeared — and the agent window silently refused
+  to start, because the roots where the local clones live were gone. The guard
+  for this class is not a test of the config but a test of the **feature**:
+  "the code knows how to refuse" and "somebody's installed config is making it
+  refuse right now" are different claims, and only the second one is about the
+  user.
 - **Removing a field "nobody reads" needs two questions, not one.** (1) who
   reads it? (2) what does it say to the person who writes it? The greps answer
   the first; only the user's machine answers the second. Measured 2026-10-25:
