@@ -341,7 +341,12 @@ pub fn batch_argv(query: String) -> Vec<std::ffi::OsString> {
 pub fn assemble(batch: &[RepoSlug], text: &str) -> anyhow::Result<Vec<RepoRead>> {
     let response: Response = serde_json::from_str(text)
         .map_err(|e| anyhow::anyhow!("cannot parse GraphQL batch: {e}"))?;
-    let mut data = response.data.unwrap_or_default();
+    // A null `data` with errors is a server-level refusal, not twenty
+    // per-repo failures: report it as a batch failure so the caller bisects
+    // instead of blaming every repo in the batch.
+    let mut data = response
+        .data
+        .ok_or_else(|| anyhow::anyhow!("GraphQL batch returned no data"))?;
     let mut reads = Vec::with_capacity(batch.len());
     for (i, slug) in batch.iter().enumerate() {
         let alias = format!("r{i}");

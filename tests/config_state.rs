@@ -21,7 +21,7 @@ fn defaults_are_sane() {
     assert_eq!(config.timeout_s, 30);
     assert_eq!(config.write_timeout_s, 60);
     assert_eq!(config.refresh_s, 300);
-    assert_eq!(config.limit, 100);
+    assert_eq!(config.limit, 30);
     assert!(!config.trust_worktree_rules);
     assert!(config.repos.is_empty());
 }
@@ -79,6 +79,7 @@ fn validation_rejects_out_of_range_values() {
         Box::new(|c| c.write_timeout_s = 601),
         Box::new(|c| c.refresh_s = 5),
         Box::new(|c| c.limit = 0),
+        Box::new(|c| c.limit = 31),
         Box::new(|c| c.repos = vec!["../etc".into()]),
         Box::new(|c| c.default_profile = Some("Bad Profile".into())),
     ];

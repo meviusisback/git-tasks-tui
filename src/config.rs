@@ -37,7 +37,7 @@ impl Default for Config {
             timeout_s: 30,
             write_timeout_s: 60,
             refresh_s: 300,
-            limit: 100,
+            limit: 30,
             default_profile: None,
             trust_worktree_rules: false,
         }
@@ -66,9 +66,12 @@ impl Config {
             "refresh_s must be 0 (off) or 10..=86400, got {}",
             self.refresh_s
         );
+        // The gateway drops calls that run past ~10 s; above 30 the limit
+        // does not fetch more, it fetches nothing. Refusing at load beats
+        // a silent truncation — same rule as parallel (S-config).
         ensure!(
-            (1..=1000).contains(&self.limit),
-            "limit must be 1..=1000, got {}",
+            (1..=30).contains(&self.limit),
+            "limit must be 1..=30, got {}",
             self.limit
         );
         for repo in &self.repos {

@@ -14,8 +14,9 @@ use crate::binaries::Binaries;
 use crate::gh::{self, Argv, Caps, CheckedArgv, gh};
 use crate::model::{Item, ItemKind};
 
-/// How many items to ask per repo list.
-pub const DEFAULT_LIMIT: usize = 100;
+/// How many items to ask per repo list: the gateway drops calls that run
+/// past ~10 s, and past 30 the limit buys timeouts instead of items.
+pub const DEFAULT_LIMIT: usize = 30;
 
 /// Concurrent fetch workers, ceiling included. Batches are heavy GraphQL
 /// reads and GitHub throttles abusive concurrency with secondary rate
@@ -37,6 +38,89 @@ pub enum FetchError {
     Parse { repo: String, source: anyhow::Error },
 }
 
+/// One attempt of one batch: transport plus parse. Reads are idempotent, so
+/// a failed attempt is retried once before it counts — most gateway hiccups
+/// (the nondeterministic 502s) become latency instead of lost data.
+fn run_batch(
+    binaries: &Binaries,
+    batch: &[RepoSlug],
+    limit: usize,
+    timeout: Duration,
+    cwd: &std::path::Path,
+) -> Result<Vec<crate::graphql::RepoRead>, String> {
+    // `gh()` takes the resolved binary: no PATH lookup, nothing to overwrite.
+    // One `--field`, never `-f`; one argument per word — no shell anywhere
+    // near the query text.
+    let query = crate::graphql::batch_query(batch, limit);
+    let argv = gh(binaries, cwd, crate::graphql::batch_argv(query));
+    let checked = CheckedArgv::from_checked(argv);
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let result = match gh::run_checked(&checked, timeout) {
+            Ok(output) => {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    Err(format!("{}: {}", output.status, stderr.trim()))
+                } else if output.truncated {
+                    Err("output capped, refusing partial".to_string())
+                } else {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    crate::graphql::assemble(batch, &text)
+                        .map_err(|source| format!("cannot parse: {source:#}"))
+                }
+            }
+            Err(err) => {
+                if err.downcast_ref::<gh::Timeout>().is_some() {
+                    Err("gh timed out".to_string())
+                } else {
+                    Err(format!("gh failed: {err:#}"))
+                }
+            }
+        };
+        match result {
+            Ok(reads) => return Ok(reads),
+            Err(_) if attempts < 2 => continue,
+            Err(msg) => return Err(msg),
+        }
+    }
+}
+
+/// One repo's fate after a batch ran: its items, or the reason it yielded none.
+type ResolvedRepo = (String, Result<Vec<Item>, String>);
+
+/// Resolve a batch into per-repo results. A failed batch is bisected —
+/// halves, quarters, down to one repo — so a heavy repo degrades to itself
+/// instead of taking nineteen healthy ones with it. The happy path runs one
+/// query and never touches this recursion.
+fn resolve_batch(
+    binaries: &Binaries,
+    batch: &[RepoSlug],
+    limit: usize,
+    timeout: Duration,
+    cwd: &std::path::Path,
+    out: &mut Vec<ResolvedRepo>,
+) {
+    match run_batch(binaries, batch, limit, timeout, cwd) {
+        Ok(reads) => {
+            for read in reads {
+                match read.error {
+                    Some(err) => out.push((read.repo, Err(err))),
+                    None => out.push((read.repo, Ok(read.items))),
+                }
+            }
+        }
+        Err(msg) if batch.len() == 1 => {
+            out.push((batch[0].as_str().to_string(), Err(msg)));
+        }
+        Err(_) => {
+            let mid = batch.len() / 2;
+            resolve_batch(binaries, &batch[..mid], limit, timeout, cwd, out);
+            resolve_batch(binaries, &batch[mid..], limit, timeout, cwd, out);
+        }
+    }
+}
+
 /// Fetch every repo in batches of [`BATCH_SIZE`](crate::graphql::BATCH_SIZE)
 /// through the checked transport. The untrusted path refuses `gh api`
 /// (it could `--method POST`); the batch is a read the query builder
@@ -56,7 +140,7 @@ pub fn fetch_graphql_many(
     let chunks: Vec<&[RepoSlug]> = repos.chunks(crate::graphql::BATCH_SIZE).collect();
     let parallel = parallel.clamp(1, MAX_PARALLEL).min(chunks.len().max(1));
     let next = AtomicUsize::new(0);
-    let collected: Mutex<Vec<BatchResult>> = Mutex::new(Vec::new());
+    let collected: Mutex<Vec<(usize, Vec<ResolvedRepo>)>> = Mutex::new(Vec::new());
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
 
     std::thread::scope(|scope| {
@@ -67,51 +151,13 @@ pub fn fetch_graphql_many(
                     if index >= chunks.len() {
                         break;
                     }
-                    let batch = chunks[index];
-                    let query = crate::graphql::batch_query(batch, limit);
-                    // `gh()` takes the resolved binary: no PATH lookup, nothing
-                    // to overwrite. One `--field`, never `-f`; one argument per
-                    // word — no shell anywhere near the query text.
-                    let argv = gh(binaries, &cwd, crate::graphql::batch_argv(query));
-                    let checked = CheckedArgv::from_checked(argv);
-                    let reads = match gh::run_checked(&checked, timeout) {
-                        Ok(output) => {
-                            if !output.status.success() {
-                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                let msg = format!("{}: {}", output.status, stderr.trim());
-                                (Vec::new(), Some(format!("batch {index}: gh failed: {msg}")))
-                            } else if output.truncated {
-                                (
-                                    Vec::new(),
-                                    Some(format!("batch {index}: output capped, refusing partial")),
-                                )
-                            } else {
-                                let text = String::from_utf8_lossy(&output.stdout);
-                                match crate::graphql::assemble(batch, &text) {
-                                    Ok(reads) => (reads, None),
-                                    Err(source) => (
-                                        Vec::new(),
-                                        Some(format!("batch {index}: cannot parse: {source:#}")),
-                                    ),
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            if err.downcast_ref::<gh::Timeout>().is_some() {
-                                (Vec::new(), Some(format!("batch {index}: gh timed out")))
-                            } else {
-                                (
-                                    Vec::new(),
-                                    Some(format!("batch {index}: gh failed: {err:#}")),
-                                )
-                            }
-                        }
-                    };
+                    let mut resolved = Vec::new();
+                    resolve_batch(binaries, chunks[index], limit, timeout, &cwd, &mut resolved);
                     let mut guard = match collected.lock() {
                         Ok(guard) => guard,
                         Err(poisoned) => poisoned.into_inner(),
                     };
-                    guard.push((index, reads.0, reads.1));
+                    guard.push((index, resolved));
                 }
             });
         }
@@ -121,24 +167,14 @@ pub fn fetch_graphql_many(
         Ok(value) => value,
         Err(poisoned) => poisoned.into_inner(),
     };
-    collected.sort_by_key(|(index, _, _)| *index);
+    collected.sort_by_key(|(index, _)| *index);
 
     let mut outcome = FetchOutcome::default();
-    for (index, reads, batch_err) in collected {
-        if let Some(msg) = batch_err {
-            // The whole batch failed: every repo in it truly yielded nothing.
-            for slug in chunks[index] {
-                outcome
-                    .failures
-                    .push((slug.as_str().to_string(), msg.clone()));
-            }
-            continue;
-        }
-        for read in reads {
-            if let Some(err) = read.error {
-                outcome.failures.push((read.repo, err));
-            } else {
-                outcome.items.extend(read.items);
+    for (_, resolved) in collected {
+        for (repo, result) in resolved {
+            match result {
+                Ok(items) => outcome.items.extend(items),
+                Err(err) => outcome.failures.push((repo, err)),
             }
         }
     }
@@ -223,9 +259,6 @@ pub fn fetch_detail_with_caps(
 
 /// One repo's result, kept with its index so the merge can restore repo order.
 type IndexedResult = (usize, Result<Vec<Item>, FetchError>);
-
-/// One batch's result, kept with its index so the merge can restore order.
-type BatchResult = (usize, Vec<crate::graphql::RepoRead>, Option<String>);
 
 /// Result of fetching several repos: what arrived, and what did not (with the
 /// reason), so the UI can say `failed=N` instead of hiding a broken repo.
