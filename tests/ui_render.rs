@@ -500,6 +500,19 @@ fn the_config_notice_shows_on_screen_until_dismissed() {
             screen.contains("config problem"),
             "the blocker is a box, not just a legend row: {screen}"
         );
+        // The legend row (second to last) keeps only the remedy: the message
+        // lives in the box, and a second copy would truncate mid-word and
+        // add nothing.
+        let rows: Vec<&str> = screen.lines().collect();
+        let legend = rows.get(rows.len() - 2).expect("legend row");
+        assert!(
+            !legend.contains(first_words),
+            "the legend row must not repeat the message: {legend}"
+        );
+        assert!(
+            legend.contains("Esc dismiss"),
+            "the remedy stays visible: {legend}"
+        );
     }
 }
 

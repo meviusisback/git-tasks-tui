@@ -437,8 +437,11 @@ impl App {
             Some(Modal::ActionMenu(_)) => {
                 return String::from("↑/↓ choose · Enter confirm · Esc cancel");
             }
-            Some(Modal::Notice(notice)) => {
-                return format!("{}  —  Esc dismiss · q quit", sanitize(notice));
+            Some(Modal::Notice(_)) => {
+                // The box above says what is wrong, in full. The row only
+                // keeps the remedy: repeating the message here would truncate
+                // it mid-word and add nothing.
+                return String::from("Esc dismiss · q quit");
             }
             None => {}
         }
