@@ -15,9 +15,11 @@ fn tab_cycles_panes_both_ways() {
     press(&mut app, Key::Tab);
     assert_eq!(app.pane, Pane::Detail);
     press(&mut app, Key::Tab);
+    assert_eq!(app.pane, Pane::Agent);
+    press(&mut app, Key::Tab);
     assert_eq!(app.pane, Pane::List);
     press(&mut app, Key::BackTab);
-    assert_eq!(app.pane, Pane::Detail);
+    assert_eq!(app.pane, Pane::Agent);
 }
 
 #[test]
@@ -96,7 +98,7 @@ fn esc_never_quits_in_any_state() {
     // The property from the spec: no Esc, in no state, sets quit. The
     // exhaustive match on Pane in `on_key` makes a new pane a compile
     // error, so whoever adds one must extend this sweep.
-    for pane in [Pane::List, Pane::Repos, Pane::Detail] {
+    for pane in [Pane::List, Pane::Repos, Pane::Detail, Pane::Agent] {
         for modal in [false, true] {
             for searching in [false, true] {
                 for help in [false, true] {

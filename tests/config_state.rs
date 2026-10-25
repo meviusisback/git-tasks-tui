@@ -121,6 +121,7 @@ fn state_roundtrip_and_privacy() {
         selected_repos: vec!["owner/repo".into()],
         sort_key: "created".into(),
         ascending: true,
+        ..State::default()
     };
     state.save(&path).unwrap();
 

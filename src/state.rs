@@ -7,12 +7,32 @@ use std::path::Path;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+/// One open tab: the issue/PR the user opened with `Enter`.
+/// Titles are resolved live from the fetched items, so only the key is
+/// stored — the session survives a restart before the first fetch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabState {
+    pub repo: String,
+    pub number: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct State {
     pub selected_repos: Vec<String>,
     pub sort_key: String,
     pub ascending: bool,
+    /// Last focused pane (`repos`/`list`/`detail`/`agent`); unknown values
+    /// fall back to `list` on restore, never a crash.
+    pub pane: String,
+    pub repos_cursor: usize,
+    pub list_cursor: usize,
+    pub query: String,
+    /// `None`/empty means "all"; otherwise a validated `owner/name` slug.
+    pub repo_filter: Option<String>,
+    /// Open tabs, in order, and the active one.
+    pub tabs: Vec<TabState>,
+    pub active_tab: Option<usize>,
 }
 
 impl Default for State {
@@ -21,6 +41,13 @@ impl Default for State {
             selected_repos: Vec::new(),
             sort_key: "updated".into(),
             ascending: false,
+            pane: String::from("list"),
+            repos_cursor: 0,
+            list_cursor: 0,
+            query: String::new(),
+            repo_filter: None,
+            tabs: Vec::new(),
+            active_tab: None,
         }
     }
 }

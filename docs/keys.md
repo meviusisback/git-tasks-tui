@@ -7,12 +7,15 @@ disagree, the handler is right and this file is a bug.
 |---|---|
 | `q` | quit |
 | `Ctrl-C` | quit — the escape hatch, always live, in every mode |
-| `Esc` | back **one level**: overlay → confirmation → search → detail → repos → list. It **never quits**: at the outermost level it says `Esc — nothing to close` in the status line |
+| `Esc` | back **one level**: overlay → confirmation → search → agent → detail → list → repos. It **never quits**: at the outermost level it says `Esc — nothing to close` in the status line |
 | `?` | the overlay of keys (it says which work today and which are promised) |
-| `←` / `→` | move between the panes: repos ↔ list ↔ detail |
-| `Tab` | next pane (the same cycle, for people who expect it) |
-| `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos |
-| `Enter` | in the repos pane: drill into that repo's items; in the list: open the detail; in the search box: leave the box |
+| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles all four panes |
+| `Tab` | next pane: list → repos → detail → agent → list (for people who expect it) |
+| `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
+| `Enter` | in the repos pane: drill into that repo's items; in the list: open a tab for the row (the detail follows the active tab); in the search box: leave the box |
+| `t` / `T` | next / previous tab (says `no tabs — Enter opens one` when empty) |
+| `x` / `X` | close the active tab first, then the agent record |
+| `w` | focus the agent pane (worktree + agent instructions live there) |
 | `R` | repo selection menu: `Space` marks, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
 | `o` | open the selected item in the browser |
@@ -25,9 +28,10 @@ disagree, the handler is right and this file is a bug.
 method is a constant (`FIRST_ACTION_METHOD`, today `squash`) and `--delete-branch`
 is always off, so neither is reachable from the keyboard yet.
 
-`m`, `w`, `s` are **planned, not implemented** — and the overlay announces
-exactly these three, in its own section ("coming in the next stages"), with the
-stage that will bring each one. `p`, `f`, `c`, `x` are names that were discussed
+`m`, `s` are **planned, not implemented** — and the overlay announces
+exactly these two, in its own section ("coming in the next stages"), with the
+stage that will bring each one. `w` used to be promised here; it now focuses
+the agent pane, so it moved above. `p`, `f`, `c` are names that were discussed
 and **are not promised anywhere on screen**: this document used to claim the
 overlay covered seven keys when it covered three, and a document that speaks for
 the screen has to be checked against it (K-1, 2026-10-25).

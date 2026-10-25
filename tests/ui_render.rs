@@ -38,6 +38,9 @@ fn sample() -> (App, ViewModel) {
         repos: vec!["owner/repo".into()],
         items: vec!["#12 Add widget".into(), "#7 Fix crash".into()],
         detail: "Body line one\nBody line two".into(),
+        tabs: Vec::new(),
+        active_tab: None,
+        agent: "g create worktree + launch agent".into(),
     };
     (app, view)
 }
@@ -104,9 +107,11 @@ fn the_focused_list_highlights_its_selected_row() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
 
-    // One repo row, then the items: cursor 1 in List means the third row.
-    // Repos box removed: the left box holds rows at y=2 (repo), y=3 (#12),
-    // y=4 (#7). Only the selected row carries the selection background.
+    // Left column is split: repos on top (3 rows: border, 1 row, border),
+    // issues below starting at y=4. Cursor 1 in the issues box means the
+    // second issue row (y=6). Only that row carries the selection
+    // background; the repos box shows no highlight while the list is
+    // focused.
     let buffer = terminal.backend().buffer();
     let mut highlighted = Vec::new();
     for y in 2..11u16 {
@@ -116,8 +121,8 @@ fn the_focused_list_highlights_its_selected_row() {
     }
     assert_eq!(
         highlighted,
-        vec![4],
-        "exactly the selected row: {highlighted:?}"
+        vec![6],
+        "exactly the selected issue row: {highlighted:?}"
     );
 }
 

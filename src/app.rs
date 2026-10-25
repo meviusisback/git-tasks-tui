@@ -13,12 +13,23 @@ use crate::sanitize::sanitize;
 
 use std::collections::BTreeSet;
 
-/// Which pane has focus.
+/// Which pane has focus. Left column holds `Repos` (top) and `List`
+/// (bottom); right column holds `Detail` (top) and `Agent` (bottom).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
     Repos,
     List,
     Detail,
+    Agent,
+}
+
+/// One open tab: the issue/PR opened with `Enter`.
+/// The title is resolved live from `items`, so the tab stays valid across
+/// refreshes even when the title changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tab {
+    pub repo: String,
+    pub number: u64,
 }
 
 /// The repo filter as a type, not a string: either everything or one valid
@@ -224,6 +235,17 @@ pub struct App {
     pub open_requested: Option<String>,
     /// The `?` overlay with the full keymap is on screen.
     pub show_help: bool,
+    /// Open tabs (`Enter` on a row opens one) and the active tab.
+    /// The detail and the agent act on the active tab when set, otherwise
+    /// on the row under the list cursor.
+    pub tabs: Vec<Tab>,
+    pub active_tab: Option<usize>,
+    /// Scroll offset of the agent pane.
+    pub agent_scroll: u16,
+    /// True when session fields changed since the last save: the loop
+    /// persists `state.json` so a temporary exit keeps tabs, filter and
+    /// cursor positions.
+    pub session_dirty: bool,
     /// Profile passed to `hermes -p` by the agent handoff; validated at load.
     pub agent_profile: String,
     /// Where to look for local clones, in order (`<root>/<repo-name>`); empty refuses.
@@ -288,6 +310,10 @@ impl Default for App {
             detail_requested: None,
             open_requested: None,
             show_help: false,
+            tabs: Vec::new(),
+            active_tab: None,
+            agent_scroll: 0,
+            session_dirty: false,
         }
     }
 }
@@ -464,17 +490,21 @@ impl App {
         // legend in this one row would push every message off the edge.
         let text = if self.pane == Pane::Detail {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+                "q quit · ? help · ←/→ panes · ↑/↓ scroll · Enter body · t tabs · x close tab · g agent",
+            )
+        } else if self.pane == Pane::Agent {
+            String::from(
+                "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
             )
         } else if self.pane == Pane::Repos {
-            String::from("q quit · ? help · Enter drill in · ↑/↓ move")
+            String::from("q quit · ? help · Enter drill in · ↑/↓ move · t tabs")
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open tab · R repos · m actions · g agent",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open tab · R repos · m actions · g agent",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -503,9 +533,10 @@ impl App {
     }
 
     /// Ask the loop to open the selected item, after checking its URL (S10).
+    /// Follows the active tab when one is open.
     pub fn request_open(&mut self) {
         let Some((url, number)) = self
-            .selected_item()
+            .effective_item()
             .map(|item| (item.url.clone(), item.number))
         else {
             self.status = "nothing selected".to_string();
@@ -591,6 +622,252 @@ impl App {
         self.visible_items().get(self.list_cursor).copied()
     }
 
+    /// The item the right column acts on: the active tab when set and still
+    /// present, otherwise the row under the list cursor. Tabs survive a
+    /// filter change, so the detail never follows a row that disappeared.
+    pub fn effective_item(&self) -> Option<&Item> {
+        if let Some(idx) = self.active_tab
+            && let Some(tab) = self.tabs.get(idx)
+            && let Some(found) = self
+                .items
+                .iter()
+                .find(|i| i.repo == tab.repo && i.number == tab.number)
+        {
+            return Some(found);
+        }
+        self.selected_item()
+    }
+
+    /// Open a tab for the row under the cursor, or activate it when open.
+    /// `Enter` in the list opens; the detail follows the active tab.
+    pub fn open_tab_for_selected(&mut self) {
+        let Some(item) = self.selected_item().cloned() else {
+            return;
+        };
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.repo == item.repo && t.number == item.number)
+        {
+            self.active_tab = Some(idx);
+        } else {
+            self.tabs.push(Tab {
+                repo: item.repo.clone(),
+                number: item.number,
+            });
+            self.active_tab = Some(self.tabs.len() - 1);
+        }
+        self.session_dirty = true;
+        // Load the body for the newly active tab when missing.
+        let key = (item.repo.clone(), item.number);
+        if self.detail_for.as_ref() != Some(&key) && self.detail_requested.as_ref() != Some(&key) {
+            self.detail_requested = Some(key);
+            self.status = format!("loading #{}…", item.number);
+        }
+    }
+
+    /// Activate tab `idx` (clamped): the detail follows it and loads its
+    /// body when missing.
+    pub fn activate_tab(&mut self, idx: usize) {
+        if self.tabs.is_empty() {
+            self.active_tab = None;
+            return;
+        }
+        let idx = idx.min(self.tabs.len() - 1);
+        self.active_tab = Some(idx);
+        self.session_dirty = true;
+        if let Some(tab) = self.tabs.get(idx).cloned()
+            && let Some(item) = self
+                .items
+                .iter()
+                .find(|i| i.repo == tab.repo && i.number == tab.number)
+                .cloned()
+        {
+            let key = (item.repo.clone(), item.number);
+            if self.detail_for.as_ref() != Some(&key)
+                && self.detail_requested.as_ref() != Some(&key)
+            {
+                self.detail_requested = Some(key);
+                self.status = format!("loading #{}…", item.number);
+            }
+        }
+    }
+
+    pub fn next_tab(&mut self) {
+        let Some(cur) = self.active_tab else {
+            if !self.tabs.is_empty() {
+                self.activate_tab(0);
+            }
+            return;
+        };
+        if self.tabs.is_empty() {
+            return;
+        }
+        self.activate_tab((cur + 1) % self.tabs.len());
+    }
+
+    pub fn prev_tab(&mut self) {
+        let Some(cur) = self.active_tab else {
+            if !self.tabs.is_empty() {
+                self.activate_tab(0);
+            }
+            return;
+        };
+        if self.tabs.is_empty() {
+            return;
+        }
+        let prev = if cur == 0 {
+            self.tabs.len() - 1
+        } else {
+            cur - 1
+        };
+        self.activate_tab(prev);
+    }
+
+    /// Close the active tab. Returns true when a tab was closed.
+    pub fn close_active_tab(&mut self) -> bool {
+        let Some(idx) = self.active_tab else {
+            return false;
+        };
+        if idx >= self.tabs.len() {
+            self.active_tab = None;
+            return false;
+        }
+        let closed = self.tabs.remove(idx);
+        // A body belonging to the closed tab must not linger under the next
+        // tab's fields.
+        if self.detail_for.as_ref() == Some(&(closed.repo.clone(), closed.number)) {
+            self.detail.clear();
+            self.detail_for = None;
+        }
+        if self.detail_requested.as_ref() == Some(&(closed.repo.clone(), closed.number)) {
+            self.detail_requested = None;
+        }
+        if self.tabs.is_empty() {
+            self.active_tab = None;
+        } else {
+            let next = idx.min(self.tabs.len() - 1);
+            self.active_tab = Some(next);
+            // Load the newly active tab's body when missing.
+            if let Some(tab) = self.tabs.get(next).cloned()
+                && let Some(item) = self
+                    .items
+                    .iter()
+                    .find(|i| i.repo == tab.repo && i.number == tab.number)
+                    .cloned()
+            {
+                let key = (item.repo.clone(), item.number);
+                if self.detail_for.as_ref() != Some(&key)
+                    && self.detail_requested.as_ref() != Some(&key)
+                {
+                    self.detail_requested = Some(key);
+                }
+            }
+        }
+        self.session_dirty = true;
+        true
+    }
+
+    /// One-line label per tab, with the live title when the item is loaded.
+    pub fn tab_labels(&self) -> Vec<String> {
+        self.tabs
+            .iter()
+            .map(|tab| {
+                let title = self
+                    .items
+                    .iter()
+                    .find(|i| i.repo == tab.repo && i.number == tab.number)
+                    .map(|i| i.title.as_str())
+                    .unwrap_or("");
+                if title.is_empty() {
+                    format!("#{} {}", tab.number, tab.repo)
+                } else {
+                    let short: String = title.chars().take(28).collect();
+                    format!("#{} {short}", tab.number)
+                }
+            })
+            .collect()
+    }
+
+    /// Copy the session fields into `state` so the loop can persist them.
+    pub fn capture_session(&self, state: &mut crate::state::State) {
+        state.pane = match self.pane {
+            Pane::Repos => "repos".to_string(),
+            Pane::List => "list".to_string(),
+            Pane::Detail => "detail".to_string(),
+            Pane::Agent => "agent".to_string(),
+        };
+        state.repos_cursor = self.repos_cursor;
+        state.list_cursor = self.list_cursor;
+        state.query = self.query.clone();
+        state.repo_filter = match &self.repo_filter {
+            RepoFilter::All => None,
+            RepoFilter::One(slug) => Some(slug.as_str().to_string()),
+        };
+        state.tabs = self
+            .tabs
+            .iter()
+            .map(|t| crate::state::TabState {
+                repo: t.repo.clone(),
+                number: t.number,
+            })
+            .collect();
+        state.active_tab = self.active_tab;
+    }
+
+    /// Restore pane, cursors, filter, query and tabs from a saved session.
+    /// Unknown panes fall back to `list`; unknown slugs fall back to `all`;
+    /// out-of-range cursors clamp — a stale session never breaks startup.
+    pub fn restore_session(&mut self, state: &crate::state::State) {
+        self.pane = match state.pane.as_str() {
+            "repos" => Pane::Repos,
+            "detail" => Pane::Detail,
+            "agent" => Pane::Agent,
+            _ => Pane::List,
+        };
+        self.query = state.query.clone();
+        if let Some(slug_text) = state.repo_filter.as_ref().filter(|s| !s.is_empty()) {
+            if let Ok(slug) = RepoSlug::parse(slug_text) {
+                // Only keep the filter when the repo is still configured.
+                let known = self.repos.iter().any(|row| match row {
+                    RepoRow::Repo(s) => s == &slug,
+                    RepoRow::All => false,
+                });
+                if known {
+                    self.repo_filter = RepoFilter::One(slug.clone());
+                    if let Some(pos) = self.repos.iter().position(|row| match row {
+                        RepoRow::Repo(s) => s == &slug,
+                        RepoRow::All => false,
+                    }) {
+                        self.repos_cursor = pos;
+                    }
+                }
+            }
+        }
+        // A saved cursor without a saved filter still moves home.
+        if matches!(self.repo_filter, RepoFilter::All) {
+            self.repos_cursor = state.repos_cursor.min(self.repos.len().saturating_sub(1));
+        }
+        self.list_cursor = state.list_cursor;
+        self.tabs = state
+            .tabs
+            .iter()
+            .filter_map(|t| {
+                if RepoSlug::parse(&t.repo).is_ok() {
+                    Some(Tab {
+                        repo: t.repo.clone(),
+                        number: t.number,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.active_tab = state.active_tab.filter(|idx| *idx < self.tabs.len());
+        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.refresh_status();
+    }
+
     /// One row of the actions menu: the fully specified choice. No strings
     /// cross this boundary — a row IS the typed parameters the action runs
     /// with, so the menu cannot promise what the type cannot build.
@@ -615,7 +892,7 @@ impl App {
     /// `m` opens the menu on the selected item. Issues offer only closing;
     /// anything without a parseable repo cannot be acted on at all.
     pub fn open_action_menu(&mut self) {
-        let Some(item) = self.selected_item() else {
+        let Some(item) = self.effective_item() else {
             self.status = "nothing selected".to_string();
             return;
         };
@@ -640,7 +917,7 @@ impl App {
     /// goes through the same confirmation as `a` — one dialog, one argv.
     fn apply_action_pick(&mut self) {
         if let Some(Modal::ActionMenu(menu)) = self.modal.take() {
-            let Some(item) = self.selected_item() else {
+            let Some(item) = self.effective_item().cloned() else {
                 return;
             };
             let Some(pick) = menu.rows.get(menu.cursor) else {
@@ -655,8 +932,9 @@ impl App {
     }
 
     /// Ask for the selected item's body, unless it is already loaded.
+    /// Follows the active tab when one is open.
     pub fn request_detail(&mut self) {
-        let Some(item) = self.selected_item() else {
+        let Some(item) = self.effective_item().cloned() else {
             return;
         };
         let key = (item.repo.clone(), item.number);
@@ -698,8 +976,9 @@ impl App {
     /// here; the terminal, git and the seed file belong to the loop, which
     /// consumes `agent_requested` (outbox, like `detail_requested`). Nothing
     /// is written and nothing is spawned by pressing `g`.
+    /// Follows the active tab when one is open.
     pub fn request_agent(&mut self) {
-        let Some(item) = self.selected_item() else {
+        let Some(item) = self.effective_item().cloned() else {
             self.status = "nothing selected".to_string();
             return;
         };
@@ -720,9 +999,10 @@ impl App {
     /// The record card shows for the selected item when it is that item's
     /// record and the card was not dismissed for it. A record glued to a PR
     /// that is not on screen would be a lie, so anything else shows detail.
+    /// Follows the active tab when one is open.
     pub fn visible_record(&self) -> Option<&AgentRecord> {
         let record = self.agent_record.as_ref()?;
-        let item = self.selected_item()?;
+        let item = self.effective_item()?;
         if record.repo == item.repo && record.number == item.number {
             let key = (item.repo.clone(), item.number);
             if self.agent_dismissed_for.as_ref() != Some(&key) {
@@ -746,10 +1026,82 @@ impl App {
         }
     }
 
+    /// `x`/`X`: close the active tab first, then the agent record.
+    /// Tabs are the newest layer, so they close first — once no tab is
+    /// left, `x` forgets the record exactly as before.
+    pub fn close_tab_or_record(&mut self) {
+        if self.close_active_tab() {
+            if let Some(idx) = self.active_tab {
+                let label = self.tab_labels().get(idx).cloned().unwrap_or_default();
+                self.status = format!("closed tab — now on {label}");
+            } else {
+                self.status = "closed tab — no tabs left".to_string();
+            }
+            return;
+        }
+        self.close_agent_record();
+    }
+
+    /// Bottom-right pane: what to do next, always visible.
+    /// The record card lives here too, so the detail above never hides it.
+    pub fn agent_panel_text(&self) -> String {
+        let mut out = Vec::new();
+        match self.effective_item() {
+            Some(item) => {
+                out.push(format!(
+                    "task · {}#{} {}",
+                    item.repo, item.number, item.title
+                ));
+                match item.kind {
+                    crate::model::ItemKind::Pr => {
+                        let branch = item.head_ref_name.as_deref().unwrap_or("?");
+                        out.push(format!("branch · {branch}"));
+                    }
+                    crate::model::ItemKind::Issue => {
+                        out.push("issue · no branch — g refuses, m closes".to_string());
+                    }
+                }
+            }
+            None => out.push("task · nothing selected".to_string()),
+        }
+        if let Some(record) = self.visible_record() {
+            out.push(String::new());
+            out.push(record.card());
+        } else if let Some(record) = &self.agent_record {
+            out.push(String::new());
+            out.push(format!(
+                "last agent · {}#{} · {}",
+                record.repo,
+                record.number,
+                record.status.summary()
+            ));
+        } else {
+            out.push("agent · no run yet".to_string());
+        }
+        out.push(String::new());
+        out.push(format!("profile · {}", self.agent_profile));
+        let roots = if self.clone_roots.is_empty() {
+            "no clone_root — g will refuse".to_string()
+        } else {
+            self.clone_roots
+                .iter()
+                .map(|r| r.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.push(format!("clones · {roots}"));
+        out.push(String::new());
+        out.push("g create worktree + launch agent (asks once)".to_string());
+        out.push("w this pane · o browser · x close tab/record".to_string());
+        out.push("Enter opens a tab · t/T next/prev tab".to_string());
+        out.join("\n")
+    }
+
     /// Build the first action for the selected row, show what it would run, and
     /// keep the pair (confirmation, argv) so `y` executes exactly that.
+    /// Follows the active tab when one is open.
     fn request_action(&mut self) {
-        let Some(item) = self.selected_item() else {
+        let Some(item) = self.effective_item().cloned() else {
             self.status = "nothing selected".into();
             return;
         };
@@ -799,7 +1151,12 @@ impl App {
     pub fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Tick => {}
-            Msg::Key(key) => self.on_key(key),
+            Msg::Key(key) => {
+                self.on_key(key);
+                if key != Key::CtrlC {
+                    self.session_dirty = true;
+                }
+            }
         }
     }
 
@@ -925,9 +1282,39 @@ impl App {
             // `g` hands the selected PR to an agent (the loop owns the
             // terminal, so this only validates and asks).
             Key::Char('g') => self.request_agent(),
-            // `x` forgets the last agent record; there is no process left
-            // to stop by the time the TUI is back.
-            Key::Char('x') => self.close_agent_record(),
+            // `x`/`X` close the active tab first, then the agent record.
+            // Tabs are the newest layer; without tabs this is the old `x`.
+            Key::Char('x') | Key::Char('X') => self.close_tab_or_record(),
+            // `t`/`T` cycle tabs, like a browser. Without tabs it says so
+            // instead of staying silent.
+            Key::Char('t') => {
+                if self.tabs.is_empty() {
+                    self.status = "no tabs — Enter opens one".to_string();
+                } else {
+                    self.next_tab();
+                }
+            }
+            Key::Char('T') => {
+                if self.tabs.is_empty() {
+                    self.status = "no tabs — Enter opens one".to_string();
+                } else {
+                    self.prev_tab();
+                }
+            }
+            // `w` focuses the agent pane, where the worktree instructions
+            // live. The full worktree menu is still planned (`s` with it);
+            // this key only moves focus and names the next step.
+            Key::Char('w') => {
+                self.pane = Pane::Agent;
+                if let Some(item) = self.effective_item().cloned() {
+                    self.status = format!(
+                        "agent pane for {}#{} — g creates the worktree and launches",
+                        item.repo, item.number
+                    );
+                } else {
+                    self.status = "agent pane — select an item first".to_string();
+                }
+            }
             Key::Char('/') => self.searching = true,
             // `R` picks which repos the list shows (multi-select menu).
             Key::Char('R') => self.open_repo_menu(),
@@ -948,11 +1335,12 @@ impl App {
                 // First Esc closes the record card and shows the detail; the
                 // record itself stays (a new run replaces it, `x` deletes it).
                 // Reselecting the item shows the card again.
-                if let Some(item) = self.selected_item() {
+                if let Some(item) = self.effective_item().cloned() {
                     self.agent_dismissed_for = Some((item.repo.clone(), item.number));
                 }
             }
             Key::Esc => match self.pane {
+                Pane::Agent => self.pane = Pane::Detail,
                 Pane::Detail => self.pane = Pane::List,
                 // Drilled in (a repo filter is active): back to the repos
                 // pane. The cursor never moved while drilled in, so the row
@@ -978,12 +1366,16 @@ impl App {
             Key::Char('q') => self.quit = true,
             Key::Char('?') => self.show_help = true,
             Key::Left => {
-                if self.pane == Pane::Detail {
+                // Left column is repos + list; from anywhere on the right,
+                // go back to the list.
+                if matches!(self.pane, Pane::Detail | Pane::Agent) {
                     self.pane = Pane::List;
                 }
             }
             Key::Right => {
-                if self.pane != Pane::Detail {
+                // Right column top is the detail; from anywhere on the left,
+                // go to the detail.
+                if matches!(self.pane, Pane::Repos | Pane::List) {
                     self.pane = Pane::Detail;
                 }
             }
@@ -998,6 +1390,11 @@ impl App {
             // items.
             Key::Enter if self.pane == Pane::Repos => {
                 self.pane = Pane::List;
+            }
+            // In the list Enter opens a tab for the row; the detail follows
+            // the active tab from then on.
+            Key::Enter if self.pane == Pane::List => {
+                self.open_tab_for_selected();
             }
             Key::Enter => self.request_detail(),
             // Handled at the top; repeated here because the match must be total.
@@ -1016,17 +1413,24 @@ impl App {
                 let next = self.detail_scroll as i32 + delta;
                 self.detail_scroll = next.max(0) as u16;
             }
+            Pane::Agent => {
+                let next = self.agent_scroll as i32 + delta;
+                self.agent_scroll = next.max(0) as u16;
+            }
         }
     }
 }
 
 fn next_pane(pane: Pane, forward: bool) -> Pane {
-    // Order: list → repos → detail. The repos pane comes first on purpose: it is
-    // how you narrow the list, so it must be one keypress away from it.
+    // Order: list → repos → detail → agent. The repos pane comes first on
+    // purpose: it is how you narrow the list, so it must be one keypress
+    // away from it. The agent pane closes the cycle: the worktree
+    // instructions live there, at the bottom-right.
     match (pane, forward) {
         (Pane::List, true) | (Pane::Detail, false) => Pane::Repos,
-        (Pane::Repos, true) | (Pane::List, false) => Pane::Detail,
-        (Pane::Detail, true) | (Pane::Repos, false) => Pane::List,
+        (Pane::Repos, true) | (Pane::Agent, false) => Pane::Detail,
+        (Pane::Detail, true) | (Pane::List, false) => Pane::Agent,
+        (Pane::Agent, true) | (Pane::Repos, false) => Pane::List,
     }
 }
 

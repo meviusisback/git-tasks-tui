@@ -20,18 +20,23 @@ pub struct ViewModel {
     pub repos: Vec<String>,
     pub items: Vec<String>,
     pub detail: String,
+    pub tabs: Vec<String>,
+    pub active_tab: Option<usize>,
+    pub agent: String,
 }
 
 /// The keys that work today. Also the source of the `?` overlay.
 const HELP_NOW: &[&str] = &[
     "← / →      move between the left column and the right column",
-    "↑ / ↓      move the selection in the left column",
-    "Enter      open the detail box",
-    "Esc        back one level: overlay → detail → list (never quits)",
+    "↑ / ↓      move the selection, or scroll detail/agent",
+    "Enter      open a tab + open the detail box",
+    "t / T      next / previous tab",
+    "x / X      close the active tab, then the agent record",
+    "w          focus the agent pane (worktree + agent instructions)",
+    "Esc        back one level: overlay → agent → detail → list (never quits)",
     "R          repo selection menu",
     "o          open the selected item in the browser",
     "g          hand the selected PR to an agent (suspends gtasks)",
-    "x          forget the last agent record",
     "/          filter the visible list",
     "r          refresh",
     "a          first action on the selected item",
@@ -50,10 +55,10 @@ const HELP_NOW: &[&str] = &[
 /// day it is promised, not from the day someone remembers the test.
 /// `pub` (not `pub(crate)`) because the second reader is an integration
 /// test, outside the crate.
-pub const PLANNED: &[(char, &str)] = &[
-    ('w', "worktree menu (stage 15)"),
-    ('s', "agent sessions (stage 16)"),
-];
+///
+/// `w` used to live here; it now focuses the agent pane, so only `s`
+/// (sessions) is still promised.
+pub const PLANNED: &[(char, &str)] = &[('s', "agent sessions (stage 16)")];
 
 pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     let outer = Block::default()
@@ -73,10 +78,31 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(rows[0]);
 
-    let (list, mut list_state) = left_list(app, view);
-    frame.render_stateful_widget(list, columns[0], &mut list_state);
+    // Left column: repos on top, issues/PRs below. The filter follows the
+    // repos cursor, so moving above re-lists below live.
+    let left_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(columns[0]);
+    let (repos_widget, mut repos_state) = repos_list(app, view);
+    frame.render_stateful_widget(repos_widget, left_rows[0], &mut repos_state);
+    let (issues_widget, mut issues_state) = issues_list(app, view);
+    frame.render_stateful_widget(issues_widget, left_rows[1], &mut issues_state);
 
-    frame.render_widget(detail(app, view, columns[1].width), columns[1]);
+    // Right column: tabs + detail on top, agent/worktree at the bottom.
+    let right_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(columns[1]);
+    // The tabs are one line, not a box: at 80x12 every row counts, and a
+    // bordered strip would eat the detail it labels.
+    let detail_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(right_rows[0]);
+    frame.render_widget(tabs_bar(app, view), detail_rows[0]);
+    frame.render_widget(detail(app, view, detail_rows[1].width), detail_rows[1]);
+    frame.render_widget(agent_panel(app, view, right_rows[1].width), right_rows[1]);
 
     // Two panels, so the status cannot be pushed off the right edge by the
     // legend. The legend keeps the left side and truncates there: the recovery
@@ -109,7 +135,8 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
 }
 
 /// Build what the frame needs from the current state: the repo column, the
-/// visible items (search applied) and the detail of the selected one.
+/// visible items (search applied), the detail of the active tab (or the
+/// selected row when no tab is open), the tab labels and the agent pane.
 pub fn view_for(app: &App) -> ViewModel {
     let visible = app.visible_items();
     let items = visible
@@ -120,6 +147,10 @@ pub fn view_for(app: &App) -> ViewModel {
     // only when it belongs to this item. A missing field is omitted, never
     // blank — and a missing body says how to fetch it instead of leaving a
     // blank zone ("Enter — body").
+    //
+    // The detail follows the active tab when one is open, otherwise the row
+    // under the list cursor — so a tab keeps its issue/PR while the list
+    // moves underneath it.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -127,8 +158,8 @@ pub fn view_for(app: &App) -> ViewModel {
     // The record card replaces the detail for its own item: the last agent
     // run is shown where the detail would be, never beside a PR it is not for.
     let record_card = app.visible_record().map(|record| record.card());
-    let detail = visible
-        .get(app.list_cursor)
+    let detail = app
+        .effective_item()
         .map(|item| {
             if let Some(card) = &record_card {
                 return card.clone();
@@ -144,50 +175,72 @@ pub fn view_for(app: &App) -> ViewModel {
             text
         })
         .unwrap_or_default();
+    let _ = visible;
     ViewModel {
         repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
         detail,
+        tabs: app.tab_labels(),
+        active_tab: app.active_tab,
+        agent: app.agent_panel_text(),
     }
 }
 
-/// Rows of the left column: one `▸ repo (n)` row per repo, then the items.
-/// The highlight follows the focused pane; the right column never highlights.
-fn left_rows(view: &ViewModel, counts: &[usize]) -> Vec<String> {
-    let mut rows = Vec::with_capacity(view.repos.len() + view.items.len());
-    for (repo, count) in view
-        .repos
-        .iter()
-        .zip(counts.iter().chain(std::iter::repeat(&0)))
-    {
-        rows.push(format!("▸ {repo} ({count})"));
-    }
-    rows.extend(view.items.iter().cloned());
-    rows
-}
-
-fn left_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
+/// Left column, top: the repos. `▸ repo (n)` rows with per-repo counts.
+fn repos_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     let counts: Vec<usize> = view
         .repos
         .iter()
         .map(|repo| app.items.iter().filter(|item| &item.repo == repo).count())
         .collect();
-    let rows = left_rows(view, &counts);
-    let selected = match app.pane {
-        Pane::Repos => Some(app.repos_cursor.min(rows.len().saturating_sub(1))),
-        Pane::List => {
-            let idx = view.repos.len() + app.list_cursor;
-            if view.items.is_empty() {
-                None
-            } else {
-                Some(idx.min(rows.len().saturating_sub(1)))
-            }
-        }
-        Pane::Detail => None,
+    let rows: Vec<String> = view
+        .repos
+        .iter()
+        .zip(counts.iter().chain(std::iter::repeat(&0)))
+        .map(|(repo, count)| format!("▸ {repo} ({count})"))
+        .collect();
+    let selected = if rows.is_empty() {
+        None
+    } else {
+        Some(app.repos_cursor.min(rows.len().saturating_sub(1)))
     };
-    let focused = app.pane != Pane::Detail;
+    let highlight = app.pane == Pane::Repos;
+    let focused = highlight;
     let items: Vec<ListItem> = rows
         .into_iter()
+        .map(|entry| ListItem::new(sanitize(entry.as_str())))
+        .collect();
+    let widget = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" repos ")
+                .border_style(if focused {
+                    theme::border_focused()
+                } else {
+                    theme::border()
+                })
+                .title_style(theme::title(focused)),
+        )
+        .highlight_style(theme::highlight());
+    let state = ListState::default().with_selected(highlight.then_some(selected).flatten());
+    (widget, state)
+}
+
+/// Left column, bottom: the issues/PRs of the repo under the cursor.
+/// The repo filter follows the repos cursor, so this box always shows the
+/// repo above — no `R` menu needed for the common case.
+fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
+    let selected = if view.items.is_empty() {
+        None
+    } else {
+        Some(app.list_cursor.min(view.items.len().saturating_sub(1)))
+    };
+    let highlight = app.pane == Pane::List;
+    let focused = highlight;
+    let items: Vec<ListItem> = view
+        .items
+        .iter()
         .map(|entry| ListItem::new(sanitize(entry.as_str())))
         .collect();
     let widget = List::new(items)
@@ -203,7 +256,36 @@ fn left_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
                 .title_style(theme::title(focused)),
         )
         .highlight_style(theme::highlight());
-    (widget, ListState::default().with_selected(selected))
+    let state = ListState::default().with_selected(highlight.then_some(selected).flatten());
+    (widget, state)
+}
+
+/// Right column, top strip: the open tabs, herdr-style, on a single line so
+/// small terminals keep their detail rows. The active tab is marked `●`,
+/// the rest `○`; `t`/`T` switch, `x` closes. No tabs yet says how to open
+/// one instead of leaving a blank strip.
+fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
+    let line = if view.tabs.is_empty() {
+        "tabs: no tabs — Enter opens one".to_string()
+    } else {
+        let labels = view
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                let mark = if Some(i) == view.active_tab {
+                    "●"
+                } else {
+                    "○"
+                };
+                format!("{mark} {label}")
+            })
+            .collect::<Vec<_>>()
+            .join("  │  ");
+        format!("tabs: {labels}")
+    };
+    let focused = app.pane == Pane::Detail;
+    Paragraph::new(sanitize(&line)).style(theme::title(focused))
 }
 
 fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
@@ -244,6 +326,45 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         .scroll((app.detail_scroll, 0))
 }
 
+/// Right column, bottom: worktree + agent. Always shows what to do next —
+/// the steps that create a worktree and launch the agent — plus the last
+/// record (or where it went). Scrollable when the pane is focused.
+fn agent_panel(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
+    let lines = md::render(&view.agent, width.saturating_sub(2).max(1) as usize);
+    let text: Vec<ratatui::text::Line<'static>> = lines
+        .into_iter()
+        .map(|line| {
+            let spans: Vec<ratatui::text::Span<'static>> = line
+                .into_iter()
+                .map(|span| {
+                    let style = match span.style {
+                        md::Style::Plain => theme::overlay_text(),
+                        md::Style::Bold => theme::overlay_text().add_modifier(Modifier::BOLD),
+                        md::Style::Italic => theme::overlay_text().add_modifier(Modifier::ITALIC),
+                        md::Style::Code => theme::overlay_text().add_modifier(Modifier::DIM),
+                    };
+                    ratatui::text::Span::styled(span.text, style)
+                })
+                .collect();
+            ratatui::text::Line::from(spans)
+        })
+        .collect();
+    let focused = app.pane == Pane::Agent;
+    Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" agent ")
+                .border_style(if focused {
+                    theme::border_focused()
+                } else {
+                    theme::border()
+                })
+                .title_style(theme::title(focused)),
+        )
+        .scroll((app.agent_scroll, 0))
+}
+
 fn legend(app: &App) -> Paragraph<'static> {
     Paragraph::new(sanitize(app.legend().as_str())).style(theme::legend())
 }
@@ -274,7 +395,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 fn draw_help(frame: &mut Frame, area: Rect) {
-    let area = centered_rect(70, 80, area);
+    let area = centered_rect(75, 92, area);
     frame.render_widget(Clear, area);
     let text: Vec<ratatui::text::Line<'static>> = HELP_NOW
         .iter()

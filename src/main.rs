@@ -366,6 +366,10 @@ fn run_tui() -> anyhow::Result<()> {
     };
     app.set_repos(shown);
     app.all_repos = all.clone();
+    // A temporary exit keeps the session: pane, cursors, filter, query and
+    // open tabs come back from `state.json`. Unknown values fall back
+    // instead of breaking startup.
+    app.restore_session(&state);
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
         all.clone(),
@@ -426,9 +430,12 @@ fn run_tui() -> anyhow::Result<()> {
         // the loop's job, atomically and 0600, like every private write.
         // An empty check means "everything", like an empty state file: one
         // meaning, said out loud — not "0 repos" with all of them shown.
+        // The session (pane, cursors, tabs, filter) travels with it, so a
+        // temporary exit keeps what the user was doing.
         if let Some(selected) = app.selection_applied.take() {
             let cleared = selected.is_empty();
             state.selected_repos = selected;
+            app.capture_session(&mut state);
             match state_path.as_deref() {
                 Some(path) => match state.save(path) {
                     Ok(()) => {
@@ -439,10 +446,28 @@ fn run_tui() -> anyhow::Result<()> {
                         // the same list the panel draws.
                         app.refresh_status();
                         app.status = app.selection_summary(cleared);
+                        app.session_dirty = false;
                     }
                     Err(err) => app.status = format!("cannot save selection: {err:#}"),
                 },
                 None => app.status = "selection applied, not saved (no state file)".to_string(),
+            }
+        }
+
+        // Session autosave: any key that moved a cursor, a filter or a tab
+        // sets `session_dirty`; the loop persists it so quitting mid-task
+        // keeps tabs, filter and positions.
+        if app.session_dirty && app.selection_applied.is_none() {
+            app.capture_session(&mut state);
+            match state_path.as_deref() {
+                Some(path) => match state.save(path) {
+                    Ok(()) => app.session_dirty = false,
+                    Err(err) => {
+                        app.status = format!("cannot save session: {err:#}");
+                        app.session_dirty = false;
+                    }
+                },
+                None => app.session_dirty = false,
             }
         }
 
@@ -512,6 +537,15 @@ fn run_tui() -> anyhow::Result<()> {
         } else {
             app.update(Msg::Tick);
         }
+    }
+
+    // Last save on the way out: a temporary exit must keep the session even
+    // when the autosave above never ran (quit right after a fetch, …).
+    app.capture_session(&mut state);
+    if let Some(path) = state_path.as_deref()
+        && let Err(err) = state.save(path)
+    {
+        tracing::warn!("cannot save the session on exit: {err:#}");
     }
 
     Ok(())
