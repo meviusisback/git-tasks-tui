@@ -46,8 +46,8 @@ fn a_timed_out_write_runs_once() {
     let marker = format!("/tmp/gtt-run-{}", std::process::id());
     let _ = std::fs::remove_file(&marker);
     let _ = execute(
-        &CheckedArgv::unchecked_for_tests(sh(&format!("echo x >> {marker}; sleep 5"))),
-        Duration::from_millis(500),
+        &CheckedArgv::unchecked_for_tests(sh(&format!("echo x >> {marker}; sleep 60"))),
+        Duration::from_secs(5),
     );
     let runs = std::fs::read_to_string(&marker)
         .unwrap_or_default()

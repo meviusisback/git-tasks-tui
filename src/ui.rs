@@ -28,6 +28,7 @@ const HELP_NOW: &[&str] = &[
     "↑ / ↓      move the selection in the left column",
     "Enter      open the detail box",
     "Esc        back one level: overlay → detail → list (never quits)",
+    "R          repo selection menu",
     "o          open the selected item in the browser",
     "/          filter the visible list",
     "r          refresh",
@@ -40,7 +41,6 @@ const HELP_NOW: &[&str] = &[
 /// happens yet, so they get their own section with the stage that brings
 /// them, instead of reading as available today (X-1).
 const HELP_NEXT: &[&str] = &[
-    "R          repo selection menu (stage 11)",
     "m          actions menu (stage 14)",
     "w          worktree menu (stage 15)",
     "s          agent sessions (stage 16)",
@@ -86,6 +86,10 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
 
     if app.show_help {
         draw_help(frame, frame.area());
+    }
+
+    if let Some(crate::app::Modal::RepoMenu(menu)) = &app.modal {
+        draw_repo_menu(frame, frame.area(), menu);
     }
 }
 
@@ -265,4 +269,33 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         )
         .style(theme::overlay_text());
     frame.render_widget(help, area);
+}
+
+fn draw_repo_menu(frame: &mut Frame, area: Rect, menu: &crate::app::RepoMenu) {
+    let area = centered_rect(70, 80, area);
+    frame.render_widget(Clear, area);
+    let items: Vec<ListItem> = menu
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mark = if menu.marked.contains(&i) {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            ListItem::new(sanitize(&format!("{mark} {row}")))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" repos — Space mark · Enter apply · Esc cancel ")
+                .border_style(theme::overlay())
+                .title_style(theme::overlay()),
+        )
+        .highlight_style(theme::highlight());
+    let mut state = ListState::default().with_selected(Some(menu.cursor));
+    frame.render_stateful_widget(list, area, &mut state);
 }

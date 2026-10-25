@@ -21,6 +21,7 @@ use gtasks::fetch::{self, FetchOutcome};
 use gtasks::input::map_key;
 use gtasks::logging::{init_file_logging, init_stderr_logging};
 use gtasks::model::ItemKind;
+use gtasks::state::State;
 use gtasks::ui;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -98,10 +99,19 @@ fn main() -> anyhow::Result<()> {
 
 /// `$XDG_CONFIG_HOME/gtasks/config.toml`, falling back to `~/.config`.
 fn config_path() -> Option<PathBuf> {
+    app_dir().map(|base| base.join("config.toml"))
+}
+
+/// `$XDG_CONFIG_HOME/gtasks/state.json`: the user's own picks (0600).
+fn state_path() -> Option<PathBuf> {
+    app_dir().map(|base| base.join("state.json"))
+}
+
+fn app_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("gtasks").join("config.toml"))
+    Some(base.join("gtasks"))
 }
 
 /// The config from disk when it is valid and non-empty, otherwise the defaults
@@ -206,7 +216,25 @@ fn run_tui() -> anyhow::Result<()> {
         ..App::default()
     };
     // The pane lists what the user configured, including repos with no items.
-    app.set_repos(repos.clone());
+    // A saved selection narrows it; an empty one means "everything".
+    let state_path = state_path();
+    let mut state = match state_path.as_deref() {
+        Some(path) => match State::load(path) {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::warn!(path = %path.display(), "bad state file, starting fresh: {err:#}");
+                State::default()
+            }
+        },
+        None => State::default(),
+    };
+    let selected = if state.selected_repos.is_empty() {
+        repos.clone()
+    } else {
+        state.selected_repos.clone()
+    };
+    app.set_repos(selected);
+    app.all_repos = repos.clone();
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
         repos.clone(),
@@ -261,6 +289,22 @@ fn run_tui() -> anyhow::Result<()> {
                         app.status = format!("detail failed: {err}");
                     }
                 }
+            }
+        }
+
+        // `R`: the key handler already updated the live list; the file is
+        // the loop's job, atomically and 0600, like every private write.
+        if let Some(selected) = app.selection_applied.take() {
+            state.selected_repos = selected;
+            match state_path.as_deref() {
+                Some(path) => match state.save(path) {
+                    Ok(()) => {
+                        app.status =
+                            format!("selection saved ({} repos)", state.selected_repos.len())
+                    }
+                    Err(err) => app.status = format!("cannot save selection: {err:#}"),
+                },
+                None => app.status = "selection applied, not saved (no state file)".to_string(),
             }
         }
 

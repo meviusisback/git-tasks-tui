@@ -172,8 +172,16 @@ fn help_overlay_lists_the_full_keymap() {
         "future keys get their own section: {screen}"
     );
     assert!(
-        screen.contains("repo selection menu (stage 11)"),
+        screen.contains("actions menu (stage 14)"),
         "future keys name their stage: {screen}"
+    );
+    assert!(
+        screen.contains("R          repo selection menu"),
+        "R is available today: {screen}"
+    );
+    assert!(
+        !screen.contains("repo selection menu (stage"),
+        "R is not promised for later anymore: {screen}"
     );
     assert!(
         !screen.contains("drill into the repo"),
@@ -228,13 +236,9 @@ fn coming_next_keys_produce_no_screen_change() {
     // The auditor's proof: every key in the overlay's "coming in the next
     // stages" section must be a no-op today. When a later stage binds one
     // of them, this test fails — the overlay section must shrink then, not
-    // keep promising what the screen already does.
-    for key in [
-        Key::Char('R'),
-        Key::Char('m'),
-        Key::Char('w'),
-        Key::Char('s'),
-    ] {
+    // keep promising what the screen already does. (`R` left this list the
+    // day the repo menu landed.)
+    for key in [Key::Char('m'), Key::Char('w'), Key::Char('s')] {
         let (mut app, view) = sample();
         let before = render(&app, &view);
         app.update(Msg::Key(key));
