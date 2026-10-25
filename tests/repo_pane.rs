@@ -13,13 +13,16 @@ fn item(repo: &str, number: u64, title: &str) -> Item {
         is_draft: None,
         author: None,
         labels: Vec::new(),
+        assignees: Vec::new(),
         updated_at: "2026-10-20T10:00:00Z".into(),
         created_at: String::new(),
         url: format!("https://github.com/{repo}/pull/{number}"),
         head_ref_name: None,
+        base_ref_name: None,
         review_decision: None,
         mergeable: None,
         status_check_rollup: Vec::new(),
+        closing_issues_references: Vec::new(),
         repo: repo.to_string(),
         kind: ItemKind::Pr,
     }
@@ -220,6 +223,17 @@ fn drill_out_keeps_the_cursor_where_drill_in_left_it() {
         "the filter is untouched"
     );
     assert_eq!(app.visible_items().len(), 1);
+}
+
+#[test]
+fn set_repos_builds_typed_rows() {
+    // No strings cross this boundary: row 0 is All, the rest are Repo.
+    // Nothing downstream parses, and there is no sentinel to compare.
+    let app = app_with_two_repos();
+    let texts: Vec<&str> = app.repos.iter().map(|r| r.text()).collect();
+    assert_eq!(texts, vec!["— all repos —", "me/empty", "me/busy"]);
+    assert!(matches!(app.repos[0], gtasks::app::RepoRow::All));
+    assert!(matches!(app.repos[1], gtasks::app::RepoRow::Repo(_)));
 }
 
 #[test]

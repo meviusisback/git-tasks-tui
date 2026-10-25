@@ -3,7 +3,7 @@
 
 use gtasks::app::{App, Key, Msg, Pane};
 use gtasks::theme;
-use gtasks::ui::{ViewModel, draw};
+use gtasks::ui::{ViewModel, draw, view_for};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
@@ -244,6 +244,63 @@ fn status_messages_survive_at_80_columns() {
         screen.contains("refreshing…"),
         "80 cols must show the status: {screen}"
     );
+}
+
+#[test]
+fn detail_box_shows_structured_fields_at_80_columns() {
+    // 80 columns is the decisive width: a field the test only renders at 120
+    // certifies a screen that was never broken. Stable lines only — the
+    // relative clock is pinned in `detail_fields` unit tests, not here.
+    use gtasks::model::{Author, Check, Item, ItemKind, Label};
+    let slug = gtasks::actions::RepoSlug::parse("o/r").expect("valid slug");
+    let mut app = App {
+        repos: vec![gtasks::app::RepoRow::All, gtasks::app::RepoRow::Repo(slug)],
+        ..App::default()
+    };
+    app.items = vec![Item {
+        number: 12,
+        title: "Add widget".to_string(),
+        state: "OPEN".to_string(),
+        is_draft: None,
+        author: Some(Author {
+            login: "alberto".to_string(),
+        }),
+        labels: vec![Label {
+            name: "bug".to_string(),
+            color: None,
+        }],
+        assignees: vec![],
+        created_at: String::new(),
+        updated_at: String::new(),
+        url: "https://github.com/o/r/pull/12".to_string(),
+        head_ref_name: Some("feat/x".to_string()),
+        base_ref_name: Some("main".to_string()),
+        review_decision: None,
+        mergeable: Some("MERGEABLE".to_string()),
+        status_check_rollup: vec![Check {
+            name: Some("ci".to_string()),
+            status: Some("COMPLETED".to_string()),
+            conclusion: Some("FAILURE".to_string()),
+        }],
+        closing_issues_references: vec![],
+        repo: "o/r".to_string(),
+        kind: ItemKind::Pr,
+    }];
+    let view = view_for(&app);
+    let narrow = render_sized(&app, &view, 80, 12);
+    for line in ["state: OPEN", "author: alberto"] {
+        assert!(narrow.contains(line), "80x12 shows {line}: {narrow}");
+    }
+    let full = render_sized(&app, &view, 80, 30);
+    for line in [
+        "labels: bug",
+        "feat/x → main",
+        "checks: 0 passed, 1 failed (ci)",
+        "mergeable: MERGEABLE",
+        "url: https://github.com/o/r/pull/12",
+    ] {
+        assert!(full.contains(line), "80 cols show {line}: {full}");
+    }
 }
 
 #[test]
