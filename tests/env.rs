@@ -130,13 +130,22 @@ fn interactive_child_gets_no_tokens() {
         env: Vec::new(),
         cwd: tmp.path().to_path_buf(),
     });
-    let status = interactive_command(&script, &argv, &dirty)
-        .spawn()
-        .expect("the dump script spawns")
-        .wait()
-        .expect("the dump script is reaped");
-    assert!(status.success(), "the dump script exits 0");
-    let text = std::fs::read_to_string(&dump).expect("the child dumped its env");
+    // `output()` instead of `spawn().wait()`: a failure here has to be diagnosable. This test
+    // failed once, on the first run after a merge, and the message said nothing — no status, no
+    // stderr, no dump — so the only reading left was "it passes now". A test that fails sometimes
+    // is worse than one that always fails: it teaches re-running instead of looking. Now the
+    // panic carries the status, the child's stderr and the environment that landed on disk.
+    let out = interactive_command(&script, &argv, &dirty)
+        .output()
+        .expect("the dump script runs");
+    let text = std::fs::read_to_string(&dump)
+        .unwrap_or_else(|err| format!("<the child dumped nothing: {err}>"));
+    assert!(
+        out.status.success(),
+        "the dump script must exit 0, got {:?}, stderr: {:?}, dump-so-far: {text:?}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
     let child_env: Vec<(OsString, OsString)> = text
         .lines()
         .filter_map(|line| {
