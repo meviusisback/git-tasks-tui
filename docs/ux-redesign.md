@@ -365,6 +365,13 @@ round trip; they are written here so the next stage does not pay again.
   `debug_assert!` and a test, so it is `measured:` — and the day the test
   disappears the marker stays there, lying, where everyone can see it.
 
+- **When you change the shape of a config file, the proof is a real file, not
+  `Config::default()`.** Take the config that is installed on the machine, feed
+  it to the new code, and look at whether the feature you changed still answers.
+  It costs one command and covers the whole class: the suite says "it compiles
+  and the tests pass"; the machine says "the program can do its job with the
+  data it has". Only the second notices a field nobody reads but somebody
+  writes.
 - **A valid config is not a working config.** `validate()` says the values are
   inside their ranges; it does not say the program can do its job with them.
   Measured 2026-10-25: after a migration the config was *valid* (the key was
