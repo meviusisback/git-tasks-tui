@@ -12,12 +12,12 @@
 //! gtasks dies) delivers SIGHUP to the child, and quitting kills it
 //! explicitly: no orphan agent is left running without a box.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -48,8 +48,56 @@ pub struct AgentCell {
     pub inverse: bool,
 }
 
-/// The visible screen: one row per line, one cell per column.
+/// The visible screen: one row per line, one cell per column. Rows are
+/// trimmed of trailing blank cells (invisible either way); the journal
+/// stores them as-is, so trimming also bounds its memory.
 pub type AgentScreen = Vec<Vec<AgentCell>>;
+
+/// Past live screens, oldest first: the wheel's history for repaint-style
+/// apps. See `scroll` for how the two histories divide the work.
+const JOURNAL_CAP: usize = 120;
+
+/// Minimum gap between two recorded frames. Spinners and progress bars
+/// repaint constantly with big diffs (a full-width bar every 100 ms); the
+/// gap keeps them from evicting the real history while still sampling it.
+const JOURNAL_GAP: Duration = Duration::from_millis(500);
+
+/// Cells that must change for a frame to count as history. A spinner tick
+/// moves one or two cells — that is motion, not history. Anything bigger
+/// (a finished line, a shifted viewport) is kept.
+const JOURNAL_THRESHOLD: usize = 16;
+
+/// A cell that renders as nothing: blank text in default style. The
+/// snapshot trims trailing runs of these.
+fn is_blank(cell: &AgentCell) -> bool {
+    cell.text == " "
+        && cell.fg == Palette::Default
+        && cell.bg == Palette::Default
+        && !cell.bold
+        && !cell.inverse
+}
+
+/// How many cells differ between two frames, position by position (a row
+/// present on one side only counts whole). The journal's "did the screen
+/// move on" measure.
+fn frame_distance(a: &AgentScreen, b: &AgentScreen) -> usize {
+    let mut changed = 0;
+    for i in 0..a.len().max(b.len()) {
+        match (a.get(i), b.get(i)) {
+            (Some(ra), Some(rb)) => {
+                for j in 0..ra.len().max(rb.len()) {
+                    if ra.get(j) != rb.get(j) {
+                        changed += 1;
+                    }
+                }
+            }
+            (Some(r), None) | (None, Some(r)) => changed += r.len(),
+            // Unreachable: `i` runs below the longer side's length.
+            (None, None) => {}
+        }
+    }
+    changed
+}
 
 fn map_color(color: VtTerm) -> Palette {
     match color {
@@ -59,21 +107,16 @@ fn map_color(color: VtTerm) -> Palette {
     }
 }
 
-/// Fullscreen TUIs (Pi, agy, …) draw on the alternate screen
-/// (`CSI ? 1049 h`), whose scrolls never reach the main scrollback — the
-/// wheel would sit on an empty history while the agent visibly works. The
-/// filter drops exactly the enter/exit sequences (`?1047`/`?1049` with
-/// `h`/`l`) and feeds everything else untouched, so the app draws on the
-/// main screen and every line it scrolls stays reachable from the wheel.
-///
-/// Only those four shapes are dropped: cursor visibility (`?25`), mouse
-/// tracking (`?1000`) and bracketed paste (`?2004`) pass through (the parser
-/// ignores them, as before), and a combined parameter list (`?25;1049h`)
-/// passes through whole — dropping half a request would be worse than
-/// keeping the alternate screen. Streaming-safe: a sequence split across
-/// two reads is held back (bounded) until it completes or proves itself
-/// something else. Held bytes are only ever `ESC [ ? digits` — never text —
-/// so a child that dies mid-sequence loses nothing visible.
+/// The alternate-screen fold: drops exactly the enter/exit sequences
+/// (`CSI ? 1047` / `? 1049` with `h` / `l`) and feeds everything else
+/// untouched. Cursor visibility (`?25`), mouse tracking (`?1000`) and
+/// bracketed paste (`?2004`) pass through (the parser ignores them, as
+/// before), and a combined parameter list (`?25;1049h`) passes through
+/// whole — dropping half a request would be worse than keeping the
+/// alternate screen. Streaming-safe: a sequence split across two reads is
+/// held back (bounded) until it completes or proves itself something else.
+/// Held bytes are only ever `ESC [ ? digits` — never text — so a child that
+/// dies mid-sequence loses nothing visible.
 pub struct AltScreenFilter {
     pending: Vec<u8>,
 }
@@ -179,9 +222,26 @@ fn scan_csi(buf: &[u8]) -> Csi {
 
 /// One agent inside the box: the pty child, its output parsed live, the seed
 /// file kept until the run ends.
+///
+/// Fullscreen TUIs (Pi, agy, …) draw on the alternate screen, whose scrolls
+/// never reach the main scrollback — the wheel would sit on an empty
+/// history while the agent visibly works. Folding the enter/exit sequences
+/// (`?1047`/`?1049` + `h`/`l`) away makes the app draw on the main screen,
+/// where every scrolled line stays reachable. Only those four shapes are
+/// dropped; everything else passes through untouched.
 pub struct EmbeddedSession {
     parser: vt100::Parser,
     alt: AltScreenFilter,
+    /// Past live screens, oldest first (cap `JOURNAL_CAP`): the wheel's
+    /// history for repaint apps that never scroll. See `scroll`.
+    journal: VecDeque<AgentScreen>,
+    /// How far back into the journal the view sits. Zero is the live tail;
+    /// typing resets it. Only read while `in_journal` holds.
+    journal_offset: usize,
+    /// Whether the wheel currently walks the journal. Set by `scroll`
+    /// from the scrollback probe; cleared by typing.
+    in_journal: bool,
+    last_record: Instant,
     rx: mpsc::Receiver<Vec<u8>>,
     writer: Box<dyn std::io::Write + Send>,
     master: Box<dyn MasterPty + Send>,
@@ -270,13 +330,17 @@ impl EmbeddedSession {
             start: Instant::now(),
             cols,
             rows,
+            journal: VecDeque::new(),
+            journal_offset: 0,
+            in_journal: false,
+            last_record: Instant::now(),
         })
     }
 
-    /// Feed every pending output chunk into the parser. Alternate-screen
-    /// switches are folded out first, so fullscreen apps scroll the main
-    /// screen and the wheel reaches their history. True when the screen
-    /// changed and the caller should re-snapshot.
+    /// Feed every pending output chunk into the parser, then file the
+    /// repaint if there was one. Scrolled lines need no filing: the parser
+    /// keeps them, and the wheel reads them back through it. True when the
+    /// screen changed and the caller should re-snapshot.
     pub fn drain(&mut self) -> bool {
         let mut changed = false;
         for _ in 0..256 {
@@ -289,11 +353,59 @@ impl EmbeddedSession {
                 Err(_) => break,
             }
         }
+        if changed {
+            let live = self.live_snapshot();
+            self.record_frame(&live);
+        }
         changed
     }
 
-    /// The current visible screen, row by row, for the UI layer.
+    /// Record the live screen when it moved on substantially: a spinner
+    /// tick (a cell or two) is not history, a new line or a repainted frame
+    /// is. Compared against the last recorded frame, so slow output
+    /// accumulates until it is worth keeping.
+    fn record_frame(&mut self, live: &AgentScreen) {
+        let changed = match self.journal.back() {
+            None => usize::MAX,
+            Some(last) => frame_distance(live, last),
+        };
+        if changed >= JOURNAL_THRESHOLD
+            && (self.journal.is_empty() || self.last_record.elapsed() >= JOURNAL_GAP)
+        {
+            if self.journal.len() >= JOURNAL_CAP {
+                self.journal.pop_front();
+            }
+            self.journal.push_back(live.clone());
+            if self.journal_offset > 0 {
+                // The newest frame appended at the end: keep pointing at
+                // the same frame instead of drifting one step newer.
+                self.journal_offset = (self.journal_offset + 1).min(self.journal.len());
+            }
+            self.last_record = Instant::now();
+        }
+    }
+
+    /// The screen for the UI layer. Offset zero is the live tail; above
+    /// that the wheel walks the journal frames. Rows are trimmed of
+    /// trailing blanks either way.
     pub fn snapshot(&self) -> AgentScreen {
+        if self.in_journal && self.journal_offset > 0 {
+            if let Some(frame) = self
+                .journal
+                .len()
+                .checked_sub(self.journal_offset)
+                .and_then(|i| self.journal.get(i))
+            {
+                return frame.clone();
+            }
+        }
+        self.live_snapshot()
+    }
+
+    /// The current parsed screen, row by row. Trailing blank cells are
+    /// dropped: invisible on screen, and the journal stores this shape, so
+    /// keeping them would only bloat it.
+    fn live_snapshot(&self) -> AgentScreen {
         let screen = self.parser.screen();
         let mut out = Vec::with_capacity(usize::from(self.rows));
         for row in 0..self.rows {
@@ -316,18 +428,36 @@ impl EmbeddedSession {
                     }),
                 }
             }
+            while line.last().is_some_and(is_blank) {
+                line.pop();
+            }
             out.push(line);
         }
         out
     }
 
-    /// Scroll the visible window through history: positive looks back, negative
-    /// returns toward the live tail. Clamped at zero; vt100 clamps the top
-    /// to the actual scrollback size.
+    /// Scroll the wheel's history: exact scrolled lines when the child
+    /// scrolled (the parser keeps them, the probe below measures them),
+    /// journal frames when it never did (repaint apps). Clamped at both
+    /// ends — past the oldest entry stays on it.
     pub fn scroll(&mut self, delta: i32) {
-        let current = self.parser.screen().scrollback() as i32;
-        let next = (current + delta).max(0) as usize;
-        self.parser.screen_mut().set_scrollback(next);
+        // How much real scrollback sits behind the live screen: push the
+        // offset to the top and read back where it clamped. Restored right
+        // after — nothing renders in between, so the probe is invisible.
+        let current = self.parser.screen().scrollback();
+        self.parser.screen_mut().set_scrollback(usize::MAX);
+        let content = self.parser.screen().scrollback();
+        self.parser.screen_mut().set_scrollback(current);
+        if content > 0 {
+            let next = (current as i32 + delta).max(0) as usize;
+            self.parser.screen_mut().set_scrollback(next.min(content));
+            self.journal_offset = 0;
+            self.in_journal = false;
+        } else {
+            let next = (self.journal_offset as i32 + delta).max(0) as usize;
+            self.journal_offset = next.min(self.journal.len());
+            self.in_journal = true;
+        }
     }
 
     /// The directory the child runs in: the loop refuses to rename or delete
@@ -342,6 +472,8 @@ impl EmbeddedSession {
     /// not by a write error here.
     pub fn write(&mut self, bytes: &[u8]) {
         self.parser.screen_mut().set_scrollback(0);
+        self.journal_offset = 0;
+        self.in_journal = false;
         use std::io::Write as _;
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();

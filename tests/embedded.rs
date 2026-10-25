@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use gtasks::agent::{AgentOutcome, AgentStatus};
 use gtasks::app::Key;
-use gtasks::embedded::{AltScreenFilter, EmbeddedSession, key_to_pty};
+use gtasks::embedded::{EmbeddedSession, key_to_pty};
 
 fn dirty_parent() -> HashMap<String, String> {
     let mut parent = HashMap::new();
@@ -279,43 +279,9 @@ fn pty_exit_codes_map_like_the_blocking_path() {
 }
 
 #[test]
-fn alt_screen_switches_are_dropped_everything_else_passes() {
-    let mut f = AltScreenFilter::new();
-    // The four shapes: enter/exit, both numbers.
-    assert_eq!(f.feed(b"\x1b[?1049h"), b"");
-    assert_eq!(f.feed(b"hi"), b"hi");
-    assert_eq!(f.feed(b"\x1b[?1049l"), b"");
-    assert_eq!(f.feed(b"\x1b[?1047h"), b"");
-    assert_eq!(f.feed(b"\x1b[?1047l"), b"");
-    // Kept: cursor visibility, mouse tracking, bracketed paste, movements,
-    // clears — the parser ignores them, as before.
-    assert_eq!(f.feed(b"\x1b[?25l"), b"\x1b[?25l");
-    assert_eq!(f.feed(b"\x1b[?1000h"), b"\x1b[?1000h");
-    assert_eq!(f.feed(b"\x1b[?2004h"), b"\x1b[?2004h");
-    assert_eq!(f.feed(b"\x1b[2J\x1b[H"), b"\x1b[2J\x1b[H");
-    assert_eq!(f.feed(b"\x1b[3;5H"), b"\x1b[3;5H");
-    // A combined list is not ours: dropping half a request would be worse
-    // than keeping the alternate screen.
-    assert_eq!(f.feed(b"\x1b[?25;1049h"), b"\x1b[?25;1049h");
-    // A query (`$` intermediate) is not a switch either.
-    assert_eq!(f.feed(b"\x1b[?1049$p"), b"\x1b[?1049$p");
-}
-
-#[test]
-fn a_switch_split_across_reads_is_still_dropped() {
-    let mut f = AltScreenFilter::new();
-    assert_eq!(f.feed(b"ab\x1b[?104"), b"ab");
-    assert_eq!(f.feed(b"9hDONE"), b"DONE");
-    // A lone ESC at the end of a read resolves on the next one.
-    assert_eq!(f.feed(b"\x1b"), b"");
-    assert_eq!(f.feed(b"[?1049l!"), b"!");
-}
-
-#[test]
-fn alt_screen_content_folds_into_the_main_scrollback() {
-    // A fullscreen app (enter alt screen, print, exit) without the filter
-    // would leave the main scrollback empty and the wheel dead. With it the
-    // lines scroll the main screen and stay reachable.
+fn alt_screen_content_folds_into_history() {
+    // A fullscreen app draws on the alternate screen: the scrolled lines
+    // still reach the wheel, detected from frame to frame.
     let tmp = tempfile::tempdir().unwrap();
     let program = fake_hermes(
         tmp.path(),
@@ -339,4 +305,54 @@ fn alt_screen_content_folds_into_the_main_scrollback() {
     assert_eq!(row_text(&sess, 0), "1", "scrolled to the head of history");
     sess.scroll(-1000);
     assert_eq!(row_text(&sess, 9), "50", "the live tail is intact");
+}
+
+#[test]
+fn repaint_frames_are_history_when_nothing_scrolls() {
+    // A repaint app (Pi, agy) repositions and overwrites: no scroll ever
+    // fires, so the line scrollback stays empty and the wheel walks the
+    // journal of past frames instead. The two frames differ well above the
+    // spinner threshold, like any real repaint.
+    let tmp = tempfile::tempdir().unwrap();
+    let program = fake_hermes(
+        tmp.path(),
+        "printf '\\033[2J\\033[1;1Hfirst-state-AAAAAAAAAAAA'; sleep 1; printf '\\033[2J\\033[1;1Hsecond-state-BBBBBBBBBBBB'; sleep 5",
+        None,
+    );
+    let mut sess = spawn(&program, tmp.path(), tmp.path());
+    assert!(
+        wait_for_screen(&mut sess, "second-state"),
+        "the second frame reaches the screen"
+    );
+    let row_text = |sess: &EmbeddedSession, row: usize| -> String {
+        sess.snapshot()[row]
+            .iter()
+            .map(|cell| cell.text.clone())
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+    assert_eq!(
+        row_text(&sess, 0),
+        "second-state-BBBBBBBBBBBB",
+        "live first"
+    );
+    sess.scroll(1);
+    assert_eq!(
+        row_text(&sess, 0),
+        "second-state-BBBBBBBBBBBB",
+        "one step back is the newest recorded frame"
+    );
+    sess.scroll(1);
+    assert_eq!(
+        row_text(&sess, 0),
+        "first-state-AAAAAAAAAAAA",
+        "two steps back is the older frame"
+    );
+    sess.scroll(-100);
+    assert_eq!(
+        row_text(&sess, 0),
+        "second-state-BBBBBBBBBBBB",
+        "back on the live tail"
+    );
 }
