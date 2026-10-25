@@ -329,6 +329,12 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **Commit before you mutate.** Four times in this project a `checkout --`,
+  `reset --hard` or an abandoned rebase destroyed work that was not committed —
+  by both humans and agents. A copy in `/tmp` is luck; a commit is a guarantee.
+  Anything you are about to rewrite in place (for a mutation test, a probe, a
+  quick experiment) gets committed first, on a branch or as `wip`, and the
+  experiment happens on top of it.
 - **A guard that cannot enter must leave the world as it found it.** `TuiGuard::enter`
   enables raw mode and then enters the alternate screen; if the second step fails
   it returns `Err` with raw mode still on and no `Drop` to undo it — a terminal
