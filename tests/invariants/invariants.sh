@@ -91,6 +91,16 @@ inv_spawn_sites_declared() {
   fi
 }
 
+inv_argv_sites_declared() {
+  group "INV S17 — every CheckedArgv construction is declared (one door per decision)"
+  local root; root=$(git rev-parse --show-toplevel)
+  if out=$(check_argv_sites "$root" 2>&1); then
+    pass "all $(argv_sites_found "$root" | wc -l) from_checked( sites are declared"
+  else
+    fail "CheckedArgv construction sites match the declared list" "$out"
+  fi
+}
+
 inv_worktree_resolver() {
   group "INV S5/S6 — worktree path + reuse (NOT WIRED)"
   skip "reuse_only_from_worktree_list_porcelain" "needs task/10b (worktree resolver)"
@@ -107,6 +117,7 @@ main() {
   inv_state_dir_mode
   inv_gh_wrapper_argv
   inv_spawn_sites_declared
+  inv_argv_sites_declared
   inv_worktree_resolver
   summary
 }
