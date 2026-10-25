@@ -117,38 +117,37 @@ fn install_hook() {
     });
 }
 
-
 /// The one implementation of "take the terminal back": entry and resume share it, so the
 /// half-entry rule cannot drift between them.
 fn resume_shared(shared: &Shared) -> io::Result<()> {
-        let raw = {
-            let mut f = shared
-                .enable_raw
-                .lock()
-                .map_err(|_| io::Error::other("enable_raw lock poisoned"))?;
-            (f)()
-        };
-        raw?;
-        let screen = {
-            let mut f = shared
-                .enable_screen
-                .lock()
-                .map_err(|_| io::Error::other("enable_screen lock poisoned"))?;
-            (f)()
-        };
-        match screen {
-            Ok(()) => {
-                shared.live.store(true, Ordering::SeqCst);
-                Ok(())
-            }
-            Err(err) => {
-                // Undo the raw-mode step we just did, and stay not-live.
-                if let Ok(mut restore) = shared.restore.lock() {
-                    (restore)();
-                }
-                Err(err)
-            }
+    let raw = {
+        let mut f = shared
+            .enable_raw
+            .lock()
+            .map_err(|_| io::Error::other("enable_raw lock poisoned"))?;
+        (f)()
+    };
+    raw?;
+    let screen = {
+        let mut f = shared
+            .enable_screen
+            .lock()
+            .map_err(|_| io::Error::other("enable_screen lock poisoned"))?;
+        (f)()
+    };
+    match screen {
+        Ok(()) => {
+            shared.live.store(true, Ordering::SeqCst);
+            Ok(())
         }
+        Err(err) => {
+            // Undo the raw-mode step we just did, and stay not-live.
+            if let Ok(mut restore) = shared.restore.lock() {
+                (restore)();
+            }
+            Err(err)
+        }
+    }
 }
 
 /// Suspend the terminal **through the active guard**, for a call site that cannot thread a
@@ -200,7 +199,11 @@ impl Tui {
 
     /// Enter with the actions supplied by the caller — the shape that makes the guard testable,
     /// and the only difference between this and [`Tui::enter`].
-    pub fn enter_with<A, B>(mut enable_raw: A, mut enable_screen: B, restore: Restore) -> io::Result<Self>
+    pub fn enter_with<A, B>(
+        mut enable_raw: A,
+        mut enable_screen: B,
+        restore: Restore,
+    ) -> io::Result<Self>
     where
         A: FnMut() -> io::Result<()> + Send + 'static,
         B: FnMut() -> io::Result<()> + Send + 'static,

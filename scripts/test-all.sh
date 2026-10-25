@@ -8,6 +8,13 @@ set -eu
 
 cd "$(git rev-parse --show-toplevel)"
 
+# `cargo fmt --check` was never in the gate, so a merged PR could leave the tree
+# unformatted and the next person's `cargo fmt` would silently rewrite files
+# they do not own (measured 2026-10-25: src/tui.rs, from a merge). The formatter
+# is a fact about the tree, not a matter of taste: check it here.
+fmt_status=0
+cargo fmt --check >/dev/null 2>&1 || fmt_status=1
+
 # A guard that has to be invited is not a guard. `pre-push` and `commit-msg`
 # only run when `core.hooksPath` points at `.githooks` in THIS repository's
 # config — passing it per command (`git -c core.hooksPath=...`) covers only the
@@ -83,13 +90,20 @@ awk '
     /^test result: ok\. 0 passed; 0 failed; [1-9][0-9]* ignored/ { print "  skipped: " name }
 ' "$log"
 
-if [ "$failed" != "0" ]; then
+if [ "$failed" != "0" ] || [ "$fmt_status" != "0" ]; then
     printf '\nfailures:\n'
     grep -E '^test .*FAILED' "$log" || true
+    if [ "$fmt_status" != "0" ]; then
+        printf '  formatting: cargo fmt --check failed — run `cargo fmt` and commit the result\n'
+    fi
 fi
 
 if [ "$hooks_missing" = yes ]; then
     printf '\nthe gate FAILED for a reason the tests cannot see: the guards are not installed.\n' >&2
+    status=1
+fi
+
+if [ "$fmt_status" != "0" ]; then
     status=1
 fi
 

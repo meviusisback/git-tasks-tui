@@ -113,7 +113,10 @@ fn a_failed_enter_undoes_what_it_did() {
         restore,
     );
     assert!(err.is_err(), "the failure must propagate");
-    assert!(raw_on.load(Ordering::SeqCst), "the fixture must have reached the raw-mode step");
+    assert!(
+        raw_on.load(Ordering::SeqCst),
+        "the fixture must have reached the raw-mode step"
+    );
     // Raw mode is ON and `Self` was never built, so `Drop` cannot run: the only thing that can
     // put the terminal back is this call. Measured before the fix: it returned Err with raw
     // mode still on, and the user got a terminal with no echo and no line editing.
@@ -124,7 +127,6 @@ fn a_failed_enter_undoes_what_it_did() {
     );
 }
 
-
 /// The agent handoff: leave the screen, hand the terminal to the child, come back. Two ownership
 /// windows, and the restore must run **once per window** — not once overall (the second window
 /// would leak raw mode) and not twice per window (Drop and the hook would fight).
@@ -133,7 +135,11 @@ fn suspend_then_drop_restores_once() {
     let (calls, restore) = counter();
     let tui = Tui::enter_with(|| Ok(()), || Ok(()), restore).expect("enter");
     tui.suspend();
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "suspend restores immediately");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "suspend restores immediately"
+    );
     drop(tui);
     assert_eq!(
         calls.load(Ordering::SeqCst),
