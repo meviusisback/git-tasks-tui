@@ -134,3 +134,134 @@ absent one. It is also the only form in which an example can **describe a
 signature that does not exist** — `gh(cwd, &args)` with two arguments while
 the real function takes three — without anyone noticing. An example that cannot be made compilable is prose — take it out
 of the code block.
+
+## A probe that certifies a dead field (`5aecae6`)
+
+`last_repo` was added to remember, on the way back from a drill-down, *which repo you came
+from* — and it was **redundant in every reachable state**: the only writer of the repo list
+(`set_repos`) also resets `repo_filter`, so the `Esc` arm guarded by `One(_)` could not run in
+the one case the field was added for, and on every other path the field held the same slug the
+filter already held.
+
+This probe is what proved it, kept here rather than in `tests/` because it **cannot compile on
+`main`**: it touches `app.last_repo`, removed in `b53717f`. Copied into `tests/` it would turn the
+suite red for the wrong reason — a missing field, not a wrong behaviour — so it is a manual
+experiment with a recorded result, **not a gate test**.
+
+Measured on `5aecae6` (both red for the right reason, not on a compile error):
+
+```
+a_production_rebuild_wipes_the_filter_and_esc_never_reads_last_repo ... FAILED
+the_key_sequence_reaches_a_list_pane_where_esc_does_nothing ........... FAILED
+  R+Enter: pane=List filter_all=true last_repo=Some("me/busy") cursor=0 modal=false
+```
+
+The `println!` line is the part that mattered: it shows the state the field was added for, reached
+with **keys only** (`Enter`, `R`, `Enter`) — with the filter already reset to `All`, which is why
+the arm could not fire.
+
+**A correction this probe also taught me**: I first read its second failure as "`Esc` does nothing
+here". Wrong — that tree already had the catch-all arm writing `Esc — nothing to close`, so the key
+*narrated*; the probe asserted that the pane did not move, which is equally true for a silent key
+and for one that writes a status. The instrument answered a different question than the one I asked.
+
+```rust
+
+use gtasks::app::{App, Key, Msg, Pane, RepoFilter};
+use gtasks::model::{Item, ItemKind};
+
+fn item(repo: &str, number: u64, title: &str) -> Item {
+    Item {
+        number,
+        title: title.to_string(),
+        state: "OPEN".into(),
+        is_draft: None,
+        author: None,
+        labels: Vec::new(),
+        updated_at: "2026-10-20T10:00:00Z".into(),
+        created_at: String::new(),
+        url: format!("https://github.com/{repo}/pull/{number}"),
+        head_ref_name: None,
+        review_decision: None,
+        mergeable: None,
+        status_check_rollup: Vec::new(),
+        repo: repo.to_string(),
+        kind: ItemKind::Pr,
+    }
+}
+
+fn app_with_two_repos() -> App {
+    let mut app = App::default();
+    app.set_repos(vec!["me/empty".to_string(), "me/busy".to_string()]);
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![item("me/busy", 7, "seven")],
+        failures: Vec::new(),
+    });
+    app
+}
+
+#[test]
+fn a_production_rebuild_wipes_the_filter_and_esc_never_reads_last_repo() {
+    let mut app = app_with_two_repos();
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy, row 2
+    app.update(Msg::Key(Key::Enter)); // drill in
+    assert_eq!(app.pane, Pane::List);
+    assert!(matches!(app.repo_filter, RepoFilter::One(_)));
+    assert!(app.last_repo.is_some(), "the origin is recorded at Enter");
+
+    // The only production way the repo list changes (the `R` menu's Enter, or
+    // startup): the same call main.rs and app.rs make.
+    app.set_repos(vec!["me/busy".to_string(), "me/other".to_string()]);
+
+    assert!(
+        matches!(app.repo_filter, RepoFilter::All),
+        "set_repos resets the filter, so the Esc identity arm's guard is false"
+    );
+    assert!(
+        app.last_repo.is_some(),
+        "last_repo survives the rebuild — it is the only place the origin still is"
+    );
+
+    app.update(Msg::Key(Key::Esc)); // drill out
+    assert_eq!(app.pane, Pane::Repos);
+    assert_eq!(
+        app.repos_cursor, 0,
+        "we land on row 0 via the plain arm, not on the origin's new row (which is 1)"
+    );
+}
+
+#[test]
+fn the_key_sequence_reaches_a_list_pane_where_esc_does_nothing() {
+    let mut app = app_with_two_repos();
+    app.all_repos = vec!["me/empty".to_string(), "me/busy".to_string()];
+    app.update(Msg::Key(Key::Tab));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Down)); // me/busy
+    app.update(Msg::Key(Key::Enter)); // drill in: List + One
+    assert_eq!(app.pane, Pane::List);
+
+    // Production sequence, keys only: open the repo menu and apply a selection.
+    app.update(Msg::Key(Key::Char('R')));
+    app.update(Msg::Key(Key::Enter));
+
+    println!(
+        "R+Enter: pane={:?} filter_all={} last_repo={:?} cursor={} modal={:?}",
+        app.pane,
+        matches!(app.repo_filter, RepoFilter::All),
+        app.last_repo.as_ref().map(|s| s.as_str().to_string()),
+        app.repos_cursor,
+        app.modal.is_some(),
+    );
+
+    let before = app.pane;
+    app.update(Msg::Key(Key::Esc));
+    assert_eq!(before, Pane::List, "we are in the list pane");
+    assert_ne!(
+        app.pane, Pane::List,
+        "Esc in the list pane did nothing: the key the legend calls 'back' is a no-op here"
+    );
+}
+```
+
