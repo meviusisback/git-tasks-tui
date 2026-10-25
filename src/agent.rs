@@ -279,8 +279,16 @@ pub fn agent_argv(
             worktree.as_os_str().to_os_string(),
             "--ignore-rules".into(),
         ],
-        // No allowlist here: the interactive child inherits the whole
-        // environment in `run_interactive` (it is the user's session).
+        // Empty on purpose, and **not** "the child inherits everything": the interactive
+        // path builds its own environment in `interactive_command` (`env_clear()` +
+        // `agent_env_from(parent)`), so the child sees the allowlist — no `GH_TOKEN`,
+        // no `GIT_*` — exactly like a pipe child. Measured, not assumed:
+        // `tests/agent_env_interactive.rs` plants a dirty parent and reads the child's
+        // own environment.
+        //
+        // The comment that used to be here said the opposite, and it was believed: a round
+        // was spent deciding to "apply the allowlist" that was already applied. A doc
+        // comment is a claim; it goes stale the moment it is written.
         env: Vec::new(),
         cwd: worktree.to_path_buf(),
     })
