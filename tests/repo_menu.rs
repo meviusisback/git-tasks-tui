@@ -74,6 +74,22 @@ fn enter_applies_to_the_live_list_and_reports_for_save() {
 }
 
 #[test]
+fn applying_a_new_selection_drops_the_stale_detail() {
+    // The body belonged to the previous list: showing it here would say
+    // "this is the item you are looking at" about an item that may be gone.
+    let mut app = app_with_three_repos();
+    app.detail = "old body".to_string();
+    app.detail_for = Some(("me/a".to_string(), 1));
+    open_menu(&mut app);
+    app.update(Msg::Key(Key::Down)); // row 1: me/b
+    app.update(Msg::Key(Key::Char(' '))); // unmark
+    app.update(Msg::Key(Key::Enter)); // apply
+    assert!(app.detail.is_empty());
+    assert!(app.detail_for.is_none());
+    assert!(app.detail_requested.is_none());
+}
+
+#[test]
 fn esc_cancels_without_side_effects() {
     let mut app = app_with_three_repos();
     open_menu(&mut app);

@@ -245,6 +245,12 @@ impl App {
         self.repos_cursor = 0;
         self.repo_filter = RepoFilter::All;
         self.set_lengths(self.repos.len(), self.visible_items().len());
+        // A new list means a new context: a body fetched for the previous
+        // one would say "this is the item you are looking at" about an item
+        // that may be gone — same discipline as `apply_repo_filter`.
+        self.detail.clear();
+        self.detail_for = None;
+        self.detail_requested = None;
     }
 
     /// Row 0 means "everything"; any other row filters the list to that repo.
