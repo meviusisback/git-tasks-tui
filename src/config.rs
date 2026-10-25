@@ -110,6 +110,117 @@ impl Config {
     }
 }
 
+/// Why the config on disk cannot be used. Two different failures, two
+/// different remedies: *unreadable* (permissions, syntax — fix the file
+/// itself) versus *invalid* (readable TOML with a rejected value — fix the
+/// value, the message names it and the accepted range).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigProblem {
+    Unreadable { path: PathBuf, reason: String },
+    Invalid { path: PathBuf, reason: String },
+}
+
+impl ConfigProblem {
+    /// The on-screen sentence: file first, then what is wrong. The two kinds
+    /// start with different words so a test — and a glance — tells them apart.
+    pub fn message(&self) -> String {
+        match self {
+            ConfigProblem::Unreadable { path, reason } => {
+                format!("cannot read config {}: {reason}", path.display())
+            }
+            ConfigProblem::Invalid { path, reason } => {
+                format!("invalid config {}: {reason}", path.display())
+            }
+        }
+    }
+}
+
+/// Load the config, falling back to the demo repo when the file cannot be
+/// used — but never silently: the second value names the problem for the
+/// screen. A missing file is not a problem (first run); anything present
+/// but unusable is.
+pub fn load_or_demo(path: &Path) -> (Config, Option<ConfigProblem>) {
+    if !path.exists() {
+        return (demo_config(), None);
+    }
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            return (
+                demo_config(),
+                Some(ConfigProblem::Unreadable {
+                    path: path.to_path_buf(),
+                    reason: format!("{err:#}"),
+                }),
+            );
+        }
+    };
+    // Syntax first (is it TOML at all?), value second (is it ours?): an
+    // unknown key is readable text with a rejected meaning, so it lands in
+    // Invalid, not Unreadable.
+    let value: toml::Value = match toml::from_str(&text) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                demo_config(),
+                Some(ConfigProblem::Unreadable {
+                    path: path.to_path_buf(),
+                    reason: format!("{err:#}"),
+                }),
+            );
+        }
+    };
+    let config: Config = match value.try_into() {
+        Ok(config) => config,
+        Err(err) => {
+            return (
+                demo_config(),
+                Some(ConfigProblem::Invalid {
+                    path: path.to_path_buf(),
+                    reason: format!("{err:#}"),
+                }),
+            );
+        }
+    };
+    if let Err(err) = config.validate() {
+        return (
+            demo_config(),
+            Some(ConfigProblem::Invalid {
+                path: path.to_path_buf(),
+                reason: format!("{err:#}"),
+            }),
+        );
+    }
+    if config.repos.is_empty() {
+        return (
+            demo_config(),
+            Some(ConfigProblem::Invalid {
+                path: path.to_path_buf(),
+                reason: "lists no repos — add at least one \"owner/name\"".to_string(),
+            }),
+        );
+    }
+    (config, None)
+}
+
+/// The fallback repo. Validated, not assumed: a `debug_assert` for the
+/// developer and a log line for release, so a future default change that
+/// breaks the demo says so instead of shipping a broken fallback.
+pub fn demo_config() -> Config {
+    let config = Config {
+        repos: vec!["meviusisback/git-tasks-tui".to_string()],
+        ..Config::default()
+    };
+    debug_assert!(
+        config.validate().is_ok() && !config.repos.is_empty(),
+        "the demo fallback must always be usable"
+    );
+    if let Err(err) = config.validate() {
+        tracing::warn!(error = %format!("{err:#}"), "demo fallback invalid, using it anyway");
+    }
+    config
+}
+
 /// `owner/name`, both parts from the safe charset; no traversal, no flags.
 pub fn validate_repo_slug(slug: &str) -> anyhow::Result<()> {
     ensure!(
