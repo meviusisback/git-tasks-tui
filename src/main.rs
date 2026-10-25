@@ -28,7 +28,7 @@ use gtasks::state::State;
 use gtasks::ui;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, MouseEventKind};
 use ratatui::layout::Rect;
 
 /// gtasks: GitHub issues & PRs across repos, in the terminal.
@@ -625,14 +625,18 @@ fn run_tui() -> anyhow::Result<()> {
         if event::poll(Duration::from_millis(250))? {
             match event::read()? {
                 Event::Key(key) => {
-                    // Focused on a running agent, every key but Esc is agent
-                    // input — including Ctrl-C, which interrupts it. Esc
-                    // unfocuses through the app. Anywhere else, keys are app
-                    // keys (where Ctrl-C quits).
+                    // Focused on a running agent, every key but Esc/Tab is
+                    // agent input — including Ctrl-C, which interrupts it.
+                    // Esc unfocuses, Tab cycles panes, both through the app.
+                    // Anywhere else, keys are app keys (where Ctrl-C quits).
+                    let to_app = matches!(
+                        map_key(key),
+                        Some(Msg::Key(Key::Esc | Key::Tab | Key::BackTab))
+                    );
                     let to_agent = embedded.is_some()
                         && app.agent_running
                         && app.pane == gtasks::app::Pane::Agent
-                        && !matches!(map_key(key), Some(Msg::Key(Key::Esc)));
+                        && !to_app;
                     if to_agent {
                         if let Some(Msg::Key(k)) = map_key(key) {
                             if let Some(bytes) = gtasks::embedded::key_to_pty(&k) {
@@ -647,6 +651,31 @@ fn run_tui() -> anyhow::Result<()> {
                 }
                 // Resizes only need a redraw, which the loop does anyway.
                 Event::Resize(_, _) => {}
+                // The wheel scrolls the agent box through history — never
+                // the agent's input: with mouse capture on, the terminal no
+                // longer turns the wheel into arrow keys.
+                Event::Mouse(me) => {
+                    let box_shown = app.agent_active() || app.pane == gtasks::app::Pane::Agent;
+                    match me.kind {
+                        MouseEventKind::ScrollUp if box_shown => {
+                            if let Some(sess) = embedded.as_mut() {
+                                sess.scroll(3);
+                                app.agent_screen = sess.snapshot();
+                            } else {
+                                app.agent_scroll = app.agent_scroll.saturating_add(3);
+                            }
+                        }
+                        MouseEventKind::ScrollDown if box_shown => {
+                            if let Some(sess) = embedded.as_mut() {
+                                sess.scroll(-3);
+                                app.agent_screen = sess.snapshot();
+                            } else {
+                                app.agent_scroll = app.agent_scroll.saturating_sub(3);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         } else {

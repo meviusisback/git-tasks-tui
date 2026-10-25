@@ -21,7 +21,11 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "macros"
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-vt100 = "0.15"
+# Vendored: upstream vt100 0.18.1 with the unicode-width requirement relaxed
+# to "0.2" (only stable width traits are used). The registry 0.18 needs
+# ^0.2.2 while ratatui pins =0.2.0 and cargo will not split the pair, so a
+# registry dependency cannot resolve. See vendor/vt100/Cargo.toml.
+vt100 = { path = "vendor/vt100", version = "0.18" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

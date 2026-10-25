@@ -181,16 +181,24 @@ pub struct Tui {
 }
 
 impl Tui {
-    /// Enter the real terminal: raw mode, alternate screen, and the chaining panic hook.
+    /// Enter the real terminal: raw mode, alternate screen, mouse capture,
+    /// and the chaining panic hook.
     pub fn enter() -> io::Result<Self> {
         Self::enter_with(
             crossterm::terminal::enable_raw_mode,
-            || crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen),
+            || {
+                crossterm::execute!(
+                    io::stdout(),
+                    crossterm::terminal::EnterAlternateScreen,
+                    crossterm::event::EnableMouseCapture
+                )
+            },
             Box::new(|| {
                 let _ = crossterm::terminal::disable_raw_mode();
                 let _ = crossterm::execute!(
                     io::stdout(),
                     crossterm::terminal::LeaveAlternateScreen,
+                    crossterm::event::DisableMouseCapture,
                     crossterm::cursor::Show
                 );
             }),

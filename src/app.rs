@@ -515,7 +515,7 @@ impl App {
             // including Ctrl-C, which interrupts it. The legend must not
             // promise keys that type instead.
             if self.agent_running {
-                String::from("Esc panes · typing goes to the agent · Ctrl-C interrupts")
+                String::from("Esc/Tab panes · Ctrl-C interrupts · wheel scrolls · type to agent")
             } else {
                 String::from(
                     "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",

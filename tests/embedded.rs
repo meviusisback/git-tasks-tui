@@ -199,14 +199,49 @@ fn the_seed_file_is_unlinked_on_exit() {
 }
 
 #[test]
-fn keys_become_terminal_bytes_except_esc() {
+fn keys_become_terminal_bytes_except_pane_keys() {
     assert_eq!(key_to_pty(&Key::Enter), Some(b"\r".to_vec()));
     assert_eq!(key_to_pty(&Key::Backspace), Some(vec![0x7f]));
-    assert_eq!(key_to_pty(&Key::Tab), Some(b"\t".to_vec()));
+    assert_eq!(key_to_pty(&Key::Tab), None, "Tab cycles panes");
+    assert_eq!(key_to_pty(&Key::BackTab), None, "BackTab cycles panes");
     assert_eq!(key_to_pty(&Key::Char('a')), Some(b"a".to_vec()));
     assert_eq!(key_to_pty(&Key::Up), Some(b"\x1b[A".to_vec()));
     assert_eq!(key_to_pty(&Key::CtrlC), Some(vec![0x03]));
     assert_eq!(key_to_pty(&Key::Esc), None);
+}
+
+#[test]
+fn the_wheel_reads_history_not_input() {
+    // Fifty lines in a ten-row box: scroll up shows the head, scroll down
+    // returns to the live tail. Typing (`write`) jumps back to live, so a
+    // reply never lands on a history view.
+    let tmp = tempfile::tempdir().unwrap();
+    // No trailing newline: the last line stays on the last row instead of
+    // scrolling one past it, so the live tail is exactly rows 41-50.
+    fake_hermes(tmp.path(), "seq 1 49; printf 50", None);
+    let mut sess = spawn(&tmp.path().join("hermes"), tmp.path(), tmp.path());
+    assert!(wait_for_screen(&mut sess, "50"), "the whole run parsed");
+    sess.scroll(1000); // clamped to the actual scrollback
+    let row_text = |sess: &EmbeddedSession, row: usize| -> String {
+        sess.snapshot()[row]
+            .iter()
+            .map(|cell| cell.text.clone())
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+    assert_eq!(row_text(&sess, 0), "1", "scrolled to the head");
+    sess.scroll(-1000);
+    assert_eq!(row_text(&sess, 9), "50", "back on the live tail");
+    // History view, then a keystroke: the screen follows the reply.
+    sess.scroll(1000);
+    assert_eq!(row_text(&sess, 0), "1");
+    sess.write(b"x");
+    assert_eq!(
+        row_text(&sess, 9),
+        "50",
+        "typing jumps back to the live tail"
+    );
 }
 
 #[test]

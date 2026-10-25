@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
@@ -128,7 +129,11 @@ impl EmbeddedSession {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || pump(reader, tx));
         Ok(Self {
-            parser: vt100::Parser::new(rows, cols, 1000),
+            parser: vt100::Parser::new(
+                NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN),
+                NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN),
+                1000,
+            ),
             rx,
             writer,
             master: pair.master,
@@ -170,7 +175,7 @@ impl EmbeddedSession {
             for col in 0..self.cols {
                 match screen.cell(row, col) {
                     Some(cell) => line.push(AgentCell {
-                        text: cell.contents(),
+                        text: cell.contents().to_string(),
                         fg: map_color(cell.fgcolor()),
                         bg: map_color(cell.bgcolor()),
                         bold: cell.bold(),
@@ -190,9 +195,21 @@ impl EmbeddedSession {
         out
     }
 
-    /// Send raw bytes to the agent. Failures are ignored — a dead child is
-    /// reported by `poll_exit` on the next tick, not by a write error here.
+    /// Scroll the visible window through history: positive looks back, negative
+    /// returns toward the live tail. Clamped at zero; vt100 clamps the top
+    /// to the actual scrollback size.
+    pub fn scroll(&mut self, delta: i32) {
+        let current = self.parser.screen().scrollback() as i32;
+        let next = (current + delta).max(0) as usize;
+        self.parser.screen_mut().set_scrollback(next);
+    }
+
+    /// Send raw bytes to the agent. Typing jumps back to the live tail, so a
+    /// reply never lands on a history view the user is reading. Failures are
+    /// ignored — a dead child is reported by `poll_exit` on the next tick,
+    /// not by a write error here.
     pub fn write(&mut self, bytes: &[u8]) {
+        self.parser.screen_mut().set_scrollback(0);
         use std::io::Write as _;
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
@@ -203,6 +220,8 @@ impl EmbeddedSession {
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let cols = cols.max(2);
         let rows = rows.max(1);
+        let nonzero_cols = NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN);
+        let nonzero_rows = NonZeroU16::new(rows).unwrap_or(NonZeroU16::MIN);
         if cols == self.cols && rows == self.rows {
             return;
         }
@@ -215,7 +234,7 @@ impl EmbeddedSession {
             pixel_height: 0,
         };
         let _ = self.master.resize(size);
-        self.parser.set_size(rows, cols);
+        self.parser.set_size(nonzero_rows, nonzero_cols);
     }
 
     /// Non-blocking exit check. `Some` once, when the child just died: the
@@ -262,18 +281,16 @@ fn pump(mut reader: Box<dyn Read + Send>, tx: mpsc::Sender<Vec<u8>>) {
 }
 
 /// A keypress as pty bytes. `None` means "the app handles it": `Esc`
-/// unfocuses the box. Everything else is agent input — including `Ctrl-C`
-/// (0x03, the interrupt the agent expects) and `q`, `?`, `R`. The caller
-/// routes: focused on a running agent the bytes go to the pty, otherwise the
-/// key goes to the app (where Ctrl-C quits).
+/// unfocuses the box, `Tab`/`BackTab` cycle panes, `Ctrl-C` handled by the
+/// caller (interrupt when focused, quit otherwise). Everything else is agent
+/// input — including `q`, `?` and `R`. The caller routes: focused on a
+/// running agent the bytes go to the pty, otherwise the key goes to the app.
 pub fn key_to_pty(key: &Key) -> Option<Vec<u8>> {
     match key {
-        Key::Esc => None,
+        Key::Esc | Key::Tab | Key::BackTab => None,
         Key::CtrlC => Some(vec![0x03]),
         Key::Enter => Some(b"\r".to_vec()),
         Key::Backspace => Some(vec![0x7f]),
-        Key::Tab => Some(b"\t".to_vec()),
-        Key::BackTab => Some(b"\x1b[Z".to_vec()),
         Key::Up => Some(b"\x1b[A".to_vec()),
         Key::Down => Some(b"\x1b[B".to_vec()),
         Key::Right => Some(b"\x1b[C".to_vec()),

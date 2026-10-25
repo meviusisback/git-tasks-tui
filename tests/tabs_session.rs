@@ -397,7 +397,7 @@ fn the_live_agent_screen_reaches_the_box() {
     }
     assert!(out.contains("hello-agent"), "live cells paint:\n{out}");
     assert!(
-        out.contains("typing goes to the agent"),
+        out.contains("type to agent"),
         "the legend owns the focused-running keys:\n{out}"
     );
 }

@@ -97,8 +97,12 @@ fn legend_while_running_names_typing_not_app_keys() {
     };
     let legend = app.legend();
     assert!(
-        legend.contains("typing goes to the agent"),
-        "focused + running: keys go to the pty: {legend}"
+        legend.contains("Esc/Tab panes"),
+        "focused + running: Tab leaves the box too: {legend}"
+    );
+    assert!(
+        legend.contains("wheel scrolls"),
+        "the wheel reads history, not input: {legend}"
     );
     assert!(
         !legend.contains("q quit"),

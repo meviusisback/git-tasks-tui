@@ -9,7 +9,7 @@ disagree, the handler is right and this file is a bug.
 | `Ctrl-C` | quit — the escape hatch, always live, except with the agent focused, where it interrupts the agent |
 | `Esc` | back **one level**: overlay → confirmation → search → agent → detail → list → repos. It **never quits**: at the outermost level it says `Esc — nothing to close` in the status line |
 | `?` | the overlay of keys (it says which work today and which are promised) |
-| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, skipping the empty agent box. The mouse is not supported — keyboard only |
+| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, skipping the empty agent box. The mouse wheel scrolls the agent box history |
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while an agent runs (for people who expect it) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
 | `Enter` | in the repos pane: drill into that repo's items; in the list: open a tab for the row (the detail follows the active tab); in the search box: leave the box |
@@ -30,9 +30,11 @@ is always off, so neither is reachable from the keyboard yet.
 
 `g` starts the agent **inside the agent box** (bottom-right): the program never
 closes, the agent streams into the pane. While the box has focus every key but
-`Esc` is agent input — typing, arrows, `Ctrl-C` (interrupt). `Esc` unfocuses back
-to the panes and the agent keeps running; quitting kills it. A finished run
-leaves its record card in the detail column.
+`Esc` and `Tab` is agent input — typing, arrows, `Ctrl-C` (interrupt). `Esc`
+unfocuses, `Tab` cycles panes, the agent keeps running either way. The mouse
+wheel scrolls the box back through history; typing jumps back to the live
+tail. Quitting kills the agent. A finished run leaves its record card in the
+detail column.
 
 `m`, `s` are **planned, not implemented** — and the overlay announces
 exactly these two, in its own section ("coming in the next stages"), with the
