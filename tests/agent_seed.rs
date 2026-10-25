@@ -29,7 +29,11 @@ fn a_symlink_at_every_candidate_name_is_never_followed() {
     let dir = tmp.path().join("gtasks");
     ensure_runtime_dir(&dir).unwrap();
     assert_eq!(
-        std::fs::symlink_metadata(&dir).unwrap().permissions().mode() & 0o7777,
+        std::fs::symlink_metadata(&dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
         0o700
     );
 

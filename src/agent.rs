@@ -257,7 +257,10 @@ pub fn next_step(worktree: PathBuf) -> AgentNext {
 /// `hermes -p <profile> chat --query-file <seed> --in <worktree>`: every part
 /// is generated or validated, none is user text. The seed travels as a path,
 /// so the prompt body — which may start with `-` — can never land in flag
-/// position. Built through the same [`CheckedArgv`] gate as every spawn.
+/// position. `--ignore-rules` always: the agent must not inherit the rules
+/// of the repository the seed came from — those files are attacker-influenced
+/// (anyone can open a PR touching them) while the seed fence only covers the
+/// issue text. Built through the same [`CheckedArgv`] gate as every spawn.
 pub fn agent_argv(
     hermes: &Path,
     profile: &str,
@@ -274,6 +277,7 @@ pub fn agent_argv(
             seed.as_os_str().to_os_string(),
             "--in".into(),
             worktree.as_os_str().to_os_string(),
+            "--ignore-rules".into(),
         ],
         // No allowlist here: the interactive child inherits the whole
         // environment in `run_interactive` (it is the user's session).
