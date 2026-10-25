@@ -342,6 +342,29 @@ round trip; they are written here so the next stage does not pay again.
   allowlisted) and the signal handlers ("belong to the same restore" — they
   already ended in `Drop`). Both cost a round of deciding to apply something
   already applied. Ten minutes of measuring beats a day of believing.
+- **A comment that claims behaviour says whether it was measured.** A comment is
+  the only place where a false statement makes no noise: wrong code fails a test,
+  wrong prose fails a person a round later, and twice in one day it cost exactly
+  that. So every comment that asserts behaviour — the ones a reader could act on —
+  carries one of two words:
+
+  ```rust
+  // measured: <how>          <- it happened, and this is the observation
+  // unverified: <why not>    <- believed, not proven
+  ```
+
+  Measured 2026-10-25 on this tree: 134 comment lines in `src/` make an absolute
+  behavioural claim (`always` / `never` / `must`), and 10 have evidence within two
+  lines. **The measurement is an indicator, not a census** — the window is two
+  lines, so a proof living elsewhere in the file is not counted, and some `must`
+  sentences state an API requirement rather than an observable. The true figure is
+  somewhere below 92%, which is the point: not that people are careless, but that
+  nobody can follow a rule that is not written. The threshold for applying it is
+  the second half of the rule: only claims whose falsity would change what a
+  reader decides. `the demo fallback must always be usable` already has a
+  `debug_assert!` and a test, so it is `measured:` — and the day the test
+  disappears the marker stays there, lying, where everyone can see it.
+
 - **A valid config is not a working config.** `validate()` says the values are
   inside their ranges; it does not say the program can do its job with them.
   Measured 2026-10-25: after a migration the config was *valid* (the key was
