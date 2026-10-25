@@ -14,19 +14,34 @@ cd "$(git rev-parse --show-toplevel)"
 # person who remembers to. Measured 2026-10-25: a refused commit went out
 # because the push was invoked without the flag, and the guard never ran.
 # So the gate checks that the guards are installed, and fails loudly if not.
-hooks_missing=no
-for hook in commit-msg pre-push; do
-    if [ ! -x ".githooks/$hook" ]; then
-        echo "gate: .githooks/$hook is not executable — git would skip it silently" >&2
-        hooks_missing=yes
+#
+# `--check-hooks` runs only this block, so the check itself can be exercised in
+# both directions by tests/invariants/guards.sh without paying for a build:
+# a check nobody can call cannot be proven to bite.
+check_hooks() {
+    status=0
+    for hook in commit-msg pre-push; do
+        if [ ! -x ".githooks/$hook" ]; then
+            echo "gate: .githooks/$hook is not executable — git would skip it silently" >&2
+            status=1
+        fi
+    done
+    configured=$(git config --get core.hooksPath 2>/dev/null || true)
+    if [ "$configured" != "$(pwd)/.githooks" ] && [ "$configured" != ".githooks" ]; then
+        echo "gate: core.hooksPath is '${configured:-<unset>}' — the guards are not installed here." >&2
+        echo "gate: run sh scripts/install-hooks.sh in this clone, then re-run." >&2
+        status=1
     fi
-done
-configured=$(git config --get core.hooksPath 2>/dev/null || true)
-if [ "$configured" != "$(pwd)/.githooks" ] && [ "$configured" != ".githooks" ]; then
-    echo "gate: core.hooksPath is '${configured:-<unset>}' — the guards are not installed here." >&2
-    echo "gate: run sh scripts/install-hooks.sh in this clone, then re-run." >&2
-    hooks_missing=yes
+    return "$status"
+}
+
+if [ "${1:-}" = "--check-hooks" ]; then
+    if check_hooks; then echo "gate: the guards are installed here"; exit 0; fi
+    exit 1
 fi
+
+hooks_missing=no
+check_hooks || hooks_missing=yes
 
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
