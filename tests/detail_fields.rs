@@ -135,13 +135,23 @@ fn empty_fields_are_omitted_never_blank() {
     item.url.clear();
     item.repo.clear();
     let rows = item.detail_fields(NEW_YEAR);
-    assert_eq!(rows, vec!["#12 Add widget", "state: OPEN"]);
+    // A PR with no checks says "none" — the rollup was asked for (FIELDS_PR),
+    // so zero is a datum, not an absence.
+    assert_eq!(
+        rows,
+        vec!["#12 Add widget", "state: OPEN", "checks: 0 passed"]
+    );
     for row in &rows {
         assert!(
             !row.ends_with(':'),
             "a blank field would claim \"none\": {row:?}"
         );
     }
+    // An issue is never asked for checks (FIELDS_ISSUE excludes the rollup):
+    // there the line is omitted — "never asked" is not "none".
+    item.kind = ItemKind::Issue;
+    let rows = item.detail_fields(NEW_YEAR);
+    assert_eq!(rows, vec!["#12 Add widget", "state: OPEN"]);
 }
 
 #[test]

@@ -197,8 +197,11 @@ impl App {
         self.list_cursor = self.list_cursor.min(list.saturating_sub(1));
     }
 
-    /// Take the result of a fetch. Repo order is preserved, so the list does
-    /// not reshuffle between refreshes.
+    /// Take the result of a fetch. Two facts keep the cursor honest: a refresh
+    /// keeps the repo order, and a new list resets the cursor (see
+    /// `set_repos`). Together they mean no index survives a reorder — so
+    /// `RepoFilter` is the only representation of "which repo", and there is
+    /// no second copy to fall out of sync.
     pub fn apply_outcome(&mut self, outcome: FetchOutcome) {
         let FetchOutcome { items, failures } = outcome;
         self.items = items;
