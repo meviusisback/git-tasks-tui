@@ -14,7 +14,7 @@ disagree, the handler is right and this file is a bug.
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
 | `Enter` | in the repos pane: drill into that repo's items; in the list: open a tab for the row (the detail follows the active tab); in the search box: leave the box |
-| `t` / `T` | next / previous tab (says `no tabs — Enter opens one` when empty) |
+| `t` / `T` | next / previous tab — navigation never touches the repo selection on the left |
 | `x` / `X` | close the active tab first, then the agent record |
 | `w` | focus the agent pane (worktree + agent instructions live there) |
 | `R` | repo selection menu: `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
@@ -25,9 +25,9 @@ disagree, the handler is right and this file is a bug.
 | `a` | ask to act on the selected PR: opens a confirmation showing the exact command |
 | `y` | in the confirmation: run the command |
 | `n` / `Esc` | in the confirmation: cancel — nothing runs |
+| `m` | actions menu on the list only (elsewhere it refuses): method and branch deletion are a choice, then the same confirmation as `a` |
 | `g` | choose the agent + worktree for the selected PR: first the agent menu (hermes, pi, omp, opencode, agy — only installed ones), then the worktree — use an existing tree, `n` name a new parallel one (head branch suggested), `r` rename, `d` delete (asks first, the branch stays) |
 | `W` | the worktree menu directly, without the agent flow: the same list/use/new/rename/delete for the selected PR; picking a tree for work leads to the agent menu with that tree preset. With the repos pane focused, `W` grows a tree instead: branch suggested (`<repo>-dev`, editable), agent menu follows, confirming asks the creation question and launches |
-| `t` / `T` | next / previous tab — navigation never touches the repo selection on the left |
 | `s` | settings menu: `↑`/`↓` move, `Enter`/`Space` flips, `Esc` closes — sandboxed agents, terminal font size (Small/Medium/Large), terminal font. Saved to `config.toml`; the font rows also rewrite the Foot `font=` line (restart the terminal to apply) |
 | click on a tab | opens it (same strip the keyboard uses; separators switch nothing, clicks while a dialog is open are ignored) |
 

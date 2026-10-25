@@ -80,7 +80,7 @@ const HELP_NOW: &[&str] = &[
     "W          worktrees: use one on a PR · create one on a repo",
     "/          filter the visible list · r refresh",
     "a          first action on the selected item",
-    "m          actions menu: method and branch deletion are a choice",
+    "m          actions menu (list only): method and branch deletion are a choice",
     "?          this keymap · s settings",
     "q          quit",
     "Ctrl-C     quit — or interrupt the agent when it has focus",

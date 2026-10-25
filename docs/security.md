@@ -55,6 +55,9 @@ Never `--yolo`, `--accept-hooks`, `--tui`, `--oneshot`. Default `--ignore-rules`
 `--safe-mode` offered for a first run in a fresh clone. Also forbidden: `--worktree`/`-w` (Hermes
 would create a worktree inside the repo, bypassing S5) and `-c`/`--continue`/`-r`/`--resume`
 (restore a recorded cwd). `-p <profile>` validated `^[a-z0-9][a-z0-9_-]{0,63}$`. Approvals stay on.
+The one exception is the opt-in `sandbox_agents` setting: inside the `<agent>-sandboxed` bubblewrap
+containment, omp launches with `--approval-mode yolo` (opencode/agy carry theirs in the wrapper,
+hermes keeps Smart approvals, pi has no such flag) — non-interactive only ever inside containment.
 
 ## S8 — Seed is data, not instructions
 Seed = `repo#N` + URL + the user's own note, fenced as UNTRUSTED. No title, no body (the agent reads
