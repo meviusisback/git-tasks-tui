@@ -332,7 +332,14 @@ where work survives.
 2. **`last_repo` must not come back.** It has been added and removed twice. The
    fact that makes it unnecessary — *every* writer of the repo list resets the
    cursor — belongs in a comment on `set_repos`, not on the clamp.
-3. **The estate of `RepoFilter`.** It was not removed: it is derived from
+3. **`set_repos` does not refresh the status line.** The sentence is composed in
+   `apply_repo_filter` only, so a list rebuilt elsewhere leaves the previous
+   status on screen — the one part of the screen that does not restart with the
+   list. Today it is masked: the loop writes `selection saved — N repos` right
+   after, so the stale text is overwritten in the same frame. Fix the structure,
+   not the symptom: one `refresh_status()` called by both paths, so a third
+   caller cannot forget.
+4. **The estate of `RepoFilter`.** It was not removed: it is derived from
    `RepoRow` in exactly one place. Two names for two things (the row, the active
    filter) is the good outcome; a third representation would not be.
 
