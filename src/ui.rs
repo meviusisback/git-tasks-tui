@@ -101,21 +101,25 @@ pub fn view_for(app: &App) -> ViewModel {
         .iter()
         .map(|item| format!("#{} {}", item.number, item.title))
         .collect();
-    let detail = if app.detail.trim().is_empty() {
-        visible
-            .get(app.list_cursor)
-            .map(|item| {
-                format!(
-                    "#{} {}\n\nstate: {}\nrepo: {}\nurl: {}",
-                    item.number, item.title, item.state, item.repo, item.url
-                )
-            })
-            .unwrap_or_default()
-    } else {
-        app.detail.clone()
-    };
+    // Structured fields from the item, always; the fetched body below them
+    // when it exists. A missing field is omitted, never blank.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let detail = visible
+        .get(app.list_cursor)
+        .map(|item| {
+            let mut text = item.detail_fields(now).join("\n");
+            if !app.detail.trim().is_empty() {
+                text.push_str("\n\n");
+                text.push_str(&app.detail);
+            }
+            text
+        })
+        .unwrap_or_default();
     ViewModel {
-        repos: app.repos.clone(),
+        repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
         detail,
     }
@@ -284,7 +288,7 @@ fn draw_repo_menu(frame: &mut Frame, area: Rect, menu: &crate::app::RepoMenu) {
             } else {
                 "[ ]"
             };
-            ListItem::new(sanitize(&format!("{mark} {row}")))
+            ListItem::new(sanitize(&format!("{mark} {}", row.as_str())))
         })
         .collect();
     let list = List::new(items)

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use gtasks::actions;
+use gtasks::actions::RepoSlug;
 use gtasks::app::{App, Msg};
 use gtasks::binaries::Binaries;
 use gtasks::config::Config;
@@ -228,13 +229,33 @@ fn run_tui() -> anyhow::Result<()> {
         },
         None => State::default(),
     };
-    let selected = if state.selected_repos.is_empty() {
-        repos.clone()
+    let all: Vec<RepoSlug> = config
+        .repos
+        .iter()
+        .map(|repo| RepoSlug::parse(repo).expect("config validated at load"))
+        .collect();
+    let mut skipped = 0;
+    let selected: Vec<RepoSlug> = state
+        .selected_repos
+        .iter()
+        .filter_map(|repo| match RepoSlug::parse(repo) {
+            Ok(slug) => Some(slug),
+            Err(_) => {
+                skipped += 1;
+                None
+            }
+        })
+        .collect();
+    if skipped > 0 {
+        tracing::warn!(skipped, "state file holds invalid slugs, ignored");
+    }
+    let shown = if selected.is_empty() {
+        all.clone()
     } else {
-        state.selected_repos.clone()
+        selected
     };
-    app.set_repos(selected);
-    app.all_repos = repos.clone();
+    app.set_repos(shown);
+    app.all_repos = all;
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
         repos.clone(),
@@ -295,12 +316,16 @@ fn run_tui() -> anyhow::Result<()> {
         // `R`: the key handler already updated the live list; the file is
         // the loop's job, atomically and 0600, like every private write.
         if let Some(selected) = app.selection_applied.take() {
+            let cleared = selected.is_empty();
             state.selected_repos = selected;
             match state_path.as_deref() {
                 Some(path) => match state.save(path) {
                     Ok(()) => {
-                        app.status =
+                        app.status = if cleared {
+                            "selection cleared — showing all repos".to_string()
+                        } else {
                             format!("selection saved ({} repos)", state.selected_repos.len())
+                        };
                     }
                     Err(err) => app.status = format!("cannot save selection: {err:#}"),
                 },

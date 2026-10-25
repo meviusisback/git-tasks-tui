@@ -29,6 +29,25 @@ pub enum RepoFilter {
     One(RepoSlug),
 }
 
+/// One row of the repos pane: the "everything" selector or one valid slug.
+/// The list is typed end to end — `set_repos` takes slugs, never strings —
+/// so no `parse` (and no `expect`) is left on the cursor path, and no magic
+/// string means "all".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoRow {
+    All,
+    Repo(RepoSlug),
+}
+
+impl RepoRow {
+    pub fn text(&self) -> &str {
+        match self {
+            RepoRow::All => "— all repos —",
+            RepoRow::Repo(slug) => slug.as_str(),
+        }
+    }
+}
+
 /// The keys the app cares about, independent of the terminal backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -79,7 +98,7 @@ pub enum Modal {
 /// `Space` toggles the row, `Enter` applies, `Esc` cancels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoMenu {
-    pub rows: Vec<String>,
+    pub rows: Vec<RepoSlug>,
     pub cursor: usize,
     pub marked: BTreeSet<usize>,
 }
@@ -102,10 +121,10 @@ pub struct App {
     pub items: Vec<Item>,
     /// The repos the user configured, plus a leading "all repos" entry, so a
     /// repo with no open items is still visible and selectable.
-    pub repos: Vec<String>,
+    pub repos: Vec<RepoRow>,
     /// Every configured repo, even when the list shows a subset: the rows
     /// the `R` menu offers. Set once at startup, never filtered.
-    pub all_repos: Vec<String>,
+    pub all_repos: Vec<RepoSlug>,
     /// The repo selected in the repos pane; `All` means "all".
     pub repo_filter: RepoFilter,
     /// Where the drill-down came from, by identity: `Esc` in a filtered
@@ -192,11 +211,19 @@ impl App {
         self.loading = false;
 
         // Keep the configured repos: a repo with no open items must still be
-        // visible, otherwise it looks like it was never configured.
+        // visible, otherwise it looks like it was never configured. Slugs
+        // that do not parse are left out of the list (their items still show
+        // under "all"): the fetch boundary is untrusted input.
         if self.repos.is_empty() {
             for item in &self.items {
-                if !self.repos.iter().any(|repo| repo == &item.repo) {
-                    self.repos.push(item.repo.clone());
+                let listed = self.repos.iter().any(|row| match row {
+                    RepoRow::Repo(slug) => slug.as_str() == item.repo,
+                    RepoRow::All => false,
+                });
+                if !listed {
+                    if let Ok(slug) = RepoSlug::parse(&item.repo) {
+                        self.repos.push(RepoRow::Repo(slug));
+                    }
                 }
             }
         }
@@ -216,28 +243,28 @@ impl App {
 
     /// Install the configured repos. Row 0 is "all repos", so the user can get
     /// back to the unfiltered list without leaving the pane.
-    pub fn set_repos(&mut self, repos: Vec<String>) {
-        self.repos = std::iter::once("— all repos —".to_string())
-            .chain(repos)
+    pub fn set_repos(&mut self, repos: Vec<RepoSlug>) {
+        self.repos = std::iter::once(RepoRow::All)
+            .chain(repos.into_iter().map(RepoRow::Repo))
             .collect();
         self.repos_cursor = 0;
         self.repo_filter = RepoFilter::All;
         self.set_lengths(self.repos.len(), self.visible_items().len());
+        // A new list means a new context: a body fetched for the previous
+        // one would say "this is the item you are looking at" about an item
+        // that may be gone — same discipline as `apply_repo_filter`.
+        self.detail.clear();
+        self.detail_for = None;
+        self.detail_requested = None;
     }
 
     /// Row 0 means "everything"; any other row filters the list to that repo.
-    /// The row text becomes a `RepoSlug` here, once: downstream only ever
-    /// sees `All` or a valid slug. Configured repos are validated at import
-    /// (`config`), so a failure here is a bug, not user input.
+    /// The row already is the type — no parse, no expect, no magic string.
     fn apply_repo_filter(&mut self) {
-        self.repo_filter = match self.repos_cursor {
-            0 => RepoFilter::All,
-            n => match self.repos.get(n) {
-                Some(row) => RepoFilter::One(
-                    RepoSlug::parse(row).expect("configured repos are validated at import"),
-                ),
-                None => RepoFilter::All,
-            },
+        self.repo_filter = match self.repos.get(self.repos_cursor) {
+            Some(RepoRow::Repo(slug)) => RepoFilter::One(slug.clone()),
+            // Row 0, or a cursor past the end after the list shrank.
+            _ => RepoFilter::All,
         };
         self.list_cursor = 0;
         self.set_lengths(self.repos.len(), self.visible_items().len());
@@ -358,12 +385,19 @@ impl App {
             return;
         }
         // The live list, minus the "all repos" row, is the current pick.
-        let live: Vec<&str> = self.repos.iter().skip(1).map(String::as_str).collect();
+        let live: Vec<&RepoSlug> = self
+            .repos
+            .iter()
+            .filter_map(|row| match row {
+                RepoRow::Repo(slug) => Some(slug),
+                RepoRow::All => None,
+            })
+            .collect();
         let marked: BTreeSet<usize> = self
             .all_repos
             .iter()
             .enumerate()
-            .filter(|(_, row)| live.contains(&row.as_str()))
+            .filter(|(_, slug)| live.contains(slug))
             .map(|(i, _)| i)
             .collect();
         self.modal = Some(Modal::RepoMenu(RepoMenu {
@@ -391,13 +425,18 @@ impl App {
     /// `Enter` in the repo menu: the checked rows become the selection. An
     /// empty check means "everything", like an empty state file. The list
     /// updates from the items already in memory; the loop saves the file.
-    fn apply_selection(&mut self, selected: Vec<String>) {
+    fn apply_selection(&mut self, selected: Vec<RepoSlug>) {
         let shown = if selected.is_empty() {
             self.all_repos.clone()
         } else {
             selected.clone()
         };
-        self.selection_applied = Some(selected);
+        self.selection_applied = Some(
+            selected
+                .iter()
+                .map(|slug| slug.as_str().to_string())
+                .collect(),
+        );
         self.modal = None;
         self.set_repos(shown);
     }
@@ -508,7 +547,7 @@ impl App {
                     Key::Char(' ') => self.menu_toggle(),
                     Key::Enter => {
                         if let Some(Modal::RepoMenu(menu)) = self.modal.take() {
-                            let selected: Vec<String> = menu
+                            let selected: Vec<RepoSlug> = menu
                                 .marked
                                 .iter()
                                 .filter_map(|i| menu.rows.get(*i).cloned())
@@ -594,11 +633,11 @@ impl App {
                 // drilled in, so an index could point at another repo.
                 Pane::List if matches!(self.repo_filter, RepoFilter::One(_)) => {
                     self.pane = Pane::Repos;
-                    match self
-                        .last_repo
-                        .as_ref()
-                        .and_then(|slug| self.repos.iter().position(|row| row == slug.as_str()))
-                    {
+                    match self.last_repo.as_ref().and_then(|slug| {
+                        self.repos
+                            .iter()
+                            .position(|row| matches!(row, RepoRow::Repo(s) if s == slug))
+                    }) {
                         Some(i) => self.repos_cursor = i,
                         // Gone: home to row 0, which also resets the filter
                         // (a cursor on "all" with a dead filter would show

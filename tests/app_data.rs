@@ -13,13 +13,16 @@ fn item(number: u64, title: &str, repo: &str) -> Item {
         is_draft: None,
         author: None,
         labels: Vec::new(),
+        assignees: Vec::new(),
         updated_at: "2026-10-20T10:00:00Z".into(),
         created_at: String::new(),
         url: format!("https://github.com/{repo}/pull/{number}"),
         head_ref_name: None,
+        base_ref_name: None,
         review_decision: None,
         mergeable: None,
         status_check_rollup: Vec::new(),
+        closing_issues_references: Vec::new(),
         repo: repo.to_string(),
         kind: ItemKind::Pr,
     }
@@ -48,7 +51,7 @@ fn a_finished_fetch_fills_the_state_and_keeps_repo_order() {
     assert!(!app.loading, "the spinner stops when data arrives");
     assert_eq!(app.items.len(), 3);
     assert_eq!(
-        app.repos,
+        app.repos.iter().map(|r| r.text()).collect::<Vec<_>>(),
         vec!["acme/one", "acme/two"],
         "unique, first-seen order"
     );

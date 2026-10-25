@@ -16,10 +16,10 @@ use crate::model::{Item, ItemKind, parse_list};
 pub const DEFAULT_LIMIT: usize = 100;
 
 /// Fields for pull requests. Fixed here, never user-supplied.
-pub const FIELDS_PR: &str = "number,title,state,updatedAt,createdAt,url,isDraft,author,labels,headRefName,reviewDecision,mergeable,statusCheckRollup";
+pub const FIELDS_PR: &str = "number,title,state,updatedAt,createdAt,url,isDraft,author,labels,assignees,headRefName,baseRefName,reviewDecision,mergeable,statusCheckRollup,closingIssuesReferences";
 
 /// Fields for issues: the PR-only ones do not exist on issues.
-pub const FIELDS_ISSUE: &str = "number,title,state,updatedAt,createdAt,url,author,labels";
+pub const FIELDS_ISSUE: &str = "number,title,state,updatedAt,createdAt,url,author,labels,assignees";
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {

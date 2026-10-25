@@ -13,13 +13,16 @@ fn item(repo: &str, number: u64, title: &str) -> Item {
         is_draft: None,
         author: None,
         labels: Vec::new(),
+        assignees: Vec::new(),
         updated_at: "2026-10-20T10:00:00Z".into(),
         created_at: String::new(),
         url: format!("https://github.com/{repo}/pull/{number}"),
         head_ref_name: None,
+        base_ref_name: None,
         review_decision: None,
         mergeable: None,
         status_check_rollup: Vec::new(),
+        closing_issues_references: Vec::new(),
         repo: repo.to_string(),
         kind: ItemKind::Pr,
     }
@@ -27,7 +30,10 @@ fn item(repo: &str, number: u64, title: &str) -> Item {
 
 fn app_with_two_repos() -> App {
     let mut app = App::default();
-    app.set_repos(vec!["me/empty".to_string(), "me/busy".to_string()]);
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("me/empty").expect("valid slug"),
+        gtasks::actions::RepoSlug::parse("me/busy").expect("valid slug"),
+    ]);
     app.apply_outcome(gtasks::fetch::FetchOutcome {
         items: vec![item("me/busy", 7, "seven")],
         failures: Vec::new(),
@@ -39,7 +45,7 @@ fn app_with_two_repos() -> App {
 fn a_configured_repo_with_no_items_is_still_listed() {
     let app = app_with_two_repos();
     assert!(
-        app.repos.iter().any(|r| r == "me/empty"),
+        app.repos.iter().any(|r| r.text() == "me/empty"),
         "a repo with no open items disappeared from the pane: {:?}",
         app.repos
     );
@@ -48,7 +54,7 @@ fn a_configured_repo_with_no_items_is_still_listed() {
 #[test]
 fn the_first_row_shows_everything() {
     let app = app_with_two_repos();
-    assert_eq!(app.repos.first().map(String::as_str), Some("— all repos —"));
+    assert_eq!(app.repos.first().map(|r| r.text()), Some("— all repos —"));
     assert_eq!(app.visible_items().len(), 1);
 }
 
@@ -198,6 +204,17 @@ fn esc_in_the_repos_pane_with_a_filter_clears_it() {
 }
 
 #[test]
+fn set_repos_builds_typed_rows() {
+    // No strings cross this boundary: row 0 is All, the rest are Repo.
+    // Nothing downstream parses, and there is no sentinel to compare.
+    let app = app_with_two_repos();
+    let texts: Vec<&str> = app.repos.iter().map(|r| r.text()).collect();
+    assert_eq!(texts, vec!["— all repos —", "me/empty", "me/busy"]);
+    assert!(matches!(app.repos[0], gtasks::app::RepoRow::All));
+    assert!(matches!(app.repos[1], gtasks::app::RepoRow::Repo(_)));
+}
+
+#[test]
 fn esc_restores_the_repo_you_came_from() {
     // The list changed while drilled in (a refresh reordered it): the way
     // back must find the repo by identity, not replay the old index.
@@ -209,9 +226,13 @@ fn esc_restores_the_repo_you_came_from() {
     assert_eq!(app.pane, gtasks::app::Pane::List);
 
     app.repos = vec![
-        "— all repos —".to_string(),
-        "me/busy".to_string(), // moved to row 1
-        "me/other".to_string(),
+        gtasks::app::RepoRow::All,
+        gtasks::app::RepoRow::Repo(
+            gtasks::actions::RepoSlug::parse("me/busy").expect("valid slug"),
+        ),
+        gtasks::app::RepoRow::Repo(
+            gtasks::actions::RepoSlug::parse("me/other").expect("valid slug"),
+        ),
     ];
     app.update(Msg::Key(Key::Esc)); // drill out
     assert_eq!(app.pane, gtasks::app::Pane::Repos);
@@ -228,7 +249,12 @@ fn esc_falls_back_to_the_first_row_when_it_is_gone() {
     app.update(Msg::Key(Key::Down));
     app.update(Msg::Key(Key::Down)); // me/busy, row 2
     app.update(Msg::Key(Key::Enter)); // drill in
-    app.repos = vec!["— all repos —".to_string(), "me/other".to_string()];
+    app.repos = vec![
+        gtasks::app::RepoRow::All,
+        gtasks::app::RepoRow::Repo(
+            gtasks::actions::RepoSlug::parse("me/other").expect("valid slug"),
+        ),
+    ];
     app.update(Msg::Key(Key::Esc)); // drill out
     assert_eq!(app.pane, gtasks::app::Pane::Repos);
     assert_eq!(app.repos_cursor, 0);
