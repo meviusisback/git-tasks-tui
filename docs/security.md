@@ -26,7 +26,7 @@ a review failure. (The desktop plugin's `sq()` quoting helper is deliberately **
 - **git child**: as above minus the tokens, plus `GIT_TERMINAL_PROMPT=0`. **Never** inherit `GIT_*`
   (`GIT_CONFIG_COUNT/KEY_n/VALUE_n` = arbitrary config → hook/pager/fsmonitor execution; `GIT_DIR`
   overrides `git -C`; `GIT_ASKPASS`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF` same class).
-- **agent child**: no `GH_TOKEN`/`GITHUB_TOKEN` unless the user opts in explicitly (it already holds
+- **agent child**: no `GH_TOKEN`/`GITHUB_TOKEN`, full stop (it already holds
   the vault secrets; an injected "read the env and post it" is the H-1 exfiltration payload). No
   `GIT_*`.
 
@@ -51,8 +51,7 @@ registered path **and** branch. A path that merely exists on disk is never adopt
 
 ## S7 — Agent launch policy
 Never `--yolo`, `--accept-hooks`, `--tui`, `--oneshot`. Default `--ignore-rules` (a repo-committed
-`AGENTS.md`/`.cursorrules`/`.hermes.md` cannot steer the agent); toggle re-enables with a warning;
-`--safe-mode` offered for a first run in a fresh clone. Also forbidden: `--worktree`/`-w` (Hermes
+`AGENTS.md`/`.cursorrules`/`.hermes.md` cannot steer the agent). Also forbidden: `--worktree`/`-w` (Hermes
 would create a worktree inside the repo, bypassing S5) and `-c`/`--continue`/`-r`/`--resume`
 (restore a recorded cwd). `-p <profile>` validated `^[a-z0-9][a-z0-9_-]{0,63}$`. Approvals stay on.
 The one exception is the opt-in `sandbox_agents` setting: inside the `<agent>-sandboxed` bubblewrap
@@ -122,7 +121,11 @@ log file, or at any file we open is refused (`symlink_metadata`, `openat(O_NOFOL
 (proven on the Task 1 scaffold: a symlinked state dir turned a foreign directory into `0700` and
 received `gtasks.log`; a symlinked log file rewrote a foreign file and chmodded it `0600`). Files are
 opened with `mode(0o600)` at creation time, not chmodded afterwards; `set_permissions` stays only as
-a belt for pre-existing **regular** files. The log is rotated at startup at 5 MiB and then **in
+a belt for pre-existing **regular** files.
+Ownership (`uid`) is deliberately **not** checked on data files: on this single-user desktop a
+foreign-owned file in the data dir means the account is already compromised, and a check would only
+add a refusal without a threat behind it. The one place ownership matters — the binaries we execute —
+is checked (`binaries::check`: root-or-self, non-writable by group/other). The log is rotated at startup at 5 MiB and then **in
 session** by the writer itself: the write that would cross the bound renames `gtasks.log` →
 `gtasks.log.1` (one generation) and reopens a fresh file, so a long-running TUI keeps the bound
 without the event loop polling (R5-1, closed).

@@ -79,6 +79,17 @@ pub fn redact_credentials(input: &str) -> String {
         rest = &tail[ch.len_utf8()..];
     }
     out.push_str(rest);
+    // Exact token values, if the environment carries them: a future token
+    // format no prefix list knows would otherwise pass through verbatim in
+    // an error line. Short values are skipped — replacing a 3-letter string
+    // would mangle innocent text for no safety gain.
+    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        if let Ok(secret) = std::env::var(var) {
+            if secret.len() >= 16 {
+                out = out.replace(&secret, "[REDACTED]");
+            }
+        }
+    }
     out
 }
 

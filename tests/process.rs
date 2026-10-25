@@ -344,10 +344,10 @@ fn builders_produce_a_runnable_argv() {
     assert!(out.status.success(), "gh --version failed");
 }
 
-/// The untrusted transport refuses `gh` write verbs: a probe or a test that
-/// calls `run_pipe` with a real `gh` binary must not be able to execute a
-/// write for real. This is the guard that prevents a test from posting a
-/// comment to a live repository.
+/// The untrusted transport accepts only read-only `gh` pairs: a probe or a
+/// test that calls `run_pipe` with a real `gh` binary must not be able to
+/// execute a write for real. This is the guard that prevents a test from
+/// posting a comment to a live repository.
 #[test]
 fn untrusted_transport_refuses_gh_write_verbs() {
     let tmp = tempfile::tempdir().unwrap();
@@ -365,13 +365,14 @@ fn untrusted_transport_refuses_gh_write_verbs() {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("refusing write verb"),
+            err.contains("refusing gh subcommand"),
             "gh pr {verb} must be refused by the untrusted transport: {err}"
         );
     }
 }
 
-/// The guard also catches `gh api`, which can write via `--method POST`.
+/// The guard also catches `gh api`, which can write via `--method POST`,
+/// and every other non-read pair (`auth`, `extension`, …).
 #[test]
 fn untrusted_transport_refuses_gh_api() {
     let tmp = tempfile::tempdir().unwrap();
@@ -386,7 +387,7 @@ fn untrusted_transport_refuses_gh_api() {
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("refusing write verb"),
+        err.contains("refusing gh subcommand"),
         "gh api must be refused: {err}"
     );
 }

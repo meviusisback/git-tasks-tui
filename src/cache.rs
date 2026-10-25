@@ -81,13 +81,16 @@ pub fn resolve(cached: Option<BodyCache>, updated_at: &str) -> Resolve {
 
 /// `dir/<owner>/<name>/<number>.<kind>.json`, `kind` being `body` or `diff`.
 /// The slash in `owner/name` becomes real subdirectories; a broken file is
-/// `None`, never an error.
-fn pane_path(dir: &Path, repo: &str, number: u64, kind: &str) -> std::path::PathBuf {
-    dir.join(repo).join(format!("{number}.{kind}.json"))
+/// `None`, never an error. The repo is re-validated here — not just at the
+/// callers — so a `..` or an absolute path can never escape `dir` no matter
+/// who calls this boundary next.
+fn pane_path(dir: &Path, repo: &str, number: u64, kind: &str) -> Option<std::path::PathBuf> {
+    crate::config::validate_repo_slug(repo).ok()?;
+    Some(dir.join(repo).join(format!("{number}.{kind}.json")))
 }
 
 fn load_pane(dir: &Path, repo: &str, number: u64, kind: &str) -> Option<BodyCache> {
-    let text = crate::config::read_private(&pane_path(dir, repo, number, kind)).ok()?;
+    let text = crate::config::read_private(&pane_path(dir, repo, number, kind)?).ok()?;
     serde_json::from_str(&text).ok()
 }
 
@@ -109,7 +112,9 @@ fn save_pane(
         text: text.to_string(),
     })
     .context("cannot serialize the body cache")?;
-    crate::config::write_private(&pane_path(dir, repo, number, kind), payload.as_bytes())
+    let path = pane_path(dir, repo, number, kind)
+        .ok_or_else(|| anyhow::anyhow!("refusing to cache an invalid repo: {repo:?}"))?;
+    crate::config::write_private(&path, payload.as_bytes())
 }
 
 /// Read the cached body, if any.

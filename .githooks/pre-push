@@ -104,8 +104,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
             fi
         else
             echo "pre-push: the remote could not be reached; the tag was not verified against it." >&2
+            echo "pre-push: refusing — an unverified tag is not a published tag." >&2
+            status=1
         fi
-        echo "pre-push: $local_sha carries $(echo "$tags" | tr '\n' ' ')- the tag is published on this commit; the verdict is a human step."
+        if [ "$status" = 0 ]; then
+            echo "pre-push: $local_sha carries $(echo "$tags" | tr '\n' ' ')- the tag is published on this commit; the verdict is a human step."
+        fi
     fi
 done
 exit "$status"

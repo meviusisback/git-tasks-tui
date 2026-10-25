@@ -345,6 +345,36 @@ pub struct CreatedWorktree {
     pub branch: BranchName,
 }
 
+/// Delete the worktree on disk (`git worktree remove --force`): the typed
+/// path, so the `--force` the untrusted transport refuses reaches the child.
+/// The caller (the TUI) owns the session/record bookkeeping; this owns the
+/// spawn, which is what the regression test drives.
+pub fn remove_tree(
+    binaries: &crate::binaries::Binaries,
+    order: &WorktreeDelete,
+) -> anyhow::Result<()> {
+    let remove = remove_argv(binaries, &order.clone, &order.path);
+    let out = run_mutation(&remove, std::time::Duration::from_secs(60))?;
+    anyhow::ensure!(
+        out.status.success(),
+        "cannot delete the worktree: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(())
+}
+
+/// Run a worktree-mutating `git` argv (create/rename/move/remove): the typed
+/// path, so `--force` on `worktree remove` survives the untrusted
+/// transport's refusal instead of failing every delete closed. Only fixed
+/// builders call this — the argv was composed by `git()` above, never by
+/// user input — which is exactly what `from_checked` vouches for.
+pub fn run_mutation(
+    argv: &crate::gh::Argv,
+    timeout: std::time::Duration,
+) -> anyhow::Result<crate::gh::Output> {
+    crate::gh::run_checked(&crate::gh::CheckedArgv::from_checked(argv.clone()), timeout)
+}
+
 /// Create a worktree for `branch` under `root`, or refuse without touching
 /// anything outside it.
 ///
@@ -442,7 +472,7 @@ pub fn create(
             branch.as_str().into(),
         ],
     );
-    let out = crate::gh::run_pipe(&argv, Duration::from_secs(60))
+    let out = run_mutation(&argv, Duration::from_secs(60))
         .with_context(|| format!("cannot run git worktree add for {}", target.display()))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);

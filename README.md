@@ -13,8 +13,9 @@ The keymap is in [`docs/keys.md`](docs/keys.md); the agent contract in
 - Follow repositories (`R` menu, saved to `state.json`); one list across repos with search.
 - Tabs: `Enter` opens a tab per row, `t`/`T` cycle. Navigating tabs never reshapes the left column.
 - Detail pane per item: state pill, meta table (author, branch, checks, review, …), separate
-  `DESCRIPTION` section. Bodies and diffs load eagerly, are cached on disk (`details/`) and
-  revalidated in the background when `updated_at` changes.
+  `DESCRIPTION` section. Bodies preload as you move and are cached on disk (`details/`),
+  revalidated in the background when `updated_at` changes; diffs fetch on `d`
+  (once per item, then cached).
 - Diff overlay on the selected PR (`d`): additions green, removals red, first 200 lines.
 - Review actions without leaving the terminal: comment, approve, close/reopen, merge
   (merge/squash/rebase), branch deletion as a choice (`m` on the list, `a` for the first action).
@@ -52,7 +53,7 @@ cargo build --release       # ./target/release/gtasks
 
 ```toml
 repos = ["owner/repo"]       # followed repos (or pick them with R)
-clone_roots = ["~/repo"]     # local clones, tried in order
+clone_roots = ["/home/you/repo"]  # local clones, tried in order (no ~ expansion: absolute path)
 worktree_root = null         # worktree base (default: $XDG_DATA_HOME/gtasks/worktrees)
 agent_profile = "default"    # hermes -p profile for handoffs
 sandbox_agents = false       # launch via <agent>-sandboxed wrappers

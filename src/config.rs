@@ -167,14 +167,24 @@ pub fn read_foot_font(path: &Path) -> Option<(String, u32)> {
     None
 }
 
-/// Set the `font=` line to `family:size=px`, preserving every other line,
-/// the file mode and any `:style=` suffix. A symlink is refused (same rule
-/// as every private write). A missing file or missing line grows a minimal
+/// Set the `font=` line to `family:size=px`, preserving every other line
+/// and any `:size=` suffix. A missing file or missing line grows a minimal
 /// `[main]` section — Foot merges it with its defaults, so nothing else
 /// changes. Returns true when the file changed.
+///
+/// The write is atomic (temp file + rename) with mode 0600: a crash never
+/// leaves a half-written `foot.ini`, and a symlink swapped in at the target
+/// path is *replaced*, never followed. Ancestor symlinks are the user's own
+/// choice (stow-style setups link `~/.config` subdirs) and are left alone.
+/// The family allows no control characters: it is interpolated into the file,
+/// so a newline would inject extra lines across the trust boundary.
 pub fn set_foot_font(path: &Path, family: &str, px: u32) -> anyhow::Result<bool> {
     let family = family.trim();
     ensure!(!family.is_empty(), "font family must not be empty");
+    ensure!(
+        !family.chars().any(|c| c.is_control()),
+        "font family must not contain control characters: {family:?}"
+    );
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         ensure!(
             !meta.file_type().is_symlink(),
@@ -228,7 +238,39 @@ pub fn set_foot_font(path: &Path, family: &str, px: u32) -> anyhow::Result<bool>
     if text == old {
         return Ok(false);
     }
-    std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    // Atomic write, same discipline as the private files: a crash leaves the
+    // old file or the new one, never half of each. The temp file is created
+    // with `create_new` (no follow, no clobber) and renamed over the target —
+    // a symlink at the target is replaced, never followed, so even a swap
+    // between the check above and this write cannot redirect the bytes.
+    // A missing parent is created 0700; a missing file lands 0600.
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create {}", parent.display()))?;
+            #[cfg(unix)]
+            std::fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+                .with_context(|| format!("cannot chmod {}", parent.display()))?;
+        }
+    }
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(format!(".tmp-{}", std::process::id()));
+    let tmp_path = std::path::PathBuf::from(tmp);
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let mut f = opts
+            .open(&tmp_path)
+            .with_context(|| format!("cannot write {}", tmp_path.display()))?;
+        f.write_all(text.as_bytes())
+            .with_context(|| format!("cannot write {}", tmp_path.display()))?;
+        f.sync_all()
+            .with_context(|| format!("cannot sync {}", tmp_path.display()))?;
+    }
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("cannot replace {}", path.display()))?;
     Ok(true)
 }
 
@@ -249,20 +291,58 @@ pub fn parse_fc_list(output: &str) -> Vec<String> {
 
 /// The installed monospace families for the font toggle. A failed or empty
 /// query falls back to `monospace` — the toggle always has somewhere to go.
+/// The binary is resolved once (no bare-PATH spawn), runs with a cleared
+/// environment, and is killed after five seconds: a hung fontconfig must not
+/// hang TUI startup.
 pub fn mono_fonts() -> Vec<String> {
-    let output = std::process::Command::new("fc-list")
+    let program = match crate::binaries::resolve("fc-list") {
+        Ok(p) => p,
+        Err(_) => return vec!["monospace".to_string()],
+    };
+    let mut child = match std::process::Command::new(&program)
         .args([":spacing=mono", "family"])
-        .output();
-    match output {
-        Ok(out) if out.status.success() => {
-            let fonts = parse_fc_list(&String::from_utf8_lossy(&out.stdout));
-            if fonts.is_empty() {
-                vec!["monospace".to_string()]
-            } else {
-                fonts
-            }
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return vec!["monospace".to_string()],
+    };
+    let timeout = std::time::Duration::from_secs(5);
+    let mut stdout = child.stdout.take();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let done = stdout
+            .as_mut()
+            .map(|out| std::io::Read::read_to_end(out, &mut buf).is_ok())
+            .unwrap_or(false);
+        let _ = tx.send(done.then_some(buf));
+    });
+    // A hung fontconfig must not hang TUI startup: five seconds, then dead.
+    let buf = match rx.recv_timeout(timeout) {
+        Ok(Some(buf)) => buf,
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return vec!["monospace".to_string()];
         }
-        _ => vec!["monospace".to_string()],
+    };
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(_) => return vec!["monospace".to_string()],
+    };
+    if !status.success() {
+        return vec!["monospace".to_string()];
+    }
+    let fonts = parse_fc_list(&String::from_utf8_lossy(&buf));
+    if fonts.is_empty() {
+        vec!["monospace".to_string()]
+    } else {
+        fonts
     }
 }
 
@@ -319,6 +399,13 @@ impl Config {
             validate_profile(profile)?;
         }
         validate_profile(&self.agent_profile).context("invalid agent_profile")?;
+        if !self.font_family.trim().is_empty() {
+            ensure!(
+                !self.font_family.chars().any(|c| c.is_control()),
+                "font_family must be a single line without control characters: {:?}",
+                self.font_family
+            );
+        }
         Ok(())
     }
 

@@ -71,10 +71,29 @@ pub fn open_in_browser(program: &Path, url: &str) -> anyhow::Result<u32> {
     );
     let args = open_args(url)?;
     let mut cmd = Command::new(program);
+    // The browser subtree must not inherit our secrets: every other child
+    // gets a cleared room, and the launcher is no exception. It keeps only
+    // what a graphical browser needs to find its display and config.
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    cmd.env_clear();
+    for (key, value) in std::env::vars_os() {
+        let keep = matches!(
+            key.to_string_lossy().as_ref(),
+            "PATH"
+                | "HOME"
+                | "DISPLAY"
+                | "WAYLAND_DISPLAY"
+                | "XDG_CURRENT_DESKTOP"
+                | "XDG_RUNTIME_DIR"
+                | "DBUS_SESSION_BUS_ADDRESS"
+        );
+        if keep {
+            cmd.env(key, value);
+        }
+    }
     // Same ETXTBSY window `run_pipe` handles (F-1): harmless in production, but
     // a test that writes a launcher and runs it immediately hits it.
     let mut child = crate::gh::spawn_retry(&mut cmd, program)?;

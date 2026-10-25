@@ -210,6 +210,8 @@ fn start_agent(
 /// no longer matches the branch name, and re-deriving the path would point
 /// at a directory that was never created. If the tree vanished meanwhile,
 /// it falls back to the creation question instead of failing silently.
+/// The path is re-validated at launch (not a symlink, still under the root):
+/// the menu row was recorded earlier and the disk may have changed since.
 fn start_placed(
     app: &mut App,
     plan: AgentPlan,
@@ -220,6 +222,15 @@ fn start_placed(
     // One agent at a time, same as every other launch.
     if session.is_some() {
         app.status = "an agent is already running in the box below".to_string();
+        return;
+    }
+    if !agent::placed_ok_in(&path, app.worktree_root.as_deref()) {
+        let question = format!(
+            "no worktree for {}@{} — create it and start the agent?",
+            plan.repo, plan.branch,
+        );
+        app.modal = Some(Modal::Confirm(question));
+        app.pending = Some(Pending::Agent(plan, path));
         return;
     }
     match agent::next_step(path) {
@@ -260,7 +271,7 @@ fn rename_worktree(
         &order.old_branch,
         &order.new_branch,
     );
-    match gtasks::gh::run_pipe(&rename, std::time::Duration::from_secs(60)) {
+    match gtasks::worktree::run_mutation(&rename, std::time::Duration::from_secs(60)) {
         Ok(out) if out.status.success() => {}
         Ok(out) => {
             app.status = format!(
@@ -275,7 +286,7 @@ fn rename_worktree(
         }
     }
     let mv = gtasks::worktree::move_argv(binaries, &order.clone, &order.old_path, &order.new_path);
-    match gtasks::gh::run_pipe(&mv, std::time::Duration::from_secs(60)) {
+    match gtasks::worktree::run_mutation(&mv, std::time::Duration::from_secs(60)) {
         Ok(out) if out.status.success() => {
             if let Some(record) = app.agent_record.as_mut() {
                 if record.worktree == order.old_path {
@@ -313,9 +324,8 @@ fn delete_worktree(
         app.status = "an agent is still running in that worktree".to_string();
         return;
     }
-    let remove = gtasks::worktree::remove_argv(binaries, &order.clone, &order.path);
-    match gtasks::gh::run_pipe(&remove, std::time::Duration::from_secs(60)) {
-        Ok(out) if out.status.success() => {
+    match gtasks::worktree::remove_tree(binaries, &order) {
+        Ok(()) => {
             if let Some(record) = app.agent_record.as_ref() {
                 if record.worktree == order.path {
                     app.agent_record = None;
@@ -326,12 +336,6 @@ fn delete_worktree(
                 "deleted worktree {} (branch {} kept)",
                 order.path.display(),
                 order.branch
-            );
-        }
-        Ok(out) => {
-            app.status = format!(
-                "cannot delete the worktree: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
             );
         }
         Err(err) => {

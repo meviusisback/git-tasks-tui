@@ -614,7 +614,7 @@ fn state_pill(item: &crate::model::Item) -> (String, Style) {
         "OPEN" => ("● OPEN".to_string(), bold(theme::OK)),
         "MERGED" => ("● MERGED".to_string(), bold(theme::MAUVE)),
         "CLOSED" => ("● CLOSED".to_string(), bold(theme::ALERT)),
-        other => (format!("● {other}"), bold(theme::SUBTEXT)),
+        other => (format!("● {}", sanitize(other)), bold(theme::SUBTEXT)),
     }
 }
 
@@ -688,7 +688,7 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
     }
     title.push(Span::styled(icon, number_style));
     title.push(Span::styled(
-        format!("#{} {}", item.number, item.title),
+        format!("#{} {}", item.number, sanitize(&item.title)),
         theme::overlay_text().add_modifier(Modifier::BOLD),
     ));
     lines.push(Line::from(title));
@@ -700,7 +700,7 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
                 format!("{:label_width$} : ", field.label),
                 Style::default().fg(theme::SUBTEXT),
             ),
-            Span::styled(field.value.clone(), field_style(field.tone)),
+            Span::styled(sanitize(&field.value), field_style(field.tone)),
         ]));
     }
     lines.push(Line::from(""));

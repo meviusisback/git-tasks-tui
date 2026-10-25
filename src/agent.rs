@@ -348,10 +348,40 @@ pub enum AgentNext {
 }
 
 pub fn next_step(worktree: PathBuf) -> AgentNext {
-    match std::fs::symlink_metadata(worktree.join(".git")) {
-        Ok(meta) if !meta.file_type().is_symlink() => AgentNext::Launch(worktree),
-        _ => AgentNext::AskToCreate(worktree),
+    if placed_ok_in(&worktree, None) {
+        AgentNext::Launch(worktree)
+    } else {
+        AgentNext::AskToCreate(worktree)
     }
+}
+
+/// True when `path` is safe to launch an agent in: the path itself is not a
+/// symlink (a swapped-in link would move the agent's cwd elsewhere), its
+/// `.git` marker is a real file-or-dir (not a link), and — when `root` is
+/// known — its canonical location stays under `root`. Anything else falls
+/// back to the creation question instead of launching elsewhere.
+pub fn placed_ok_in(path: &Path, root: Option<&Path>) -> bool {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if meta.file_type().is_symlink() {
+        return false;
+    }
+    match std::fs::symlink_metadata(path.join(".git")) {
+        Ok(m) if !m.file_type().is_symlink() => {}
+        _ => return false,
+    }
+    if let Some(root) = root {
+        let (canon_path, canon_root) = match (path.canonicalize(), root.canonicalize()) {
+            (Ok(p), Ok(r)) => (p, r),
+            _ => return false,
+        };
+        if !canon_path.starts_with(canon_root) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Build a `Finished` status from an exit code and an optional signal

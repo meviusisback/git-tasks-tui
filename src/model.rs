@@ -104,14 +104,22 @@ pub fn parse_list(json: &str) -> anyhow::Result<Vec<Item>> {
 
 /// Days since the civil date (Howard Hinnant's algorithm): the only calendar
 /// math `relative_time` needs, so "3 days ago" does not need a date crate.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
+/// Checked throughout: a garbage year from a hostile date must map to `None`,
+/// never panic (debug) or wrap (release).
+fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+    let y = if month <= 2 {
+        year.checked_sub(1)?
+    } else {
+        year
+    };
+    let era = if y >= 0 { y } else { y.checked_sub(399)? } / 400;
     let yoe = y - era * 400;
     let mp = (month + 9) % 12;
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
+    era.checked_mul(146097)?
+        .checked_add(doe)?
+        .checked_sub(719468)
 }
 
 fn parse_rfc3339_utc(text: &str) -> Option<u64> {
@@ -132,7 +140,7 @@ fn parse_rfc3339_utc(text: &str) -> Option<u64> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 60 {
         return None;
     }
-    let days = days_from_civil(y, m, day);
+    let days = days_from_civil(y, m, day)?;
     days.checked_mul(86_400)?
         .checked_add(hh * 3600 + mm * 60 + ss)
         .and_then(|s| u64::try_from(s).ok())

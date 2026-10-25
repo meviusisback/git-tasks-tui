@@ -2,8 +2,9 @@
 //!
 //! `CheckedArgv::unchecked_for_tests` exists because integration tests link the
 //! crate normally and cannot reach `from_checked`. `#[doc(hidden)]` hides it from
-//! the docs, not from the compiler, so the guard is a `debug_assert`: a misuse
-//! fails where it is written instead of quietly widening the door.
+//! the docs, not from the compiler, so the guard is an `assert`: a misuse
+//! fails where it is written instead of quietly widening the door — in every
+//! profile, not just debug.
 
 use std::ffi::OsString;
 use std::path::PathBuf;

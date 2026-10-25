@@ -83,67 +83,34 @@ pub fn is_forbidden_flag(flag: &str) -> bool {
     FORBIDDEN.contains(&flag)
 }
 
-/// `gh` subcommands that change state on the server. The untrusted transport
-/// ([`run_pipe`], [`run_pipe_with_caps`]) refuses any `gh` argv whose
-/// subcommand is here; the typed path ([`run_checked`]) carries them through
-/// [`CheckedArgv`], which only this crate's builders can construct.
+/// `gh` (group, subcommand) pairs the untrusted transport ([`run_pipe`],
+/// [`run_pipe_with_caps`]) accepts: read-only pairs. Everything else —
+/// `comment`, `merge`, `api`, `auth`, `config`, `extension`, `secret`,
+/// `workflow` and any future subcommand — is refused, so a future caller
+/// with a dynamic subcommand inherits a closed door, not a hole. Writes
+/// travel the typed path ([`run_checked`]).
 ///
 /// This guard exists because a probe or a test that calls the untrusted
 /// transport with a real `gh` binary would otherwise execute the write for
 /// real (a `pr comment` against a live repository is not undoable).
-const GH_WRITE_VERBS: &[&str] = &[
-    "comment",
-    "merge",
-    "close",
-    "reopen",
-    "approve",
-    "review",
-    "edit",
-    "delete",
-    "pin",
-    "lock",
-    "unlock",
-    "ready",
-    "draft",
-    "convert",
-    "set-base",
-    "set-maintainer",
-    "develop",
-    "clone",
-    "fork",
-    "archive",
-    "unarchive",
-    "transfer",
-    "create",
-    "sync",
-    "run",
-    "enable",
-    "disable",
-    "cancel",
-    "rerun",
-    "upload",
-    "publish",
-    "set",
-    "delete-asset",
-    "add",
-    "remove",
-    "rename",
-    "update",
-    "put",
-    "post",
-    "prune",
-    "checkout",
-    "apply",
-    "pull",
-    "push",
+const GH_READ_SUBCOMMANDS: &[(&str, &str)] = &[
+    ("pr", "view"),
+    ("pr", "diff"),
+    ("pr", "list"),
+    ("issue", "view"),
+    ("issue", "list"),
+    ("repo", "view"),
+    ("repo", "list"),
 ];
 
-/// True when `program` is `gh` and the argv's subcommand changes server state.
+/// True when `program` is `gh` and the argv is NOT one of the read-only
+/// pairs above. A bare introspection flag (`--version`, `--help`, no
+/// subcommand at all) is allowed: it changes no state.
 ///
-/// The subcommand is the second non-flag token: `gh pr comment 1 …` → `comment`.
-/// `gh api` is refused wholesale — it can write via `--method POST` and the
-/// untrusted path has no reason to call it.
-fn is_gh_write_verb(program: &Path, args: &[OsString]) -> bool {
+/// The subcommand is the second non-flag token: `gh pr comment 1 …` →
+/// (`pr`, `comment`). `gh api` is refused wholesale — it can write via
+/// `--method POST` and the untrusted path has no reason to call it.
+fn is_gh_refused(program: &Path, args: &[OsString]) -> bool {
     if program.file_name().map(|n| n != "gh").unwrap_or(true) {
         return false;
     }
@@ -151,12 +118,13 @@ fn is_gh_write_verb(program: &Path, args: &[OsString]) -> bool {
         .iter()
         .filter(|a| !a.to_string_lossy().starts_with('-'));
     let group = non_flags.next().map(|a| a.to_string_lossy().to_string());
-    if group.as_deref() == Some("api") {
-        return true;
-    }
-    match non_flags.next() {
-        Some(sub) => GH_WRITE_VERBS.contains(&sub.to_string_lossy().as_ref()),
-        None => false,
+    let sub = non_flags.next().map(|a| a.to_string_lossy().to_string());
+    match (group, sub) {
+        (None, _) => false,
+        (Some(g), Some(s)) => !GH_READ_SUBCOMMANDS
+            .iter()
+            .any(|(rg, rs)| *rg == g && *rs == s),
+        (Some(_), None) => true,
     }
 }
 
@@ -166,9 +134,9 @@ fn is_gh_write_verb(program: &Path, args: &[OsString]) -> bool {
 /// programmer assertion.
 ///
 /// Matching normalises on the `--flag=value` form: `--force=true` is refused
-/// like `--force`, and `--delete-branch` like `-d`. A short-flag cluster such as
-/// `-fd` is *not* decomposed — the long-term answer is an allowlist of the flags
-/// the app actually uses (T2-3b).
+/// like `--force`, and `--delete-branch` like `-d`. A short-flag cluster such
+/// as `-fd` is *not* decomposed — the `gh` subcommand allowlist above is the
+/// fail-closed answer for the server side (T2-3b).
 pub fn check_argv(argv: &Argv) -> anyhow::Result<()> {
     for arg in &argv.args {
         let text = arg.to_string_lossy();
@@ -535,12 +503,13 @@ impl CheckedArgv {
     /// cannot call `from_checked`. Hidden from the docs on purpose — it exists so
     /// a probe can exercise `execute`, not so production code can skip the door.
     /// This exists for the integration tests, which link the crate normally and
-    /// cannot reach `from_checked`. It is **not** a production shortcut: in a
-    /// debug build it panics if the argv would be refused by the strict check,
-    /// so a call site that tries to skip the door fails at once.
+    /// cannot reach `from_checked`. It is **not** a production shortcut: it
+    /// always checks, exactly like the transport, and panics on a refused
+    /// argv — a call site that tries to skip the door fails at once, in
+    /// every profile.
     #[doc(hidden)]
     pub fn unchecked_for_tests(argv: Argv) -> Self {
-        debug_assert!(
+        assert!(
             check_argv(&argv).is_ok(),
             "unchecked_for_tests was given an argv the strict check refuses: \
              this door is for probes, not for bypassing the transport"
@@ -589,13 +558,13 @@ fn run_pipe_inner(
     );
     if scan_forbidden {
         check_argv(argv)?;
-        // The untrusted transport refuses `gh` write verbs: a probe or a test
-        // that calls `run_pipe` with a real `gh` binary must not be able to
-        // execute a write for real. Writes travel through `run_checked`, which
-        // passes `scan_forbidden = false`.
+        // The untrusted transport accepts only read-only `gh` pairs: a probe
+        // or a test that calls `run_pipe` with a real `gh` binary must not be
+        // able to execute a write for real. Writes travel through
+        // `run_checked`, which passes `scan_forbidden = false`.
         anyhow::ensure!(
-            !is_gh_write_verb(&argv.program, &argv.args),
-            "refusing write verb on the untrusted path: {:?}",
+            !is_gh_refused(&argv.program, &argv.args),
+            "refusing gh subcommand on the untrusted path: {:?}",
             argv.args
         );
     }

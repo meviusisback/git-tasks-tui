@@ -98,10 +98,9 @@ impl Builder {
             }
             TagEnd::Link => {
                 if let Some(url) = self.pending_link.take() {
-                    self.current.push(Span {
-                        text: format!(" ({url})"),
-                        style: Style::Plain,
-                    });
+                    // Display-only text, never fetched: still sanitised, so a
+                    // bidi override in a crafted URL cannot reorder the line.
+                    self.current.push(Span::plain(format!(" ({url})")));
                 }
             }
             TagEnd::Paragraph | TagEnd::Item | TagEnd::BlockQuote(_) => self.flush(),
@@ -197,21 +196,26 @@ fn wrap(spans: Line, width: usize) -> Vec<Line> {
                 used = 0;
             }
             if visible > width {
-                // A single word longer than the line: hard-split it.
+                // A single word longer than the line: hard-split it. The chunk
+                // width is tracked incrementally — recounting it per character
+                // is quadratic, and bodies (unlike diffs) have no size cap.
                 let mut chunk = String::new();
+                let mut chunk_width = 0usize;
                 for ch in piece.chars() {
-                    if chunk.chars().count() == width {
+                    if chunk_width == width {
                         current.push(Span {
                             text: std::mem::take(&mut chunk),
                             style: span.style,
                         });
                         lines.push(std::mem::take(&mut current));
                         used = 0;
+                        chunk_width = 0;
                     }
                     chunk.push(ch);
+                    chunk_width += 1;
                 }
                 if !chunk.is_empty() {
-                    used += chunk.chars().count();
+                    used += chunk_width;
                     current.push(Span {
                         text: chunk,
                         style: span.style,
