@@ -38,6 +38,7 @@ guard_fixture() {
         cp "$ROOT/.githooks/commit-msg" .githooks/ || exit 1
         cp "$ROOT/.githooks/pre-push" .githooks/ || exit 1
         cp "$ROOT/scripts/check-claims.sh" scripts/ || exit 1
+        cp "$ROOT/scripts/test-all.sh" scripts/ || exit 1
         chmod +x .githooks/commit-msg .githooks/pre-push
         git config core.hooksPath "$d/work/.githooks"
 
@@ -138,6 +139,44 @@ guards_pre_push() {
     rm -rf "$d"
 }
 
+guards_check_hooks() {
+    group "GUARD test-all --check-hooks — the gate's precondition, proven in both directions"
+    local d rc said
+
+    # 1. installed: absolute core.hooksPath and both hooks executable → 0
+    d=$(guard_fixture) || { fail "fixture" "cannot build the throwaway pair"; return; }
+    out=$( cd "$d/work" && sh scripts/test-all.sh --check-hooks 2>&1 ); rc=$?
+    assert_eq "installed hooks pass the gate's precondition" "0" "$rc"
+    assert_contains "and it says so" "$out" "the guards are installed"
+
+    # 2. core.hooksPath pointing somewhere else → refused, with the cause and the remedy
+    (
+        cd "$d/work" || exit 1
+        git config core.hooksPath /somewhere/else
+    )
+    out=$( cd "$d/work" && sh scripts/test-all.sh --check-hooks 2>&1 ); rc=$?
+    said=$(printf '%s' "$out" | head -1)
+    assert_eq "a hooksPath outside .githooks is refused" "1" "$rc"
+    assert_contains "and the cause is named" "$said" "the guards are not installed here"
+
+    # 3. one hook without the executable bit → refused, naming the hook
+    (
+        cd "$d/work" || exit 1
+        git config core.hooksPath "$d/work/.githooks"
+        chmod -x .githooks/pre-push
+    )
+    out=$( cd "$d/work" && sh scripts/test-all.sh --check-hooks 2>&1 ); rc=$?
+    said=$(printf '%s' "$out" | head -1)
+    assert_eq "a hook without the executable bit is refused" "1" "$rc"
+    assert_contains "and git's silent skip is named" "$said" "not executable"
+
+    # 4. restored → accepted again: the refusal above was the bit, not the fixture
+    ( cd "$d/work" && chmod +x .githooks/pre-push )
+    out=$( cd "$d/work" && sh scripts/test-all.sh --check-hooks 2>&1 ); rc=$?
+    assert_eq "restoring the bit makes it pass again" "0" "$rc"
+    rm -rf "$d"
+}
+
 guards_installer() {
     group "GUARD install-hooks — installs, and proves itself behaviourally"
     local d out rc hp
@@ -178,6 +217,7 @@ guards_commit_msg() {
 main() {
     have git || { echo "git required" >&2; exit 2; }
     guards_pre_push
+    guards_check_hooks
     guards_installer
     guards_commit_msg
     summary
