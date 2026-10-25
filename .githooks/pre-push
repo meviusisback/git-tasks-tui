@@ -6,6 +6,23 @@
 # Reads pre-push's stdin: <local ref> <local sha> <remote ref> <remote sha>
 set -eu
 status=0
+
+# The tree you push is the tree that was committed. A refused commit (a hook
+# said no: the claims check, a lint, anything) leaves the changes STAGED, and
+# `git push` then ships the previous commit while the preparation looks done.
+# That happened on 2026-10-25: the commit was refused, the push went out, and
+# the fix was in the working tree only — it was found by reading
+# `git show --stat` afterwards, not by the push complaining.
+#
+# A non-empty index at push time means exactly one thing: what you prepared is
+# not what you are sending. Refuse, so the case cannot happen by inattention.
+if ! git diff --cached --quiet; then
+    echo "pre-push: the index is not empty — what you prepared is not what you are pushing." >&2
+    echo "pre-push: commit or unstage it first (git status), then push." >&2
+    echo "pre-push: the push was refused." >&2
+    exit 1
+fi
+
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ "$remote_ref" = "refs/heads/main" ] || continue
     # Deletions (all-zero sha) are not merges.
