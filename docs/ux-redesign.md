@@ -329,6 +329,14 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **A timeout on a write does not say whether the write happened.** Measured
+  (2026-10-25): `gh pr create` answered `HTTP 504: Gateway Timeout` and the pull
+  request had been created anyway (#30, OPEN). For a read the ambiguity is
+  harmless — repeating is idempotent, so retry is the whole remedy. For a write
+  it is the difference between doing nothing and doing it twice. Every action
+  that changes something must therefore **read the state back** and show it,
+  rather than trust the exit code: the menu that closes a PR says "closed"
+  because it asked again, not because `gh` returned 0.
 - **An unrecorded measurement expires like an unpinned green.** The proof lives
   as long as the session that produced it; written down, it survives the session.
   Six trees went unreviewed for eighteen commits not out of laziness but because
