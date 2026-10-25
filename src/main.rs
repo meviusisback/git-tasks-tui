@@ -27,10 +27,7 @@ use gtasks::ui;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event};
-use ratatui::crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
-use ratatui::crossterm::{cursor, execute};
+
 
 /// gtasks: GitHub issues & PRs across repos, in the terminal.
 #[derive(Debug, Parser)]
@@ -57,24 +54,6 @@ fn install_signal_handlers() {
         // `kill -INT` would otherwise leave the terminal in the alternate
         // screen (S15).
         libc::signal(libc::SIGINT, handler);
-    }
-}
-
-/// Restores the terminal on drop: normal exit, `?` and panics all go through it.
-struct TuiGuard;
-
-impl TuiGuard {
-    fn enter() -> io::Result<Self> {
-        enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen)?;
-        Ok(Self)
-    }
-}
-
-impl Drop for TuiGuard {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
     }
 }
 
@@ -185,15 +164,12 @@ type PendingDetail = (String, u64, Receiver<DetailResult>);
 fn run_tui() -> anyhow::Result<()> {
     install_signal_handlers();
 
-    // A panic must not leave the user with an unusable terminal.
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
-        previous_hook(info);
-    }));
-
-    let _guard = TuiGuard::enter()?;
+    // One owner for the terminal: `Tui::enter` enables raw mode and the alternate screen,
+    // installs the chaining panic hook, and restores exactly once on every exit path — normal
+    // return, `?`, unwinding, and the half-entry where `Self` is never constructed. The hook
+    // that used to be installed here by hand is now a client of the guard (`gtasks::tui`),
+    // because two mechanisms for one fact is the polite form of a defect.
+    let _guard = gtasks::tui::Tui::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     let binaries = match Binaries::detect() {
