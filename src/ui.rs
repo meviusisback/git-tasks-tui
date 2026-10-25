@@ -30,6 +30,8 @@ const HELP_NOW: &[&str] = &[
     "Esc        back one level: overlay → detail → list (never quits)",
     "R          repo selection menu",
     "o          open the selected item in the browser",
+    "g          hand the selected PR to an agent (suspends gtasks)",
+    "x          forget the last agent record",
     "/          filter the visible list",
     "r          refresh",
     "a          first action on the selected item",
@@ -118,9 +120,15 @@ pub fn view_for(app: &App) -> ViewModel {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // The record card replaces the detail for its own item: the last agent
+    // run is shown where the detail would be, never beside a PR it is not for.
+    let record_card = app.visible_record().map(|record| record.card());
     let detail = visible
         .get(app.list_cursor)
         .map(|item| {
+            if let Some(card) = &record_card {
+                return card.clone();
+            }
             let mut text = item.detail_fields(now).join("\n");
             let key = (item.repo.clone(), item.number);
             if app.detail_for.as_ref() == Some(&key) && !app.detail.trim().is_empty() {
