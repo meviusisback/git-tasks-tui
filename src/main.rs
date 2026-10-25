@@ -273,8 +273,8 @@ fn run_tui() -> anyhow::Result<()> {
                 Ok(outcome) => {
                     app.apply_outcome(outcome);
                     pending = None;
-                    // Show something useful straight away: the first item.
-                    app.request_detail();
+                    // No prefetch: the detail body is fetched only on explicit
+                    // request (Enter). The list already shows every field.
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {

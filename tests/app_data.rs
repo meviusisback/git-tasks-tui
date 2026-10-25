@@ -127,6 +127,23 @@ fn the_view_shows_the_selected_item_detail() {
 }
 
 #[test]
+fn a_fetch_alone_requests_no_body() {
+    // Lazy detail: the body rides only on explicit request (Enter), never as
+    // a side effect of a fetch — the first paint must not wait for markdown
+    // the user may never look at.
+    let mut app = App::default();
+    app.apply_outcome(outcome());
+    assert_eq!(app.detail_requested, None, "a fetch requests no body");
+
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(
+        app.detail_requested,
+        Some(("acme/one".to_string(), 2)),
+        "Enter requests the body"
+    );
+}
+
+#[test]
 fn enter_requests_the_selected_body_and_does_not_repeat_it() {
     let mut app = App::default();
     app.apply_outcome(outcome());
