@@ -88,6 +88,56 @@ argv_sites_found() { # argv_sites_found <root> → "file:count" per file, sorted
     | sort | uniq -c | awk '{print $2 ":" $1}' | sort
 }
 
+# Stage 16 builds the `hermes` argv. S16 fixes its shape: `--query-file <path>` and never
+# `--query-file -`; `--ignore-rules` always; `--yolo` and `--accept-hooks` never — they are
+# the two flags that make the agent stop asking, and the tool must never stop it.
+#
+# This is a **static** check on purpose: it arms itself the moment a builder appears (a file
+# that mentions `--query-file`), and it skips with a reason until then, which is the same
+# pattern the worktree invariants use. Nobody has to remember to switch it on.
+#
+# When `build_command` exists, the runtime version belongs next to it — asserted on the argv
+# it *returns*, not on this scan. This one stays as the cheap regression guard: it also
+# catches a `--yolo` added "temporarily" in a branch that the runtime test does not exercise.
+agent_argv_builder_files() { # agent_argv_builder_files <root> → files mentioning --query-file
+  local root=$1
+  grep -rl -- '"--query-file"' "$root/src" 2>/dev/null | sed "s|^${root%/}/||" | sort
+}
+
+check_agent_argv_flags() { # check_agent_argv_flags <root> → 0 ok/skip, 1 violated
+  local root=$1 files f rc=0
+  files=$(agent_argv_builder_files "$root")
+  if [ -z "$files" ]; then
+    # Not an error: stage 16 has not written the builder yet. Said out loud, with the reason,
+    # so the skip cannot be mistaken for a check that passed.
+    printf 'skip: no file mentions --query-file yet (stage 16 has not landed the builder)\n' >&2
+    return 2
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if ! grep -q -- '"--ignore-rules"' "$root/$f"; then
+      printf '%s builds a hermes argv without --ignore-rules: the agent must not inherit the rules of whatever repository the seed came from\n' "$f" >&2
+      rc=1
+    fi
+    for forbidden in '"--yolo"' '"--accept-hooks"'; do
+      if grep -q -- "$forbidden" "$root/$f"; then
+        printf '%s contains %s: the two flags that stop the agent asking must never be emitted\n' \
+          "$f" "$forbidden" >&2
+        rc=1
+      fi
+    done
+    # `--query-file -` reads the seed from stdin: the path form is what puts the payload in a
+    # 0600 file. The literal '-' right after the flag is the shape to refuse.
+    if grep -qE -- '"--query-file", *"-"' "$root/$f"; then
+      printf '%s passes `--query-file -`: the seed must travel in a 0600 file, never on stdin\n' "$f" >&2
+      rc=1
+    fi
+  done <<EOF
+$(printf '%s\n' "$files")
+EOF
+  return $rc
+}
+
 check_argv_sites() { # check_argv_sites <root> → 0 ok, 1 undeclared/stale
   local root=$1 rc=0 pair file count declared_f declared_c reason
   local found

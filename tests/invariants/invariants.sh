@@ -91,6 +91,20 @@ inv_spawn_sites_declared() {
   fi
 }
 
+inv_agent_argv_flags() {
+  group "INV S18 — the hermes argv keeps S16: --ignore-rules always, --yolo/--accept-hooks never"
+  local root; root=$(git rev-parse --show-toplevel)
+  set +e
+  out=$(check_agent_argv_flags "$root" 2>&1)
+  rc=$?
+  set -e
+  case "$rc" in
+    0) pass "every hermes argv builder carries --ignore-rules and none of the silent flags" ;;
+    2) skip "agent_argv_carries_ignore_rules" "needs task 16 (build_command: no file mentions --query-file yet)" ;;
+    *) fail "the hermes argv keeps S16" "$out" ;;
+  esac
+}
+
 inv_argv_sites_declared() {
   group "INV S17 — every CheckedArgv construction is declared (one door per decision)"
   local root; root=$(git rev-parse --show-toplevel)
@@ -118,6 +132,7 @@ main() {
   inv_gh_wrapper_argv
   inv_spawn_sites_declared
   inv_argv_sites_declared
+  inv_agent_argv_flags
   inv_worktree_resolver
   summary
 }
