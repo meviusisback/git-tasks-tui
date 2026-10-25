@@ -249,15 +249,17 @@ for `gh` applies here too.
 
 | # | Branch | Deliverable | Done when |
 |---|---|---|---|
-| 1 | `task/10-shell` | layout, panes, `←/→`, legend line, `?` overlay, theme module | a live run shows the layout above; resize does not break it |
-| 2 | `task/11-drilldown` | repo → items, `Esc` back, filter kept on the way out | drill in/out with arrows (`Tab` until the shell lands) |
-| 3 | `task/12-repo-menu` | `selected_repos` in config, `R` multi-select menu, list filtered | toggling a repo changes the list after restart |
-| 4 | `task/13-detail` | structured detail box with the fields above | every field is either true or absent |
-
-| 5 | `task/14-actions` | `m` actions menu on `CheckedArgv` (merge method, delete branch, comment, close) | the confirmation still shows the exact argv |
-| 6 | `task/15-worktree` | `w` menu, create/switch, path safety | traversal tests green |
-| 7 | `task/16-agent` | right-column agent, process group, session menu, 70% width | agent survives a timeout and the UI resumes |
-| 8 | `task/17-polish` | Catppuccin Mocha, per-section colors, final legend | a screenshot pass with no unreadable pair |
+| # | Branch | Deliverable | Done when | Status |
+|---|---|---|---|---|
+| 1 | `task/10-shell` | layout, panes, `←/→`, legend line, `?` overlay, theme module | a live run shows the layout above; resize does not break it | **done** — `2d365ba9` |
+| 2 | `task/11-drilldown` | repo → items, `Esc` back, filter kept on the way out | drill in/out with arrows | **done** — `da19340` |
+| 3 | `task/12-repo-menu` | picks saved in `state.json`, `R` multi-select menu, list filtered | the picks survive a restart | **done** — `3a0fc34` |
+| 4 | `task/13-detail` | structured detail box with the fields above | every field is either true or absent | **done** — `3da752f` |
+| 4b | `task/13b-perf` | one GraphQL call per 20 repos; `parallel` honoured to a declared ceiling | first useful row under ten seconds on 69 repos | **done** — `7c006d5`: 56 s → **5.3 s** |
+| 5 | `task/14-actions` | `m` actions menu on `CheckedArgv` (merge method, delete branch, comment, close) | the confirmation still shows the exact argv | todo |
+| 6 | `task/15-worktree` | `w` menu, create/switch, path safety | the seven refusal tests turn green unmodified | **in progress** — tests red in PR #9 |
+| 7 | `task/16-agent` | right-column agent, process group, session menu, 70% width | agent survives a timeout and the UI resumes | todo |
+| 8 | `task/17-polish` | Catppuccin Mocha, per-section colors, final legend | a screenshot pass with no unreadable pair | todo |
 
 **What stages 1–3 taught us, and what stage 4 inherits.** Each of these cost a
 round trip; they are written here so the next stage does not pay again.
