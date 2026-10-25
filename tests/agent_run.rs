@@ -201,6 +201,13 @@ fn the_prompt_travels_as_a_path_never_as_argv() {
         .position(|a| a == "--query-file")
         .expect("the flag exists");
     assert_eq!(args[pos + 1], "/tmp/seed-1", "the value follows its flag");
+    // S18: the agent never inherits the seed repo's rules (attacker-influenced
+    // via PRs); the static check pins every builder, this pins the runtime argv.
+    assert!(
+        args.contains(&"--ignore-rules".to_string()),
+        "rules off: {args:?}"
+    );
+    assert!(!args.iter().any(|a| a == "--yolo" || a == "--accept-hooks"));
 }
 
 #[test]
