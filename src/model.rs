@@ -239,11 +239,33 @@ impl Item {
             }
             let mut line = format!("checks: {passed} passed");
             if !failed.is_empty() {
-                line.push_str(&format!(
-                    ", {} failed ({})",
-                    failed.len(),
-                    failed.join(", ")
-                ));
+                // Count by name: three red jobs of one workflow mean "that
+                // workflow is red", not the same name three times. Past two
+                // distinct names the line caps at `+N`: the row must stay
+                // readable in a ~36-cell pane at 80 columns.
+                let mut counts: Vec<(&str, usize)> = Vec::new();
+                for name in &failed {
+                    if let Some(entry) = counts.iter_mut().find(|(n, _)| *n == name) {
+                        entry.1 += 1;
+                    } else {
+                        counts.push((name.as_str(), 1));
+                    }
+                }
+                let mut shown: Vec<String> = counts
+                    .iter()
+                    .take(2)
+                    .map(|(name, n)| {
+                        if *n > 1 {
+                            format!("{name} ×{n}")
+                        } else {
+                            (*name).to_string()
+                        }
+                    })
+                    .collect();
+                if counts.len() > 2 {
+                    shown.push(format!("+{}", counts.len() - 2));
+                }
+                line.push_str(&format!(", {} failed ({})", failed.len(), shown.join(", ")));
             }
             if pending > 0 {
                 line.push_str(&format!(", {pending} pending"));
