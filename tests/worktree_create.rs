@@ -265,3 +265,53 @@ fn a_created_worktree_appears_once_in_the_registry() {
         "the registry must show the directory exactly once, got {hits}:\n{listing}"
     );
 }
+
+// 4b — the rollback, made deterministic: a **fake** git fails the `add`, and the
+// observation is still made with the **real** git. `Binaries::new` exists exactly
+// for this (no PATH, nothing to overwrite), so the test does not depend on a real
+// branch being occupied: it depends only on "git said no", which is the condition
+// the cleanup must survive.
+#[test]
+fn a_failing_git_binary_leaves_no_registry_entry_either() {
+    let f = fixture();
+    let target = worktree::resolve_in(&f.root, &f.clone, &slug(), &branch()).expect("target");
+
+    // A fake `git` that refuses `worktree add` and logs what it was asked to do.
+    let log = f.root.join("fake-git.log");
+    let fake = f.root.join("fake-git.sh");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \" $* \" in\n  *\" worktree add \"*) echo 'fatal: simulated failure' >&2; exit 128;;\nesac\nexit 0\n",
+            log.display()
+        ),
+    )
+    .expect("write fake git");
+    let mut perms = std::fs::metadata(&fake).expect("stat").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    std::fs::set_permissions(&fake, perms).expect("chmod");
+
+    let real = binaries();
+    let fake_binaries = Binaries::new(real.gh.clone(), fake.clone());
+
+    let err = worktree::create(&f.root, &f.clone, &slug(), &branch(), &fake_binaries)
+        .expect_err("git refused the add, so create must fail");
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("simulated failure") || text.contains("128") || text.contains("worktree add"),
+        "the error must carry what git said, not a generic message: {text}"
+    );
+
+    // Observations with the REAL git: the fake one cannot tell us what it did not do.
+    assert!(
+        !registered(&f, &target),
+        "a failed add must leave no registry entry: {}",
+        git(&f.clone, &["worktree", "list"])
+    );
+    assert!(!target.exists(), "and no directory either");
+    assert!(
+        log.exists() && std::fs::read_to_string(&log).unwrap().contains("worktree add"),
+        "the fake git was never asked to add: {:?}",
+        std::fs::read_to_string(&log).ok()
+    );
+}
