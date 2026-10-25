@@ -37,6 +37,9 @@ cargo build --release
   "does this worktree exist" is answered only by `git worktree list --porcelain`.
 - **The agent runs with `--ignore-rules` by default** (repo-committed instruction files cannot steer it)
   and never with `--yolo`.
+- **`config.toml` is hand-edited, `state.json` is not.** Repository checkboxes change with one
+  keypress, so the selection lives in the state file (0600, atomic rename) — never in the config
+  a person edits by hand.
 
 ## License
 
