@@ -35,12 +35,14 @@ pub struct Tab {
 }
 
 /// One entry of the tabs strip: the label, the kind (for colour) and whether
-/// it is the active one (for emphasis).
+/// it is the active one (for emphasis), plus whether a worktree exists for
+/// its branch (the mauve marker, like the list and the detail).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabInfo {
     pub label: String,
     pub kind: Option<crate::model::ItemKind>,
     pub active: bool,
+    pub has_worktree: bool,
 }
 
 /// The repo filter as a type, not a string: either everything or one valid
@@ -709,7 +711,9 @@ impl App {
                 )
             }
         } else if self.pane == Pane::Repos {
-            String::from("q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · x close")
+            String::from(
+                "q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · W worktree · x close",
+            )
         } else if self.repo_filter == RepoFilter::All {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent · W trees · d diff · s settings",
@@ -891,7 +895,7 @@ impl App {
             self.active_tab = Some(self.tabs.len() - 1);
         }
         self.session_dirty = true;
-        self.sync_left_to_tab(&item.repo, item.number);
+        // The left column is the user's: opening a tab never reshapes it.
         // Load the body for the newly active tab when missing.
         let key = (item.repo.clone(), item.number);
         if self.detail_for.as_ref() != Some(&key) && self.detail_requested.as_ref() != Some(&key) {
@@ -1036,30 +1040,12 @@ impl App {
                     label,
                     kind: found.map(|item| item.kind),
                     active: Some(i) == self.active_tab,
+                    has_worktree: found.is_some_and(|item| {
+                        self.has_worktree(&item.repo, item.head_ref_name.as_deref())
+                    }),
                 }
             })
             .collect()
-    }
-
-    /// The left column populates from the tab: repos cursor onto the tab's
-    /// repo (filtering the list to it) and list cursor onto the tab's row.
-    /// Called when a tab opens and whenever the active tab changes, so both
-    /// columns always show the same task.
-    fn sync_left_to_tab(&mut self, repo: &str, number: u64) {
-        if let Some(pos) = self.repos.iter().position(|row| match row {
-            RepoRow::Repo(slug) => slug.as_str() == repo,
-            RepoRow::All => false,
-        }) {
-            self.repos_cursor = pos;
-            self.apply_repo_filter();
-        }
-        if let Some(index) = self
-            .visible_items()
-            .iter()
-            .position(|item| item.repo == repo && item.number == number)
-        {
-            self.list_cursor = index;
-        }
     }
 
     /// The agent pane shows only while an agent is being arranged or is
@@ -1590,18 +1576,7 @@ impl App {
             self.status = "nothing selected".to_string();
             return;
         };
-        let hermes = match self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
-            Some(hermes) => AgentChoice {
-                id: AgentId::Hermes,
-                program: hermes,
-            },
-            None => AgentChoice {
-                id: AgentId::Hermes,
-                // Resolved again at launch; a missing binary then fails with
-                // its own message instead of refusing the menu now.
-                program: std::path::PathBuf::from("hermes"),
-            },
-        };
+        let hermes = self.default_hermes();
         match plan_agent(
             &item.repo,
             item.number,
@@ -1616,6 +1591,23 @@ impl App {
         ) {
             Ok(plan) => self.open_agent_menu(plan),
             Err(reason) => self.status = reason,
+        }
+    }
+
+    /// The agent every flow starts with until a row is confirmed: the
+    /// resolved hermes binary, or the bare name (resolved again at launch —
+    /// a missing binary then fails with its own message instead of refusing
+    /// the menu now).
+    fn default_hermes(&self) -> AgentChoice {
+        match self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
+            Some(hermes) => AgentChoice {
+                id: AgentId::Hermes,
+                program: hermes,
+            },
+            None => AgentChoice {
+                id: AgentId::Hermes,
+                program: std::path::PathBuf::from("hermes"),
+            },
         }
     }
 
@@ -1686,6 +1678,47 @@ impl App {
         self.config_save_requested = true;
     }
 
+    /// `W` with the repos pane focused: a new worktree for the repo under
+    /// the cursor. The branch is suggested (`<repo>-dev`, editable), the
+    /// agent menu follows with the tree preset — confirming an agent asks
+    /// the creation question and launches, `Esc` aborts the whole thing.
+    /// `All` is refused: a tree belongs to one repo.
+    pub fn open_repo_worktree(&mut self) {
+        let Some(row) = self.repos.get(self.repos_cursor).cloned() else {
+            self.status = "nothing selected".to_string();
+            return;
+        };
+        let RepoRow::Repo(slug) = row else {
+            self.status = "pick one repo first — All is not a place".to_string();
+            return;
+        };
+        let repo = slug.as_str();
+        let clone = match crate::agent::find_clone(&self.clone_roots, repo) {
+            Ok(clone) => clone,
+            Err(reason) => {
+                self.status = reason;
+                return;
+            }
+        };
+        let name = repo.split('/').next_back().unwrap_or(repo);
+        let suggestion = format!("{name}-dev");
+        // A repo-level tree works on no PR: number 0 with the repo URL, so
+        // the seed names the repo instead of inventing a PR number.
+        let plan = AgentPlan {
+            repo: repo.to_string(),
+            number: 0,
+            url: format!("https://github.com/{repo}"),
+            branch: suggestion.clone(),
+            profile: self.agent_profile.clone(),
+            agent: self.default_hermes(),
+            clone,
+        };
+        self.modal = Some(Modal::NameInput(NameInput {
+            value: suggestion,
+            purpose: NamePurpose::Create { agent: None, plan },
+        }));
+    }
+
     /// `W` on the selected row: the worktree menu directly, without going
     /// through the agent menu first. Managing trees (rename, delete, or
     /// picking where to work) is not launching an agent.
@@ -1696,16 +1729,7 @@ impl App {
             self.status = "nothing selected".to_string();
             return;
         };
-        let hermes = match self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
-            Some(hermes) => AgentChoice {
-                id: AgentId::Hermes,
-                program: hermes,
-            },
-            None => AgentChoice {
-                id: AgentId::Hermes,
-                program: std::path::PathBuf::from("hermes"),
-            },
-        };
+        let hermes = self.default_hermes();
         // The agent inside is a placeholder until a row is confirmed: the
         // menu replaces it with the pick (or never reads it, for r/d).
         match plan_agent(
@@ -2213,7 +2237,15 @@ impl App {
             // `W` manages worktrees without launching anything: list, use,
             // rename, delete — the agent menu only appears when a tree is
             // picked for work.
-            Key::Char('W') => self.open_worktree_menu(),
+            Key::Char('W') => {
+                // The repos pane grows trees: same key, the repo under the
+                // cursor instead of the selected issue/PR.
+                if self.pane == Pane::Repos {
+                    self.open_repo_worktree();
+                } else {
+                    self.open_worktree_menu();
+                }
+            }
             // `x`/`X` close the active tab first, then the agent record.
             // Tabs are the newest layer; without tabs this is the old `x`.
             Key::Char('x') | Key::Char('X') => self.close_tab_or_record(),

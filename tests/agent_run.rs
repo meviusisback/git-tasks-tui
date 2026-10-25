@@ -100,6 +100,21 @@ fn seed_body_carries_repo_number_and_url_and_nothing_else() {
 }
 
 #[test]
+fn seed_body_without_a_pr_names_only_the_repo() {
+    // A repo-level tree works on no PR: no invented #0 for the agent to fetch.
+    let body = agent_seed_body("o/r", 0, "https://github.com/o/r", None);
+    assert!(
+        body.contains(
+            "repo: o/r
+"
+        ),
+        "got: {body}"
+    );
+    assert!(!body.contains('#'), "no PR number at all: {body}");
+    assert!(body.contains("url: https://github.com/o/r"), "got: {body}");
+}
+
+#[test]
 fn seed_body_shows_the_note_only_when_given() {
     let body = agent_seed_body(
         "o/r",

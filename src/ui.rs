@@ -47,6 +47,14 @@ fn kind_style(kind: Option<ItemKind>) -> Style {
     }
 }
 
+/// The worktree marker text, everywhere the same: the folder-tree glyph
+/// with a Nerd Font, `◉` without (both end with their own space). Mauve at
+/// every site, via `theme::worktree_marker`.
+fn worktree_marker_text() -> &'static str {
+    let marker = icons::worktree();
+    if marker.is_empty() { "◉ " } else { marker }
+}
+
 /// Pane title with an icon when the host has a Nerd Font, plain otherwise.
 fn pane_title(name: &str, icon: &str) -> String {
     if icon.is_empty() {
@@ -68,9 +76,9 @@ const HELP_NOW: &[&str] = &[
     "Esc        back one level: overlay → agent → detail → list (never quits)",
     "R          repo selection menu (Space mark · a all · n none)",
     "o          open the selected item in the browser",
-    "g / W      agent + worktree for the PR · worktrees alone",
-    "/          filter the visible list",
-    "r          refresh",
+    "g          agent + worktree for the selected PR",
+    "W          worktrees: use one on a PR · create one on a repo",
+    "/          filter the visible list · r refresh",
     "a          first action on the selected item",
     "m          actions menu: method and branch deletion are a choice",
     "?          this keymap · s settings",
@@ -373,8 +381,9 @@ fn split_number_title(entry: &str) -> (String, String) {
 /// The repo filter follows the repos cursor, so this box always shows the
 /// repo above — no `R` menu needed for the common case. The number carries the
 /// kind colour (green PR, yellow issue); the title stays plain. A worktree
-/// marker (`⎇` with a Nerd Font, `◉` without) in front of the number says a
-/// worktree directory exists for the item's branch: `g` then works on it.
+/// marker (mauve folder-tree with a Nerd Font, `◉` without) plus a gap in
+/// front of the number says a worktree directory exists for the item's
+/// branch: `g` then works on it.
 fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     let selected = if view.items.is_empty() {
         None
@@ -405,9 +414,13 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
                 spans.remove(0);
             }
             if *has_wt {
-                let marker = icons::worktree();
-                let marker = if marker.is_empty() { "◉ " } else { marker };
-                spans.insert(0, Span::styled(marker, theme::worktree_marker()));
+                // Marker, then a real gap: the marker must not touch the
+                // kind icon — at a glance the two merge into one glyph.
+                spans.insert(0, Span::raw(" "));
+                spans.insert(
+                    0,
+                    Span::styled(worktree_marker_text(), theme::worktree_marker()),
+                );
             }
             ListItem::new(Line::from(spans))
         })
@@ -472,6 +485,19 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             Some(ItemKind::Issue) => icons::kind_issue(),
             None => "",
         };
+        if info.has_worktree {
+            // Same order as the list and the detail: marker, gap, kind.
+            chunks.push(TabChunk {
+                text: worktree_marker_text().to_string(),
+                style: theme::worktree_marker(),
+                tab: Some(i),
+            });
+            chunks.push(TabChunk {
+                text: " ".to_string(),
+                style: Style::default(),
+                tab: Some(i),
+            });
+        }
         if !icon.is_empty() {
             chunks.push(TabChunk {
                 text: icon.to_string(),
@@ -643,13 +669,22 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         None => "",
     };
     let number_style = kind_style(kind).add_modifier(Modifier::BOLD);
-    lines.push(Line::from(vec![
-        Span::styled(icon, number_style),
-        Span::styled(
-            format!("#{} {}", item.number, item.title),
-            theme::overlay_text().add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    let mut title = Vec::new();
+    if app.has_worktree(&item.repo, item.head_ref_name.as_deref()) {
+        // Same marker as the list and the tabs: one glance says "a tree
+        // exists", wherever the eye lands.
+        title.push(Span::styled(
+            worktree_marker_text(),
+            theme::worktree_marker(),
+        ));
+        title.push(Span::raw(" "));
+    }
+    title.push(Span::styled(icon, number_style));
+    title.push(Span::styled(
+        format!("#{} {}", item.number, item.title),
+        theme::overlay_text().add_modifier(Modifier::BOLD),
+    ));
+    lines.push(Line::from(title));
     let (pill, pill_style) = state_pill(item);
     lines.push(Line::from(Span::styled(pill, pill_style)));
     for field in &fields {

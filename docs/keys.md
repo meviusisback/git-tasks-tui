@@ -26,7 +26,8 @@ disagree, the handler is right and this file is a bug.
 | `y` | in the confirmation: run the command |
 | `n` / `Esc` | in the confirmation: cancel — nothing runs |
 | `g` | choose the agent + worktree for the selected PR: first the agent menu (hermes, pi, omp, opencode, agy — only installed ones), then the worktree — use an existing tree, `n` name a new parallel one (head branch suggested), `r` rename, `d` delete (asks first, the branch stays) |
-| `W` | the worktree menu directly, without the agent flow: the same list/use/new/rename/delete for the selected PR; picking a tree for work leads to the agent menu with that tree preset |
+| `W` | the worktree menu directly, without the agent flow: the same list/use/new/rename/delete for the selected PR; picking a tree for work leads to the agent menu with that tree preset. With the repos pane focused, `W` grows a tree instead: branch suggested (`<repo>-dev`, editable), agent menu follows, confirming asks the creation question and launches |
+| `t` / `T` | next / previous tab — navigation never touches the repo selection on the left |
 | `s` | settings menu: `↑`/`↓` move, `Enter`/`Space` flips the toggle, `Esc` closes — today one row (sandboxed agents), saved to `config.toml` |
 | click on a tab | opens it (same strip the keyboard uses; separators switch nothing, clicks while a dialog is open are ignored) |
 

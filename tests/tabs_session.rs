@@ -245,48 +245,43 @@ fn a_stale_session_never_breaks_startup() {
 }
 
 #[test]
-fn opening_a_tab_pulls_the_left_column_onto_it() {
-    // Both columns show the same task: the repos cursor moves to the tab's
-    // repo and the list cursor to the tab's row.
+fn opening_a_tab_leaves_the_left_column_alone() {
+    // Opening a tab never reshapes the list: the repos cursor stays where
+    // the user put it and the list cursor on its row.
     let mut app = app_with_items();
     app.repos_cursor = 0;
     app.list_cursor = 1; // looking at me/b #2, repos cursor elsewhere
     press(&mut app, Key::Enter);
     assert_eq!(app.active_tab, Some(0));
     assert!(
-        matches!(
-            &app.repo_filter,
-            gtasks::app::RepoFilter::One(slug) if slug.as_str() == "me/b"
-        ),
-        "the list narrowed to the tab's repo: {:?}",
+        matches!(&app.repo_filter, gtasks::app::RepoFilter::All),
+        "no narrowing: {:?}",
         app.repo_filter
     );
+    assert_eq!(app.repos_cursor, 0, "the repos cursor stays");
+    assert_eq!(app.list_cursor, 1, "the list cursor stays on its row");
     assert_eq!(
         app.effective_item().map(|i| i.number),
         Some(2),
         "the detail is on the tab"
     );
-    assert_eq!(app.list_cursor, 0, "the only row of the narrowed list");
 }
 
 #[test]
 fn switching_tabs_leaves_the_left_column_alone() {
     let mut app = app_with_items();
-    press(&mut app, Key::Enter); // me/a #1, the list narrows to me/a
-    press(&mut app, Key::Esc); // back to the repos, cursor on me/a
-    press(&mut app, Key::Up); // row 0: all, the list shows both again
-    press(&mut app, Key::Enter); // into the list
+    press(&mut app, Key::Enter); // me/a #1, the list is untouched
+    press(&mut app, Key::Esc); // status only: Esc never leaves the list
+    press(&mut app, Key::Up); // already row 0: stays
+    press(&mut app, Key::Enter); // #1 already open and active: body no-op
     press(&mut app, Key::Down); // me/b #2
     press(&mut app, Key::Enter); // second tab
     assert_eq!(app.active_tab, Some(1));
     press(&mut app, Key::Char('t')); // back to me/a #1
     assert_eq!(app.active_tab, Some(0));
     assert!(
-        matches!(
-            &app.repo_filter,
-            gtasks::app::RepoFilter::One(slug) if slug.as_str() == "me/b"
-        ),
-        "the last user selection stays, tabs do not touch it: {:?}",
+        matches!(&app.repo_filter, gtasks::app::RepoFilter::All),
+        "nothing touched the selection: {:?}",
         app.repo_filter
     );
     assert_eq!(

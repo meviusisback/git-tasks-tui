@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use gtasks::agent::{AgentId, agent_argv, agent_argv_for};
-use gtasks::app::{App, Key, Modal, Msg};
+use gtasks::app::{App, Key, Modal, Msg, Pane};
 use gtasks::fetch::FetchOutcome;
 use gtasks::model::{Item, ItemKind};
 
@@ -510,4 +510,131 @@ fn worktree_argv_has_the_documented_git_shapes() {
         args.windows(4)
             .any(|w| w == ["worktree", "remove", "--force", "/o"])
     );
+}
+
+fn repos_focus_on(app: &mut App, cursor: usize) {
+    app.pane = Pane::Repos;
+    app.repos_cursor = cursor;
+}
+
+#[test]
+fn w_in_the_repos_pane_suggests_a_branch_for_that_repo() {
+    let (mut app, _tmp) = pr_app();
+    repos_focus_on(&mut app, 1); // o/r, not All
+    press(&mut app, Key::Char('W'));
+    let Some(Modal::NameInput(input)) = app.modal.as_ref() else {
+        panic!("W on a repo names the new branch, got {:?}", app.modal);
+    };
+    assert_eq!(input.value, "r-dev");
+}
+
+#[test]
+fn w_on_all_or_without_a_clone_refuses_with_the_reason() {
+    let (mut app, _tmp) = pr_app();
+    repos_focus_on(&mut app, 0); // All
+    press(&mut app, Key::Char('W'));
+    assert!(app.modal.is_none());
+    assert_eq!(app.status, "pick one repo first — All is not a place");
+
+    let (mut app, _tmp) = pr_app();
+    app.clone_roots = vec![];
+    repos_focus_on(&mut app, 1);
+    press(&mut app, Key::Char('W'));
+    assert!(app.modal.is_none(), "no clone, no prompt");
+    assert!(
+        app.status.contains("no clone_root configured"),
+        "names the missing piece: {}",
+        app.status
+    );
+}
+
+#[test]
+fn confirming_the_suggested_name_leads_to_the_agent_menu_with_place() {
+    let (mut app, _tmp) = pr_app();
+    repos_focus_on(&mut app, 1);
+    press(&mut app, Key::Char('W'));
+    press(&mut app, Key::Enter); // keep the suggestion
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("naming asks which agent, got {:?}", app.modal);
+    };
+    assert_eq!(menu.plan.branch, "r-dev");
+    assert_eq!(menu.plan.number, 0, "a repo tree works on no PR");
+    let place = menu.place.as_ref().expect("the tree travels with the pick");
+    assert!(
+        place.ends_with("r-dev") || place.to_string_lossy().contains("r--dev"),
+        "placed under the new branch: {}",
+        place.display()
+    );
+}
+
+fn with_plain_icons(f: impl FnOnce()) {
+    // SAFETY: process-global like the tabs_session twin, same discipline —
+    // the only reader is `icons::nerd()` and the previous value is restored
+    // before returning. No other test in this binary touches the override.
+    let previous = std::env::var_os("GTASKS_NERD");
+    unsafe {
+        std::env::set_var("GTASKS_NERD", "0");
+    }
+    f();
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("GTASKS_NERD", value),
+            None => std::env::remove_var("GTASKS_NERD"),
+        }
+    }
+}
+
+fn render_200x30(app: &App) -> String {
+    use gtasks::ui::{draw, view_for};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let view = view_for(app);
+    let backend = TestBackend::new(200, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..30 {
+        for x in 0..200 {
+            out.push_str(buffer[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[test]
+fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
+    let (mut app, tmp) = pr_app();
+    plant_worktree(&tmp.path().join("wt"), "fix-foo");
+    app.tabs.push(gtasks::app::Tab {
+        repo: "o/r".to_string(),
+        number: 7,
+    });
+    app.active_tab = Some(0);
+    // Hide the list rows so the only markers on screen are the detail
+    // title and the tabs strip.
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
+        gtasks::actions::RepoSlug::parse("o/other").expect("valid slug"),
+    ]);
+    // Cursor onto o/other through keys, like a user: the filter follows.
+    app.pane = gtasks::app::Pane::Repos;
+    app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
+    app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
+    with_plain_icons(|| {
+        let screen = render_200x30(&app);
+        // Twice: once in the detail title, once in the tabs strip — the
+        // list shows nothing, so a third would mean a leak.
+        assert_eq!(
+            screen.matches("◉").count(),
+            2,
+            "marker in detail + tabs: {screen}"
+        );
+        assert!(screen.contains("◉  #7"), "marker, gap, number: {screen}");
+    });
+    // And the strip knows it structurally, not just visually.
+    let infos = app.tab_infos();
+    assert_eq!(infos.len(), 1);
+    assert!(infos[0].has_worktree);
 }
