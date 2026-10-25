@@ -300,6 +300,9 @@ fn run_tui() -> anyhow::Result<()> {
     };
 
     let (config, config_notice) = load_config();
+    // The notice is dismissed with `Esc`; this flag is what the legend keeps saying afterwards,
+    // for as long as the program runs on a repository nobody chose.
+    let config_fallback = config_notice.is_some();
     let timeout = Duration::from_secs(config.timeout_s.max(1));
     let parallel = config.parallel;
     let limit = config.limit as usize;
@@ -312,6 +315,7 @@ fn run_tui() -> anyhow::Result<()> {
         write_timeout: timeout,
         agent_profile: config.agent_profile.clone(),
         clone_roots: config.agent_roots(),
+        config_fallback,
         ..App::default()
     };
     // A broken config is a notice, not a whisper in the log: it stays on

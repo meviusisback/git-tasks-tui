@@ -230,6 +230,11 @@ pub struct App {
     /// A list, not a path: clones really do live in more than one directory, and one path
     /// cannot say so without making the other directory invisible.
     pub clone_roots: Vec<std::path::PathBuf>,
+    /// True when the config on disk could not be used and the app is running on the demo fallback.
+    /// The notice says it once; this is how the status line can keep saying it, because a decision
+    /// taken once must not become a thing forgotten: after `Esc` the list holds a repository the
+    /// user never chose, and nothing else on screen remembers why.
+    pub config_fallback: bool,
     /// The last agent run, if any. It stays after the exit: `Esc` hides the
     /// card, `x` deletes the record, a new run replaces it.
     pub agent_record: Option<AgentRecord>,
@@ -273,6 +278,7 @@ impl Default for App {
             pending: None,
             agent_profile: String::from("default"),
             clone_roots: Vec::new(),
+            config_fallback: false,
             agent_record: None,
             agent_dismissed_for: None,
             agent_requested: None,
@@ -456,7 +462,7 @@ impl App {
         // The legend names what the keys do *here*. It stays short on
         // purpose: the status has its own panel (`status_text`), and a long
         // legend in this one row would push every message off the edge.
-        if self.pane == Pane::Detail {
+        let text = if self.pane == Pane::Detail {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
@@ -470,7 +476,16 @@ impl App {
             String::from(
                 "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
+        };
+        // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
+        // hints fill the row and push it past the right edge - at 100 columns the legend already
+        // ends at `R repos` and the marker simply was not on screen. What must never be lost goes
+        // first. It also does not live in `status`, which every event rewrites (loading, saved,
+        // failed): a persistent fact there would be gone at the next keystroke.
+        if self.config_fallback {
+            return format!("config: demo fallback · {text}");
         }
+        text
     }
 
     /// The status message, rendered in its own panel.
