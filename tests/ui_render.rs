@@ -42,6 +42,7 @@ fn sample() -> (App, ViewModel) {
         tabs: Vec::new(),
         active_tab: None,
         agent: "g create worktree + launch agent".into(),
+        agent_screen: Vec::new(),
     };
     (app, view)
 }

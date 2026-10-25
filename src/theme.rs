@@ -25,6 +25,61 @@ pub const OK: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 pub const ALERT: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 /// #f9e2af — warnings, pending states, the help overlay title.
 pub const WARN: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
+/// #cba6f7 — mauve: magenta terminal output in the embedded agent box.
+pub const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
+/// #89dceb — sky: cyan terminal output in the embedded agent box.
+pub const SKY: Color = Color::Rgb(0x89, 0xdc, 0xeb);
+
+/// Map an embedded-terminal colour index to the Mocha palette. Index 0
+/// (black) reads as the secondary text instead of near-black: the agent box
+/// sits on a dark background, and an unreadable colour is a lie about what
+/// the agent printed.
+pub fn term_idx(index: u8) -> Color {
+    match index {
+        1 | 9 => ALERT,
+        2 | 10 => OK,
+        3 | 11 => WARN,
+        4 | 12 => FOCUSED,
+        5 | 13 => MAUVE,
+        6 | 14 => SKY,
+        7 | 15 => TEXT,
+        _ => SUBTEXT,
+    }
+}
+
+/// Map an embedded-terminal cell colour: `None` means the terminal default
+/// (transparent here — the box keeps the app background).
+pub fn term_color(color: crate::embedded::Palette) -> Option<Color> {
+    match color {
+        crate::embedded::Palette::Default => None,
+        crate::embedded::Palette::Idx(index) => Some(term_idx(index)),
+        crate::embedded::Palette::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
+    }
+}
+
+/// One embedded-terminal cell as a style. Reverse video renders as the
+/// selection style: the box has no other way to say "inverted".
+pub fn agent_cell(
+    fg: crate::embedded::Palette,
+    bg: crate::embedded::Palette,
+    bold: bool,
+    inverse: bool,
+) -> Style {
+    if inverse {
+        return highlight();
+    }
+    let mut style = Style::default().fg(TEXT);
+    if let Some(color) = term_color(fg) {
+        style = style.fg(color);
+    }
+    if let Some(color) = term_color(bg) {
+        style = style.bg(color);
+    }
+    if bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    style
+}
 
 /// Unfocused pane border.
 pub fn border() -> Style {

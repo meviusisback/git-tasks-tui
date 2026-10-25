@@ -29,6 +29,9 @@ pub struct ViewModel {
     pub tabs: Vec<String>,
     pub active_tab: Option<usize>,
     pub agent: String,
+    /// Last parsed screen of the embedded agent, row by row. Empty while
+    /// idle: the panel is hidden then, so there is nothing to show.
+    pub agent_screen: crate::embedded::AgentScreen,
 }
 
 /// The number colour by kind: green PRs, yellow issues. Only the number —
@@ -61,14 +64,14 @@ const HELP_NOW: &[&str] = &[
     "Esc        back one level: overlay → agent → detail → list (never quits)",
     "R          repo selection menu (Space mark · a all · n none)",
     "o          open the selected item in the browser",
-    "g          hand the selected PR to an agent (suspends gtasks)",
+    "g          hand the selected PR to an agent (runs inside the agent box)",
     "/          filter the visible list",
     "r          refresh",
     "a          first action on the selected item",
     "m          actions menu: method and branch deletion are a choice",
     "?          this keymap",
     "q          quit",
-    "Ctrl-C     quit immediately, from anywhere",
+    "Ctrl-C     quit — or interrupt the agent when it has focus",
 ];
 
 /// Keys the overlay would lie about if they were listed above: nothing
@@ -84,6 +87,25 @@ const HELP_NOW: &[&str] = &[
 /// `w` used to live here; it now focuses the agent pane, so only `s`
 /// (sessions) is still promised.
 pub const PLANNED: &[(char, &str)] = &[('s', "agent sessions (stage 16)")];
+
+/// The outer agent box when shown, from the full frame area. Main uses the
+/// same function to size the pty before drawing, so the terminal and its
+/// box never disagree by a row.
+pub fn agent_box(area: Rect) -> Rect {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(rows[0]);
+    let right_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(columns[1]);
+    right_rows[1]
+}
 
 pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     let outer = Block::default()
@@ -115,9 +137,10 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     frame.render_stateful_widget(issues_widget, left_rows[1], &mut issues_state);
 
     // Right column: tabs + detail on top, agent/worktree at the bottom —
-    // but only while an agent is being arranged or is running. Idle screens
-    // give the whole column to the detail instead of an empty box.
-    if app.agent_active() {
+    // but only while an agent is being arranged or is running, or while the
+    // pane has focus (so `w`/`Tab` still reach the instructions when idle).
+    // Idle and unfocused screens give the whole column to the detail.
+    if app.agent_active() || app.pane == Pane::Agent {
         let right_rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
@@ -225,6 +248,7 @@ pub fn view_for(app: &App) -> ViewModel {
         tabs: app.tab_labels(),
         active_tab: app.active_tab,
         agent: app.agent_panel_text(),
+        agent_screen: app.agent_screen.clone(),
     }
 }
 
@@ -411,12 +435,49 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         .scroll((app.detail_scroll, 0))
 }
 
-/// Right column, bottom: worktree + agent. Always shows what to do next —
-/// the steps that create a worktree and launch the agent — plus the last
-/// record (or where it went). Scrollable when the pane is focused.
+/// Right column, bottom: the live agent terminal while it runs, otherwise
+/// the worktree + agent instructions. The live screen is the parsed pty
+/// grid, cell by cell; untrusted bytes were already neutralised by the
+/// parser, and every cell is sanitised again at this boundary.
 fn agent_panel(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
-    let lines = md::render(&view.agent, width.saturating_sub(2).max(1) as usize);
-    let text: Vec<ratatui::text::Line<'static>> = lines
+    let text: Vec<ratatui::text::Line<'static>> = if view.agent_screen.is_empty() {
+        agent_instructions(&view.agent, width)
+    } else {
+        view.agent_screen
+            .iter()
+            .map(|row| {
+                let spans: Vec<ratatui::text::Span<'static>> = row
+                    .iter()
+                    .map(|cell| {
+                        let style = theme::agent_cell(cell.fg, cell.bg, cell.bold, cell.inverse);
+                        ratatui::text::Span::styled(sanitize(&cell.text), style)
+                    })
+                    .collect();
+                ratatui::text::Line::from(spans)
+            })
+            .collect()
+    };
+    let focused = app.pane == Pane::Agent;
+    Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(pane_title("agent", icons::agent()))
+                .border_style(if focused {
+                    theme::border_focused()
+                } else {
+                    theme::border()
+                })
+                .title_style(theme::title(focused)),
+        )
+        .scroll((app.agent_scroll, 0))
+}
+
+/// The idle agent box: the worktree + agent instructions, rendered from the
+/// same markdown pipeline as the detail so bold stays bold.
+fn agent_instructions(text: &str, width: u16) -> Vec<ratatui::text::Line<'static>> {
+    let lines = md::render(text, width.saturating_sub(2).max(1) as usize);
+    lines
         .into_iter()
         .map(|line| {
             let spans: Vec<ratatui::text::Span<'static>> = line
@@ -433,21 +494,7 @@ fn agent_panel(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
                 .collect();
             ratatui::text::Line::from(spans)
         })
-        .collect();
-    let focused = app.pane == Pane::Agent;
-    Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(pane_title("agent", icons::agent()))
-                .border_style(if focused {
-                    theme::border_focused()
-                } else {
-                    theme::border()
-                })
-                .title_style(theme::title(focused)),
-        )
-        .scroll((app.agent_scroll, 0))
+        .collect()
 }
 
 fn legend(app: &App) -> Paragraph<'static> {

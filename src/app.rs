@@ -278,6 +278,13 @@ pub struct App {
     /// Set by `y` on the create question, consumed by the loop: the plan
     /// plus the worktree the user agreed to create.
     pub agent_go: Option<(AgentPlan, std::path::PathBuf)>,
+    /// True while an embedded agent session is alive in the box. Set by the
+    /// loop on spawn, cleared on exit: the loop owns the child, `App` only
+    /// carries what the screen needs (flag + last parsed screen).
+    pub agent_running: bool,
+    /// Last parsed screen of the embedded session, row by row. Empty while
+    /// idle: the box is hidden then, not blank.
+    pub agent_screen: crate::embedded::AgentScreen,
     /// What `y` runs: an action or an agent launch, never both.
     pub pending: Option<Pending>,
 }
@@ -314,6 +321,8 @@ impl Default for App {
             agent_dismissed_for: None,
             agent_requested: None,
             agent_go: None,
+            agent_running: false,
+            agent_screen: Vec::new(),
             detail: String::new(),
             detail_for: None,
             detail_requested: None,
@@ -502,9 +511,16 @@ impl App {
                 "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · Enter body",
             )
         } else if self.pane == Pane::Agent {
-            String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
-            )
+            // While the agent runs, every key but Esc is agent input —
+            // including Ctrl-C, which interrupts it. The legend must not
+            // promise keys that type instead.
+            if self.agent_running {
+                String::from("Esc panes · typing goes to the agent · Ctrl-C interrupts")
+            } else {
+                String::from(
+                    "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
+                )
+            }
         } else if self.pane == Pane::Repos {
             String::from("q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · x close")
         } else if self.repo_filter == RepoFilter::All {
@@ -863,6 +879,7 @@ impl App {
     pub fn agent_active(&self) -> bool {
         self.agent_requested.is_some()
             || self.agent_go.is_some()
+            || self.agent_running
             || matches!(
                 &self.agent_record,
                 Some(record) if record.status == AgentStatus::Running

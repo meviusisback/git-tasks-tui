@@ -66,9 +66,10 @@ No title, no body: the agent has `gh` and reads them itself, under its own tool-
 
 ## Terminal ownership while the agent runs
 
-The child owns the terminal: `gtasks` calls `tcsetpgrp(child)` after suspending, forwards SIGINT to
-the child, and on return calls `tcsetpgrp(self)` + restores termios + `clear()` + full redraw.
-See S11/S15.
+Nobody suspends: the agent lives in a pty embedded in the agent box, and
+`gtasks` keeps the real terminal for the whole run. Keys typed with the box
+focused go to the pty (including Ctrl-C, which the line discipline delivers
+as SIGINT); `Esc` unfocuses. Quitting kills the child. See S11/S15.
 
 ## Verification kept in the suite (Task 11a, where `agent.rs` exists)
 

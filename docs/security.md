@@ -135,9 +135,11 @@ Two spawn profiles:
 
 - **App owns the terminal** (`gh`, `git`, non-interactive): SIGINT/SIGTERM/SIGHUP → restore the
   terminal, kill the child group, exit non-zero.
-- **Child owns the terminal** (`hermes`, `$EDITOR`): after suspending, `tcsetpgrp(child)`; SIGINT is
-  forwarded to the child, not acted on by the app; on return `tcsetpgrp(self)` + restore termios +
-  `clear()` + full redraw. The app restores only when it owns the terminal.
+- **Agent in a pty** (`hermes`): the app never hands the terminal over — the agent lives in an
+  embedded pty in the agent box. Keys typed with the box focused go to the pty (Ctrl-C arrives
+  as 0x03, i.e. SIGINT via the line discipline); anywhere else Ctrl-C quits. Quitting, or a
+  dead `gtasks`, ends the child (explicit kill; pty hangup delivers SIGHUP). The app restores
+  only the terminal it owns — which is always.
 
 `TuiGuard` restores on `Drop` (panic included); teardown uses `let _ =`, never `unwrap`.
 

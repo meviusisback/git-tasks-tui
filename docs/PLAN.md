@@ -21,7 +21,7 @@
 
 **Goal:** a terminal app in Rust that reproduces the `git-tasks` Hermes Desktop plugin — pick repos via `gh`, list open PRs/issues, expand details, act on them, create git worktrees and start agentic work (Hermes only in the MVP) in the same UI.
 
-**Architecture:** one binary TUI (ratatui + crossterm, Elm-style `Msg`/`update`) on tokio. GitHub access is `gh` spawned with **argv arrays** (never a shell) and `--json` parsed by serde. Worktrees live **outside the clone** under `$XDG_DATA_HOME/gtasks/worktrees/`, and "does this worktree exist" is answered **only** by `git worktree list --porcelain`. Agentic work runs `hermes -p <profile> chat --query-file <seed-file>` (a `0600` file, **not** `-`) with the TUI synchronously suspended and the child owning the terminal.
+**Architecture:** one binary TUI (ratatui + crossterm, Elm-style `Msg`/`update`) on tokio. GitHub access is `gh` spawned with **argv arrays** (never a shell) and `--json` parsed by serde. Worktrees live **outside the clone** under `$XDG_DATA_HOME/gtasks/worktrees/`, and "does this worktree exist" is answered **only** by `git worktree list --porcelain`. Agentic work runs `hermes -p <profile> chat --query-file <seed-file>` (a `0600` file, **not** `-`) with the child embedded in the agent box (pty) — the TUI never suspends.
 
 **Tech stack:** Rust stable (edition 2021), `ratatui >= 0.28`, `crossterm` (`event-stream`), `tokio` (with `process`, `signal`), `serde`/`serde_json`, `toml`, `clap`, `directories`, `pulldown-cmark`, `tracing` + `tracing-subscriber`, `anyhow`, `thiserror`, `shell-words`.
 

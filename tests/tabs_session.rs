@@ -358,6 +358,51 @@ fn the_screen_names_tab_and_repo_keys() {
 }
 
 #[test]
+fn the_live_agent_screen_reaches_the_box() {
+    // A running session paints parsed cells, not instructions: render with a
+    // fake screen and read the frame back.
+    use gtasks::embedded::{AgentCell, Palette};
+    use gtasks::ui::{draw, view_for};
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = app_with_items();
+    app.pane = gtasks::app::Pane::Agent;
+    app.agent_running = true;
+    app.agent_screen = vec![vec![
+        AgentCell {
+            text: "$".to_string(),
+            fg: Palette::Default,
+            bg: Palette::Default,
+            bold: true,
+            inverse: false,
+        },
+        AgentCell {
+            text: " hello-agent".to_string(),
+            fg: Palette::Idx(2),
+            bg: Palette::Default,
+            bold: false,
+            inverse: false,
+        },
+    ]];
+    let view = view_for(&app);
+    let backend = TestBackend::new(200, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..30 {
+        for x in 0..200 {
+            out.push_str(buffer[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    assert!(out.contains("hello-agent"), "live cells paint:\n{out}");
+    assert!(
+        out.contains("typing goes to the agent"),
+        "the legend owns the focused-running keys:\n{out}"
+    );
+}
+
+#[test]
 fn the_view_carries_tabs_and_agent_to_the_screen() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter);

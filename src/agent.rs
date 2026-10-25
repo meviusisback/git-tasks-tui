@@ -121,9 +121,8 @@ pub fn agent_seed_body(repo: &str, number: u64, url: &str, note: Option<&str>) -
     body
 }
 
-/// What the right column knows about the last agent run. This is the whole
-/// truth the column shows: while gtasks is suspended the terminal belongs to
-/// the agent, so there is no live stream to display — only this record.
+/// What the right column knows about the last agent run: the record card for
+/// a finished run, a live `Running` entry while the embedded session works.
 #[derive(Debug, Clone)]
 pub struct AgentRecord {
     pub repo: String,
@@ -135,9 +134,7 @@ pub struct AgentRecord {
 }
 
 /// The status is the process, not a story about it: `Running` while the
-/// child is alive, the real outcome only after `wait()` returns. The column
-/// can only ever show `Finished` — the TUI resumes after the exit — but the
-/// type refuses an optimistic "done" while the child runs.
+/// child is alive, the real outcome only after the exit is reaped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStatus {
     Running,
@@ -265,8 +262,64 @@ pub fn next_step(worktree: PathBuf) -> AgentNext {
     }
 }
 
+/// Build a `Finished` status from an exit code and an optional signal
+/// number: the exit named itself, a signal names its number, neither is a
+/// guess. Shared by the blocking handoff core and the embedded session poll.
+pub fn status_from_code_signal(code: Option<i32>, signal: Option<i32>, secs: u64) -> AgentStatus {
+    let outcome = match (code, signal) {
+        (Some(code), _) => AgentOutcome::Exit(code),
+        (None, Some(sig)) => AgentOutcome::Signal(sig),
+        (None, None) => AgentOutcome::Failed,
+    };
+    AgentStatus::Finished { outcome, secs }
+}
+
+/// Build a `Finished` status from a pty exit. portable-pty reports the
+/// signal as the `strsignal` description (`"Killed"`) rather than the name
+/// (`"SIGKILL"`), so both spellings map to the number here. An unmapped
+/// string is `Failed`, never an invented number; under a non-C locale the
+/// description localises and therefore also falls back to `Failed`.
+pub fn status_for_pty_exit(code: u32, signal: Option<&str>, secs: u64) -> AgentStatus {
+    let number = signal.and_then(signal_number);
+    match (signal, number) {
+        (Some(_), Some(sig)) => status_from_code_signal(None, Some(sig), secs),
+        (Some(_), None) => AgentStatus::Finished {
+            outcome: AgentOutcome::Failed,
+            secs,
+        },
+        (None, _) => status_from_code_signal(Some(code as i32), None, secs),
+    }
+}
+
+/// A signal name (`"SIGKILL"`) or glibc description (`"Killed"`) to its
+/// number. The values come from `libc`, so they are right per platform.
+fn signal_number(name_or_desc: &str) -> Option<i32> {
+    let short = name_or_desc.strip_prefix("SIG").unwrap_or(name_or_desc);
+    match short {
+        "HUP" | "Hangup" => Some(libc::SIGHUP),
+        "INT" | "Interrupt" => Some(libc::SIGINT),
+        "QUIT" | "Quit" => Some(libc::SIGQUIT),
+        "ILL" | "Illegal instruction" => Some(libc::SIGILL),
+        "TRAP" | "Trace/breakpoint trap" => Some(libc::SIGTRAP),
+        "ABRT" | "Aborted" => Some(libc::SIGABRT),
+        "BUS" | "Bus error" => Some(libc::SIGBUS),
+        "FPE" | "Floating point exception" => Some(libc::SIGFPE),
+        "KILL" | "Killed" => Some(libc::SIGKILL),
+        "USR1" | "User defined signal 1" => Some(libc::SIGUSR1),
+        "SEGV" | "Segmentation fault" => Some(libc::SIGSEGV),
+        "USR2" | "User defined signal 2" => Some(libc::SIGUSR2),
+        "PIPE" | "Broken pipe" => Some(libc::SIGPIPE),
+        "ALRM" | "Alarm clock" => Some(libc::SIGALRM),
+        "TERM" | "Terminated" => Some(libc::SIGTERM),
+        "CHLD" | "Child exited" => Some(libc::SIGCHLD),
+        "CONT" | "Continued" => Some(libc::SIGCONT),
+        "STOP" | "Stopped (signal)" => Some(libc::SIGSTOP),
+        _ => None,
+    }
+}
+
 /// `hermes -p <profile> chat --query-file <seed> --in <worktree>`: every part
-/// is generated or validated, none is user text. The seed travels as a path,
+/// is generated or validated, never user text. The seed travels as a path,
 /// so the prompt body — which may start with `-` — can never land in flag
 /// position. `--ignore-rules` always: the agent must not inherit the rules
 /// of the repository the seed came from — those files are attacker-influenced
@@ -305,40 +358,11 @@ pub fn agent_argv(
     })
 }
 
-/// The handoff: leave the alternate screen, hand the terminal to the agent,
-/// wait, then restore before the first redraw. The seed travels by value and
-/// is dropped on every path — normal exit, signal, or a launch that never
-/// started — so no prompt survives its run.
-pub fn run_agent_handoff(
-    argv: &crate::gh::CheckedArgv,
-    seed: SeedFile,
-    seed_lines: usize,
-) -> anyhow::Result<(AgentStatus, usize)> {
-    use anyhow::Context;
-
-    let start = Instant::now();
-    // Suspend through the guard, not by hand. `suspend_active` restores once and stops claiming
-    // the terminal, so the guard's `Drop` will not restore it a second time if the resume below
-    // fails. Doing this inline (raw mode off here, alternate screen off there) left two
-    // mechanisms for one fact, and the failure path restored the terminal twice.
-    let suspended = crate::tui::suspend_active();
-    let (status, lines) = run_agent_inner(argv, seed, start, seed_lines);
-
-    // Restore before returning: the loop draws right after, and a failed restore is fatal —
-    // the record cannot be shown on a dead screen, so it is not written either. `resume_active`
-    // keeps the half-entry rule: if the second step fails it undoes the first, and the guard
-    // stays not-live so `Drop` adds nothing.
-    if suspended {
-        crate::tui::resume_active().context("cannot take the terminal back after the agent")?;
-    }
-    Ok((status, lines))
-}
-
-/// The handoff without the terminal dance: wait, time, drop the seed. The
-/// seed travels by value and dies on every path — normal exit, signal, or a
-/// launch that never started — so no prompt survives its run. Hermetic: a
-/// binary that cannot spawn fails here, terminal or not. Public as the
-/// testable core of the handoff; the app prefers [`run_agent_handoff`].
+/// The blocking handoff core: wait, time, drop the seed. The seed travels by
+/// value and dies on every path — normal exit, signal, or a launch that never
+/// started — so no prompt survives its run. Hermetic: a binary that cannot
+/// spawn fails here, terminal or not. Public as the testable core of the
+/// handoff; the app itself runs agents embedded (see `crate::embedded`).
 pub fn run_agent_inner(
     argv: &crate::gh::CheckedArgv,
     seed: SeedFile,
@@ -351,14 +375,7 @@ pub fn run_agent_inner(
     let secs = start.elapsed().as_secs();
     drop(seed);
     let status = match outcome {
-        Ok(exit) => AgentStatus::Finished {
-            outcome: match (exit.code(), exit.signal()) {
-                (Some(code), _) => AgentOutcome::Exit(code),
-                (None, Some(sig)) => AgentOutcome::Signal(sig),
-                (None, None) => AgentOutcome::Failed,
-            },
-            secs,
-        },
+        Ok(exit) => status_from_code_signal(exit.code(), exit.signal(), secs),
         Err(_) => AgentStatus::Finished {
             outcome: AgentOutcome::Failed,
             secs,

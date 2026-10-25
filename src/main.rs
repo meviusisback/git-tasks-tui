@@ -16,9 +16,10 @@ use clap::Parser;
 use gtasks::actions;
 use gtasks::actions::RepoSlug;
 use gtasks::agent::{self, AgentPlan};
-use gtasks::app::{App, Modal, Msg, Pending};
+use gtasks::app::{App, Key, Modal, Msg, Pending};
 use gtasks::binaries::Binaries;
 use gtasks::config::Config;
+use gtasks::embedded::EmbeddedSession;
 use gtasks::fetch::{self, FetchOutcome};
 use gtasks::input::map_key;
 use gtasks::logging::{init_file_logging, init_stderr_logging};
@@ -28,6 +29,7 @@ use gtasks::ui;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event};
+use ratatui::layout::Rect;
 
 /// gtasks: GitHub issues & PRs across repos, in the terminal.
 #[derive(Debug, Parser)]
@@ -116,22 +118,30 @@ fn load_config() -> (Config, Option<String>) {
 
 /// The loop's half of the agent handoff (`g` validated, `y` agreed).
 /// `agreed` is `Some` when the user already said yes to creating the tree;
-/// `None` means resolve first and ask before writing. Returns whether the
-/// terminal was handed over — the loop repaints everything after that.
+/// `None` means resolve first and ask before writing. The agent spawns
+/// embedded in the agent box — the TUI never suspends.
 fn start_agent(
     app: &mut App,
     binaries: &Binaries,
     config: &Config,
     plan: AgentPlan,
     agreed: Option<PathBuf>,
-) -> bool {
+    term_size: (u16, u16),
+    session: &mut Option<EmbeddedSession>,
+) {
+    // One agent at a time: the box shows one session, so a second `g` while
+    // one runs is refused instead of orphaning the first.
+    if session.is_some() {
+        app.status = "an agent is already running in the box below".to_string();
+        return;
+    }
     let root = match config.worktree_root.clone() {
         Some(root) => root,
         None => match gtasks::worktree::default_root() {
             Ok(root) => root,
             Err(err) => {
                 app.status = format!("cannot locate the worktree root: {err:#}");
-                return false;
+                return;
             }
         },
     };
@@ -142,46 +152,47 @@ fn start_agent(
     if config.worktree_root.is_none() {
         if let Err(err) = gtasks::logging::ensure_state_dir(&root) {
             app.status = format!("cannot prepare the worktree root: {err:#}");
-            return false;
+            return;
         }
     }
     let slug = match RepoSlug::parse(&plan.repo) {
         Ok(slug) => slug,
         Err(_) => {
             app.status = format!("cannot place the agent: invalid repo {}", plan.repo);
-            return false;
+            return;
         }
     };
     let branch = match gtasks::worktree::BranchName::parse(&plan.branch) {
         Ok(branch) => branch,
         Err(_) => {
             app.status = format!("cannot place the agent: invalid branch {}", plan.branch);
-            return false;
+            return;
         }
     };
     let target = match gtasks::worktree::resolve_in(&root, &plan.clone, &slug, &branch) {
         Ok(target) => target,
         Err(err) => {
             app.status = format!("cannot place the agent: {err:#}");
-            return false;
+            return;
         }
     };
     // An agreed creation goes straight to git; anything else is asked first
     // — a write to disk is never a side effect of pressing `g`.
     if agreed.is_some() {
         match gtasks::worktree::create(&root, &plan.clone, &slug, &branch, binaries) {
-            Ok(created) => return launch_agent(app, binaries, &plan, &created.path),
-            // The refusal goes to the screen as it is: no sentence of ours
-            // around it, or a check failure becomes indistinguishable from a
-            // bug in the check.
-            Err(err) => {
-                app.status = format!("{err:#}");
-                return false;
+            Ok(created) => {
+                launch_agent(app, binaries, &plan, &created.path, term_size, session);
             }
+            // The refusal goes to the screen as it is: a check failure must
+            // not become indistinguishable from a bug in the check.
+            Err(err) => app.status = format!("{err:#}"),
         }
+        return;
     }
     match agent::next_step(target) {
-        agent::AgentNext::Launch(path) => launch_agent(app, binaries, &plan, &path),
+        agent::AgentNext::Launch(path) => {
+            launch_agent(app, binaries, &plan, &path, term_size, session);
+        }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
                 "no worktree for {}@{} — create it and start the agent?",
@@ -190,29 +201,30 @@ fn start_agent(
             );
             app.modal = Some(Modal::Confirm(question));
             app.pending = Some(Pending::Agent(plan, path));
-            false
         }
     }
 }
 
-/// Run the handoff the user validated: seed file, suspended TUI, agent on
-/// the terminal, record on return. The seed dies with the run on every path.
-/// Returns whether the terminal was handed over.
+/// Run the handoff the user validated: seed file plus an agent spawned
+/// embedded in the agent box. The TUI never suspends; the child lives in a
+/// pty sized to the box, and the loop polls it every tick.
 fn launch_agent(
     app: &mut App,
     binaries: &Binaries,
     plan: &AgentPlan,
     path: &std::path::Path,
-) -> bool {
+    term_size: (u16, u16),
+    session: &mut Option<EmbeddedSession>,
+) {
     let Some(hermes) = binaries.hermes.as_deref() else {
         app.status = "no agent binary (hermes) found".to_string();
-        return false;
+        return;
     };
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
         Err(err) => {
             app.status = format!("cannot prepare the seed directory: {err:#}");
-            return false;
+            return;
         }
     };
     let body = agent::agent_seed_body(&plan.repo, plan.number, &plan.url, None);
@@ -221,29 +233,46 @@ fn launch_agent(
         Ok(seed) => seed,
         Err(err) => {
             app.status = format!("cannot write the agent seed: {err:#}");
-            return false;
+            return;
         }
     };
     let argv = agent::agent_argv(hermes, &plan.profile, seed.path(), path);
-    // The handoff ran in both arms below: the screen always needs a full
-    // repaint, even when the run itself failed.
-    match agent::run_agent_handoff(&argv, seed, lines) {
-        Ok((status, _)) => {
-            let summary = status.summary();
+    // The box the pty is sized to: the same geometry the draw uses, so the
+    // terminal and its box never disagree by a row.
+    let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
+    let cols = outer.width.saturating_sub(2);
+    let rows = outer.height.saturating_sub(2);
+    let parent: std::collections::HashMap<String, String> = std::env::vars().collect();
+    match EmbeddedSession::spawn(
+        &argv,
+        seed,
+        lines,
+        plan.repo.clone(),
+        plan.number,
+        plan.profile.clone(),
+        path.to_path_buf(),
+        cols,
+        rows,
+        &parent,
+    ) {
+        Ok(sess) => {
+            app.agent_running = true;
+            app.agent_screen = sess.snapshot();
             app.agent_record = Some(gtasks::agent::AgentRecord {
                 repo: plan.repo.clone(),
                 number: plan.number,
                 profile: plan.profile.clone(),
                 worktree: path.to_path_buf(),
                 seed_lines: lines,
-                status,
+                status: gtasks::agent::AgentStatus::Running,
             });
             app.agent_dismissed_for = None;
-            app.status = format!("agent on {}#{}: {}", plan.repo, plan.number, summary);
+            app.pane = gtasks::app::Pane::Agent;
+            app.status = "agent running below — Esc unfocuses, Ctrl-C interrupts".to_string();
+            *session = Some(sess);
         }
         Err(err) => app.status = format!("cannot run the agent: {err:#}"),
     }
-    true
 }
 
 /// Start one batched fetch in the background. Dropping the receiver with the app
@@ -390,6 +419,9 @@ fn run_tui() -> anyhow::Result<()> {
         parallel,
     ));
     let mut pending_detail: Option<PendingDetail> = None;
+    // The embedded agent, if one is running inside the box. Owned here, not
+    // in App: the loop polls it, routes keys to it and kills it on quit.
+    let mut embedded: Option<EmbeddedSession> = None;
 
     while !app.quit && !TERMINATE.load(Ordering::SeqCst) {
         // Take a finished fetch, if any.
@@ -537,18 +569,54 @@ fn run_tui() -> anyhow::Result<()> {
         }
 
         // `g` (validated by the key handler) and `y` (agreed worktree
-        // creation): the loop owns git, the seed file and the terminal.
-        // After a handoff the alternate screen is re-entered but ratatui's
-        // diff buffer is stale, so the loop repaints everything once.
-        let mut resumed = false;
+        // creation): the loop owns git, the seed file and the pty child.
+        let term_size = terminal
+            .size()
+            .map(|size| (size.width, size.height))
+            .unwrap_or((80, 24));
         if let Some(plan) = app.agent_requested.take() {
-            resumed |= start_agent(&mut app, &binaries, &config, plan, None);
+            start_agent(
+                &mut app,
+                &binaries,
+                &config,
+                plan,
+                None,
+                term_size,
+                &mut embedded,
+            );
         }
         if let Some((plan, path)) = app.agent_go.take() {
-            resumed |= start_agent(&mut app, &binaries, &config, plan, Some(path));
+            start_agent(
+                &mut app,
+                &binaries,
+                &config,
+                plan,
+                Some(path),
+                term_size,
+                &mut embedded,
+            );
         }
-        if resumed {
-            terminal.clear()?;
+
+        // The embedded agent, if any: keep the pty sized to its box, feed
+        // fresh output into the screen, and finalize the record on exit.
+        if let Some(sess) = embedded.as_mut() {
+            let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
+            sess.resize(
+                outer.width.saturating_sub(2),
+                outer.height.saturating_sub(2),
+            );
+            if sess.drain() {
+                app.agent_screen = sess.snapshot();
+            }
+            if let Some(record) = sess.poll_exit() {
+                let summary = record.status.summary();
+                app.agent_record = Some(record);
+                app.agent_dismissed_for = None;
+                app.agent_running = false;
+                app.agent_screen = Vec::new();
+                app.status = format!("agent finished: {summary}");
+                embedded = None;
+            }
         }
 
         let view = ui::view_for(&app);
@@ -557,7 +625,23 @@ fn run_tui() -> anyhow::Result<()> {
         if event::poll(Duration::from_millis(250))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if let Some(msg) = map_key(key) {
+                    // Focused on a running agent, every key but Esc is agent
+                    // input — including Ctrl-C, which interrupts it. Esc
+                    // unfocuses through the app. Anywhere else, keys are app
+                    // keys (where Ctrl-C quits).
+                    let to_agent = embedded.is_some()
+                        && app.agent_running
+                        && app.pane == gtasks::app::Pane::Agent
+                        && !matches!(map_key(key), Some(Msg::Key(Key::Esc)));
+                    if to_agent {
+                        if let Some(Msg::Key(k)) = map_key(key) {
+                            if let Some(bytes) = gtasks::embedded::key_to_pty(&k) {
+                                if let Some(sess) = embedded.as_mut() {
+                                    sess.write(&bytes);
+                                }
+                            }
+                        }
+                    } else if let Some(msg) = map_key(key) {
                         app.update(msg);
                     }
                 }
@@ -568,6 +652,12 @@ fn run_tui() -> anyhow::Result<()> {
         } else {
             app.update(Msg::Tick);
         }
+    }
+
+    // Kill the embedded agent, if any: quitting must not leave an agent
+    // running without a box. The seed file is unlinked on drop either way.
+    if let Some(mut sess) = embedded.take() {
+        sess.kill();
     }
 
     // Last save on the way out: a temporary exit must keep the session even

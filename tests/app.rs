@@ -66,6 +66,24 @@ fn detail_scroll_moves_only_in_the_detail_pane() {
 }
 
 #[test]
+fn legend_while_running_names_typing_not_app_keys() {
+    let app = App {
+        pane: Pane::Agent,
+        agent_running: true,
+        ..App::default()
+    };
+    let legend = app.legend();
+    assert!(
+        legend.contains("typing goes to the agent"),
+        "focused + running: keys go to the pty: {legend}"
+    );
+    assert!(
+        !legend.contains("q quit"),
+        "`q` types into the agent, it must not be promised: {legend}"
+    );
+}
+
+#[test]
 fn typing_builds_and_erases_the_query() {
     let mut app = App::default();
     press(&mut app, Key::Char('/')); // enter search

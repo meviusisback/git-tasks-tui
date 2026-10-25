@@ -11,6 +11,7 @@ pub mod app;
 pub mod binaries;
 pub mod cache;
 pub mod config;
+pub mod embedded;
 pub mod env;
 pub mod fetch;
 pub mod gh;
