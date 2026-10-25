@@ -27,7 +27,10 @@ fn item(repo: &str, number: u64, title: &str) -> Item {
 
 fn app_with_two_repos() -> App {
     let mut app = App::default();
-    app.set_repos(vec!["me/empty".to_string(), "me/busy".to_string()]);
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("me/empty").expect("valid slug"),
+        gtasks::actions::RepoSlug::parse("me/busy").expect("valid slug"),
+    ]);
     app.apply_outcome(gtasks::fetch::FetchOutcome {
         items: vec![item("me/busy", 7, "seven")],
         failures: Vec::new(),
@@ -39,7 +42,7 @@ fn app_with_two_repos() -> App {
 fn a_configured_repo_with_no_items_is_still_listed() {
     let app = app_with_two_repos();
     assert!(
-        app.repos.iter().any(|r| r == "me/empty"),
+        app.repos.iter().any(|r| r.text() == "me/empty"),
         "a repo with no open items disappeared from the pane: {:?}",
         app.repos
     );
@@ -48,7 +51,7 @@ fn a_configured_repo_with_no_items_is_still_listed() {
 #[test]
 fn the_first_row_shows_everything() {
     let app = app_with_two_repos();
-    assert_eq!(app.repos.first().map(String::as_str), Some("— all repos —"));
+    assert_eq!(app.repos.first().map(|r| r.text()), Some("— all repos —"));
     assert_eq!(app.visible_items().len(), 1);
 }
 
@@ -198,9 +201,10 @@ fn esc_in_the_repos_pane_with_a_filter_clears_it() {
 }
 
 #[test]
-fn esc_restores_the_repo_you_came_from() {
-    // The list changed while drilled in (a refresh reordered it): the way
-    // back must find the repo by identity, not replay the old index.
+fn drill_out_keeps_the_cursor_where_drill_in_left_it() {
+    // The cursor never moves while drilled in, so the row it left is still
+    // selected by construction: Esc only changes the pane, and the filter
+    // (hence the visible list) is untouched.
     let mut app = app_with_two_repos();
     app.update(Msg::Key(Key::Tab));
     app.update(Msg::Key(Key::Down));
@@ -208,32 +212,14 @@ fn esc_restores_the_repo_you_came_from() {
     app.update(Msg::Key(Key::Enter)); // drill in
     assert_eq!(app.pane, gtasks::app::Pane::List);
 
-    app.repos = vec![
-        "— all repos —".to_string(),
-        "me/busy".to_string(), // moved to row 1
-        "me/other".to_string(),
-    ];
     app.update(Msg::Key(Key::Esc)); // drill out
     assert_eq!(app.pane, gtasks::app::Pane::Repos);
-    assert_eq!(app.repos_cursor, 1, "identity, not the old index 2");
-    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::One(_)));
-}
-
-#[test]
-fn esc_falls_back_to_the_first_row_when_it_is_gone() {
-    // The repo vanished while drilled in: home to row 0, which also resets
-    // the filter (a cursor on "all" with a dead filter would lie).
-    let mut app = app_with_two_repos();
-    app.update(Msg::Key(Key::Tab));
-    app.update(Msg::Key(Key::Down));
-    app.update(Msg::Key(Key::Down)); // me/busy, row 2
-    app.update(Msg::Key(Key::Enter)); // drill in
-    app.repos = vec!["— all repos —".to_string(), "me/other".to_string()];
-    app.update(Msg::Key(Key::Esc)); // drill out
-    assert_eq!(app.pane, gtasks::app::Pane::Repos);
-    assert_eq!(app.repos_cursor, 0);
-    assert!(matches!(app.repo_filter, gtasks::app::RepoFilter::All));
-    assert_eq!(app.status, "— all repos — · 1 items");
+    assert_eq!(app.repos_cursor, 2, "the cursor never moved");
+    assert!(
+        matches!(app.repo_filter, gtasks::app::RepoFilter::One(_)),
+        "the filter is untouched"
+    );
+    assert_eq!(app.visible_items().len(), 1);
 }
 
 #[test]

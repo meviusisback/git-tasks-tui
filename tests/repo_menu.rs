@@ -6,7 +6,10 @@ use gtasks::app::{App, Key, Modal, Msg};
 
 fn app_with_three_repos() -> App {
     let mut app = App {
-        all_repos: vec!["me/a".into(), "me/b".into(), "me/c".into()],
+        all_repos: ["me/a", "me/b", "me/c"]
+            .iter()
+            .map(|s| gtasks::actions::RepoSlug::parse(s).expect("valid slug"))
+            .collect(),
         ..App::default()
     };
     app.set_repos(app.all_repos.clone());
@@ -64,7 +67,7 @@ fn enter_applies_to_the_live_list_and_reports_for_save() {
         "the loop must save exactly this"
     );
     assert_eq!(
-        app.repos,
+        app.repos.iter().map(|r| r.text()).collect::<Vec<_>>(),
         vec!["— all repos —", "me/a", "me/c"],
         "the live list narrows at once"
     );
