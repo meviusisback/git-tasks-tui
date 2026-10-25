@@ -226,8 +226,10 @@ pub struct App {
     pub show_help: bool,
     /// Profile passed to `hermes -p` by the agent handoff; validated at load.
     pub agent_profile: String,
-    /// Local clones live here (`<clone_root>/<repo-name>`); `None` refuses.
-    pub clone_root: Option<std::path::PathBuf>,
+    /// Where to look for local clones, in order (`<root>/<repo-name>`); empty refuses.
+    /// A list, not a path: clones really do live in more than one directory, and one path
+    /// cannot say so without making the other directory invisible.
+    pub clone_roots: Vec<std::path::PathBuf>,
     /// The last agent run, if any. It stays after the exit: `Esc` hides the
     /// card, `x` deletes the record, a new run replaces it.
     pub agent_record: Option<AgentRecord>,
@@ -270,7 +272,7 @@ impl Default for App {
             write_timeout: std::time::Duration::from_secs(30),
             pending: None,
             agent_profile: String::from("default"),
-            clone_root: None,
+            clone_roots: Vec::new(),
             agent_record: None,
             agent_dismissed_for: None,
             agent_requested: None,
@@ -690,7 +692,7 @@ impl App {
             item.kind,
             item.head_ref_name.as_deref(),
             &self.agent_profile,
-            self.clone_root.as_deref(),
+            &self.clone_roots,
         ) {
             Ok(plan) => self.agent_requested = Some(plan),
             Err(reason) => self.status = reason,
