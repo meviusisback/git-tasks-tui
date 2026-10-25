@@ -360,20 +360,30 @@ fn draw_action_menu(frame: &mut Frame, area: Rect, menu: &crate::app::ActionMenu
 fn draw_notice(frame: &mut Frame, area: Rect, notice: &str) {
     let area = centered_rect(70, 80, area);
     frame.render_widget(Clear, area);
-    let text = vec![
-        ratatui::text::Line::from(sanitize(notice)),
-        ratatui::text::Line::from(""),
-        ratatui::text::Line::from(sanitize("Esc dismiss · q quit")),
-    ];
-    let notice = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" config problem ")
-                .border_style(theme::alert())
-                .title_style(theme::alert()),
-        )
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" config problem ")
+        .border_style(theme::alert())
+        .title_style(theme::alert())
+        .style(theme::overlay_text());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // The remedy is anchored to the bottom of the box instead of being the message's last line:
+    // a centered box protects the remedy from a long *path*, but a long *message* pushes it out
+    // of the box vertically — the same silence, rotated ninety degrees. A TOML parse error
+    // repeats the offending line, so the longest message this program can produce is ~1000
+    // characters; at 80x24 the box holds 17 lines of 54 columns, and the remedy was the line
+    // that fell off.
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
+    let message = Paragraph::new(ratatui::text::Line::from(sanitize(notice)))
         .style(theme::overlay_text())
         .wrap(ratatui::widgets::Wrap { trim: true });
-    frame.render_widget(notice, area);
+    frame.render_widget(message, rows[0]);
+    let remedy = Paragraph::new(ratatui::text::Line::from(sanitize("Esc dismiss · q quit")))
+        .style(theme::overlay_text());
+    frame.render_widget(remedy, rows[1]);
 }
