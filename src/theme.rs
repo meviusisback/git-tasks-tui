@@ -33,7 +33,9 @@ pub const SKY: Color = Color::Rgb(0x89, 0xdc, 0xeb);
 /// Map an embedded-terminal colour index to the Mocha palette. Index 0
 /// (black) reads as the secondary text instead of near-black: the agent box
 /// sits on a dark background, and an unreadable colour is a lie about what
-/// the agent printed.
+/// the agent printed. Indices 16-255 are the real xterm palette (6×6×6 cube
+/// plus greyscale ramp): mapping them all to one grey painted Pi's empty
+/// rows light grey instead of their real colour.
 pub fn term_idx(index: u8) -> Color {
     match index {
         1 | 9 => ALERT,
@@ -43,7 +45,23 @@ pub fn term_idx(index: u8) -> Color {
         5 | 13 => MAUVE,
         6 | 14 => SKY,
         7 | 15 => TEXT,
-        _ => SUBTEXT,
+        // Black reads as secondary text (see above); bright black is its
+        // natural grey partner.
+        0 | 8 => SUBTEXT,
+        16..=231 => {
+            // 6×6×6 cube, levels 0, 95, 135, 175, 215, 255.
+            const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            let cube = index - 16;
+            let r = LEVELS[(cube / 36) as usize];
+            let g = LEVELS[((cube / 6) % 6) as usize];
+            let b = LEVELS[(cube % 6) as usize];
+            Color::Rgb(r, g, b)
+        }
+        // Greyscale ramp: 8, 18, …, 238.
+        _ => {
+            let level = 8 + 10 * (index - 232);
+            Color::Rgb(level, level, level)
+        }
     }
 }
 

@@ -128,7 +128,7 @@ pub fn agent_box(area: Rect) -> Rect {
     let right = right_column(area);
     let right_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(right);
     right_rows[1]
 }
@@ -179,7 +179,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     if app.agent_active() || app.pane == Pane::Agent {
         let right_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
             .split(right);
         // The tabs are one line, not a box: at 80x12 every row counts, and a
         // bordered strip would eat the detail it labels.
