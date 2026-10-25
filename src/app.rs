@@ -462,7 +462,7 @@ impl App {
         // The legend names what the keys do *here*. It stays short on
         // purpose: the status has its own panel (`status_text`), and a long
         // legend in this one row would push every message off the edge.
-        if self.pane == Pane::Detail {
+        let text = if self.pane == Pane::Detail {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
@@ -476,7 +476,16 @@ impl App {
             String::from(
                 "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open · R repos · m actions",
             )
+        };
+        // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
+        // hints fill the row and push it past the right edge - at 100 columns the legend already
+        // ends at `R repos` and the marker simply was not on screen. What must never be lost goes
+        // first. It also does not live in `status`, which every event rewrites (loading, saved,
+        // failed): a persistent fact there would be gone at the next keystroke.
+        if self.config_fallback {
+            return format!("config: demo fallback · {text}");
         }
+        text
     }
 
     /// The status message, rendered in its own panel.
