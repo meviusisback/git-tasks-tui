@@ -68,6 +68,27 @@ base branch · checks (passed/failed/pending, with the failing names) · mergeab
 state · review decision · linked issue · url. Empty fields are **omitted**, not
 shown blank — a blank field reads as "none" and that is a claim.
 
+## First screen: under ten seconds, measured
+
+Measured on Alberto's machine with 69 configured repos (2026-10-25):
+
+| what | time |
+|---|---|
+| one REST call pair per repo (`pr list` + `issue list`) | 6.16 s |
+| one GraphQL call covering **both** for one repo | 3.17 s |
+| one GraphQL call covering **8** repos | 2.36 s |
+| one GraphQL call covering **20** repos | 4.23 s |
+
+So the current shape (two REST calls per repo, `parallel = 6`) needs about
+`69 × 6.16 / 6 ≈ 71 s` before anything appears — and that is what a live run
+shows: "loading…" at 40 s, counters still zero at 90 s. Batching 20 repos per
+GraphQL call turns 138 calls into 4: about 17 s serial, **~5 s** with the same
+parallelism.
+
+The requirement is the measurement: **the list is populated within ten seconds
+on 69 repos**. A slower first screen is a bug, not a tuning preference — the
+program's whole value is answering "what needs me" at a glance.
+
 ## Repo selection
 
 `repos` in `config.toml` stays the hand-edited list of candidates. The **user's
