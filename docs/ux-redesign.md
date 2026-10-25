@@ -360,7 +360,16 @@ where work survives.
 2. **`last_repo` must not come back.** It has been added and removed twice. The
    fact that makes it unnecessary — *every* writer of the repo list resets the
    cursor — belongs in a comment on `set_repos`, not on the clamp.
-3. **A config that cannot be read must say so on screen, not only in the log.**
+3. **Retry a single-repo batch once.** Bisection is an implicit retry for
+   batches larger than one (the halves are re-asked), but at `len() == 1` there
+   is no second attempt: a transient 502 loses that repo — and transience is
+   exactly what was measured (the same query failed and later succeeded). One
+   retry there costs one call and closes the case.
+4. **"Unreadable" and "invalid" are two different errors with two different
+   remedies.** Today both map to the demo fallback, and the log says "cannot
+   read config" for a file that was read perfectly — the value was out of range.
+   Fixing a syntax error and fixing a number are not the same instruction.
+5. **A config that cannot be read must say so on screen, not only in the log.**
    Today a broken or invalid config falls back to a demo repo with a
    `tracing::warn!` nobody reads: the user sees a repository they never
    configured, and nothing explains it. Fall back if you must, but the screen
