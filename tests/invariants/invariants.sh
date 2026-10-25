@@ -115,6 +115,16 @@ inv_argv_sites_declared() {
   fi
 }
 
+inv_claim_verdicts() {
+  group "INV S19 — check-claims refuses what is not true (nine cases)"
+  local root; root=$(git rev-parse --show-toplevel)
+  if out=$(check_claim_verdicts "$root" 2>&1); then
+    pass "nine claim cases agree with the hook, including the two that used to pass falsely"
+  else
+    fail "check-claims verdicts match the battery" "$out"
+  fi
+}
+
 inv_worktree_resolver() {
   group "INV S5/S6 — worktree path + reuse (NOT WIRED)"
   skip "reuse_only_from_worktree_list_porcelain" "needs task/10b (worktree resolver)"
@@ -133,6 +143,7 @@ main() {
   inv_spawn_sites_declared
   inv_argv_sites_declared
   inv_agent_argv_flags
+  inv_claim_verdicts
   inv_worktree_resolver
   summary
 }
