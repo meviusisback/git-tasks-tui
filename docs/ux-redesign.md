@@ -318,16 +318,17 @@ round trip; they are written here so the next stage does not pay again.
   compare at 2% the rule is *idle machine, three runs, median*. And the release
   binary is reproducible here (same source → same `sha256`), which is what makes
   two machines' numbers comparable at all.
-- **A 502 from the batched read is a timeout, not a refusal — so the remedy is
-  retry first, cap second, bisect third.** Measured (2026-10-25): every failure
-  landed between 10.6 s and 11.0 s and every success at or under 10.3 s, and one
-  identical query failed once and then succeeded minutes later. The trigger is
-  the requested node count (`repos × limit`), not the text of the query: 3×100
-  and 3×30 differ by six characters and one of them fails. Therefore: (1) retry
-  a 502 once — the reads are idempotent and that turns most of them into
-  latency; (2) keep each call well under the edge, capping `repos × limit`
-  (~150 nodes) or lowering `contexts(first:)`; (3) bisect only what still fails,
-  and then report **one** repo failed, never twenty.
+- **A 502/504 from the batched read is a ten-second gateway timeout, and the
+  cost grows with `limit` per repo — not with the number of repos.** Measured
+  (2026-10-25, corrected after four more runs): 20 repos at `limit = 30` (600
+  items) pass in 7.3 s, while 2 repos at `limit = 60` (120 items) fail; every
+  failure landed between 10.6 s and 11.4 s and one identical query failed and
+  then succeeded minutes later. Three points are not a curve — the first reading,
+  "the product `repos × limit`", was wrong because a single larger product
+  passed. Therefore: (1) **retry** once — the reads are idempotent; (2) **cap
+  `limit` per call**, not the product, and never design a call that sits near ten
+  seconds; (3) **bisect** only what persists, and report **one** repo failed,
+  never twenty.
 - **The checkable form of "is this test real?": which change would make it
   fail?** If the answer is "none that touches the behaviour it names", the
   assertion is a description. Unlike "write good tests", this can be verified —
