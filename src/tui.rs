@@ -117,6 +117,65 @@ fn install_hook() {
     });
 }
 
+
+/// The one implementation of "take the terminal back": entry and resume share it, so the
+/// half-entry rule cannot drift between them.
+fn resume_shared(shared: &Shared) -> io::Result<()> {
+        let raw = {
+            let mut f = shared
+                .enable_raw
+                .lock()
+                .map_err(|_| io::Error::other("enable_raw lock poisoned"))?;
+            (f)()
+        };
+        raw?;
+        let screen = {
+            let mut f = shared
+                .enable_screen
+                .lock()
+                .map_err(|_| io::Error::other("enable_screen lock poisoned"))?;
+            (f)()
+        };
+        match screen {
+            Ok(()) => {
+                shared.live.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            Err(err) => {
+                // Undo the raw-mode step we just did, and stay not-live.
+                if let Ok(mut restore) = shared.restore.lock() {
+                    (restore)();
+                }
+                Err(err)
+            }
+        }
+}
+
+/// Suspend the terminal **through the active guard**, for a call site that cannot thread a
+/// `&Tui` (the guard lives in the event loop; the agent handoff is two levels below it).
+///
+/// `false` means "no guard owns the terminal" — an honest answer, so the caller can say there is
+/// nothing to hand over instead of pretending.
+pub fn suspend_active() -> bool {
+    let guard = active().lock().ok().and_then(|w| w.upgrade());
+    match guard {
+        Some(shared) => {
+            shared.restore_once();
+            true
+        }
+        None => false,
+    }
+}
+
+/// Take the terminal back through the active guard. Same code as [`Tui::resume`].
+pub fn resume_active() -> io::Result<()> {
+    let guard = active().lock().ok().and_then(|w| w.upgrade());
+    match guard {
+        Some(shared) => resume_shared(&shared),
+        None => Err(io::Error::other("no guard owns the terminal")),
+    }
+}
+
 /// Owns the terminal for as long as it lives.
 pub struct Tui {
     shared: Arc<Shared>,
@@ -185,36 +244,7 @@ impl Tui {
     /// second step fails, the first is undone before the error travels, and the guard stays
     /// not-live — so a later `drop` does not restore a terminal it does not own.
     pub fn resume(&self) -> io::Result<()> {
-        let raw = {
-            let mut f = self
-                .shared
-                .enable_raw
-                .lock()
-                .map_err(|_| io::Error::other("enable_raw lock poisoned"))?;
-            (f)()
-        };
-        raw?;
-        let screen = {
-            let mut f = self
-                .shared
-                .enable_screen
-                .lock()
-                .map_err(|_| io::Error::other("enable_screen lock poisoned"))?;
-            (f)()
-        };
-        match screen {
-            Ok(()) => {
-                self.shared.live.store(true, Ordering::SeqCst);
-                Ok(())
-            }
-            Err(err) => {
-                // Undo the raw-mode step we just did, and stay not-live.
-                if let Ok(mut restore) = self.shared.restore.lock() {
-                    (restore)();
-                }
-                Err(err)
-            }
-        }
+        resume_shared(&self.shared)
     }
 }
 
