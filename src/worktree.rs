@@ -8,6 +8,7 @@
 //! bypass cannot be introduced by forgetting an `ensure!` here.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, ensure};
 
@@ -177,4 +178,139 @@ pub fn confirm_branch(
         branch.as_str()
     );
     Ok(())
+}
+
+/// A worktree that exists on disk, registered with git, on the branch we asked for.
+#[derive(Debug, Clone)]
+pub struct CreatedWorktree {
+    pub path: PathBuf,
+    pub branch: BranchName,
+}
+
+/// Create a worktree for `branch` under `root`, or refuse without touching
+/// anything outside it.
+///
+/// The recipe (docs/ux-redesign.md): canonicalise the **parent**, require it to be
+/// inside `root`, create the last component ourselves with `create_dir` (it fails
+/// on an existing symlink instead of following it), run `git worktree add` on the
+/// now-existing empty directory, then re-canonicalise and undo if anything moved.
+/// `--force` is never passed, and the git call carries the S16 hook hardening.
+///
+/// Refusals name the reason (`symlink`, `exists`, `already …`): a bare error
+/// would be indistinguishable from a bug in the check itself.
+pub fn create(
+    root: &Path,
+    clone: &Path,
+    slug: &RepoSlug,
+    branch: &BranchName,
+    binaries: &crate::binaries::Binaries,
+) -> anyhow::Result<CreatedWorktree> {
+    // The target is computed with the same function the tests plant symlinks
+    // with: a check somewhere the implementation never looks proves nothing.
+    let target = resolve_in(root, clone, slug, branch)?;
+    let canon_root = root
+        .canonicalize()
+        .with_context(|| format!("cannot canonicalise worktree root {}", root.display()))?;
+
+    // Walk every ancestor from the root outward: an existing symlink anywhere
+    // on the way (test 2 plants one two levels up) is a refusal, and a missing
+    // level is created with `create_dir` — one component at a time, so a link
+    // can never be crossed silently.
+    let parent = target.parent().context("worktree target has no parent")?;
+    let mut prefix = canon_root.clone();
+    let rel = parent
+        .strip_prefix(root)
+        .map_err(|_| anyhow::anyhow!("worktree target escapes the root: {}", target.display()))?;
+    for component in rel.components() {
+        prefix.push(component);
+        match std::fs::symlink_metadata(&prefix) {
+            Ok(meta) => ensure!(
+                !meta.file_type().is_symlink(),
+                "refusing symlink in worktree path: {}",
+                prefix.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&prefix).with_context(|| {
+                    format!("cannot create worktree directory {}", prefix.display())
+                })?;
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("cannot inspect worktree path {}", prefix.display()));
+            }
+        }
+    }
+    // The walk ended inside the root by construction; re-canonicalise the
+    // parent now that every level exists, in case anything moved under us.
+    let canon_parent = parent
+        .canonicalize()
+        .with_context(|| format!("cannot canonicalise {}", parent.display()))?;
+    ensure!(
+        canon_parent.starts_with(&canon_root),
+        "worktree parent escapes the root: {}",
+        canon_parent.display()
+    );
+
+    // The last component is ours to create: `create_dir` refuses an existing
+    // symlink with EEXIST instead of following it (test 1), and an existing
+    // directory means someone is already there (test 6: the first worktree).
+    match std::fs::symlink_metadata(&target) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("refusing symlink at worktree target: {}", target.display());
+        }
+        Ok(_) => {
+            anyhow::bail!("worktree target already exists: {}", target.display());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("cannot inspect worktree target {}", target.display()));
+        }
+    }
+    std::fs::create_dir(&target)
+        .with_context(|| format!("cannot create worktree directory {}", target.display()))?;
+
+    // `git worktree add -b`: the branch is created from HEAD, so an existing
+    // branch (test 4: already checked out; test 6: already used) fails here
+    // instead of being silently reused (W-1). Never `--force`.
+    let argv = crate::gh::git(
+        binaries,
+        clone,
+        vec![
+            "worktree".into(),
+            "add".into(),
+            target.clone().into_os_string(),
+            "-b".into(),
+            branch.as_str().into(),
+        ],
+    );
+    let out = crate::gh::run_pipe(&argv, Duration::from_secs(60))
+        .with_context(|| format!("cannot run git worktree add for {}", target.display()))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // The add failed: undo our directory so neither it nor a registry
+        // entry is left behind (tests 4 and 4b read the real registry).
+        let _ = std::fs::remove_dir(&target);
+        anyhow::bail!("git worktree add failed: {}", stderr.trim());
+    }
+
+    // The directory git just populated must still be the one we made: if the
+    // re-canonicalised path left the root, undo and refuse.
+    let canon_target = target
+        .canonicalize()
+        .with_context(|| format!("cannot canonicalise {}", target.display()))?;
+    ensure!(
+        canon_target.starts_with(&canon_root),
+        "worktree target escapes the root: {}",
+        canon_target.display()
+    );
+
+    // Git derives the branch from the directory name; ask git which branch
+    // the tree is really on, so `feat/x` and `feat-x` can never share a tree.
+    confirm_branch(binaries, &target, branch)?;
+
+    Ok(CreatedWorktree {
+        path: target,
+        branch: branch.clone(),
+    })
 }
