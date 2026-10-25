@@ -108,6 +108,10 @@ pub struct App {
     pub all_repos: Vec<String>,
     /// The repo selected in the repos pane; `All` means "all".
     pub repo_filter: RepoFilter,
+    /// Where the drill-down came from, by identity: `Esc` in a filtered
+    /// list restores the cursor to this repo's row, not to an index — the
+    /// list may have changed while drilled in. `None` when never drilled in.
+    pub last_repo: Option<RepoSlug>,
     /// `Enter` in the repo menu: the checked rows, for the loop to save to
     /// `state.json`. The live list is already updated; this is only the file.
     pub selection_applied: Option<Vec<String>>,
@@ -153,6 +157,7 @@ impl Default for App {
             repos: Vec::new(),
             all_repos: Vec::new(),
             repo_filter: RepoFilter::All,
+            last_repo: None,
             selection_applied: None,
             loading: false,
             failed: 0,
@@ -585,10 +590,25 @@ impl App {
             Key::Esc => match self.pane {
                 Pane::Detail => self.pane = Pane::List,
                 // Drilled in (a repo filter is active): back to the repos
-                // pane, keeping the filter — the cursor did not move, so
-                // coming back shows the same list.
+                // pane, by identity — the list may have changed while
+                // drilled in, so an index could point at another repo.
                 Pane::List if matches!(self.repo_filter, RepoFilter::One(_)) => {
-                    self.pane = Pane::Repos
+                    self.pane = Pane::Repos;
+                    match self
+                        .last_repo
+                        .as_ref()
+                        .and_then(|slug| self.repos.iter().position(|row| row == slug.as_str()))
+                    {
+                        Some(i) => self.repos_cursor = i,
+                        // Gone: home to row 0, which also resets the filter
+                        // (a cursor on "all" with a dead filter would show
+                        // an empty list and claim a repo that is gone).
+                        None => {
+                            self.repos_cursor = 0;
+                            self.last_repo = None;
+                            self.apply_repo_filter();
+                        }
+                    }
                 }
                 // Second Esc, in the repos pane with a filter: clear it and
                 // go home to row 0. The filter follows the cursor, so moving
@@ -624,8 +644,12 @@ impl App {
             Key::Char(_) => {}
             // In the repos pane Enter drills in: the filter is already live
             // (it follows the cursor), so reaching the list shows the repo's
-            // items. Anywhere else Enter opens the detail box.
+            // items. The origin is recorded by identity for the way back.
             Key::Enter if self.pane == Pane::Repos => {
+                self.last_repo = match &self.repo_filter {
+                    RepoFilter::One(slug) => Some(slug.clone()),
+                    RepoFilter::All => None,
+                };
                 self.pane = Pane::List;
             }
             Key::Enter => self.request_detail(),
