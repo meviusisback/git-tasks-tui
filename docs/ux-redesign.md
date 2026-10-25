@@ -76,6 +76,14 @@ UI state that changes with a keystroke, not a file a person edits. Empty state
 means "all of `repos`". The menu toggles membership and writes that file; the
 items list only ever shows the picked repos.
 
+**A new list resets the cursor, so no row survives a reorder.** `set_repos` sets
+`repos_cursor = 0` and clears the detail; that single reset is what makes
+"remember the repo you came from" unnecessary — the identity problem cannot
+arise if no old row outlives the list. This is a rule, not a side effect: any
+change that keeps the cursor across a new list reintroduces the stale-row bug
+silently. The test that pins it (`applying_a_selection_resets_the_repo_cursor`)
+is owed; the comment next to `set_repos` must say why.
+
 ## The agent
 
 - Starts from the detail box, for one item. Args are **fixed and typed**; the
