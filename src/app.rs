@@ -102,6 +102,57 @@ pub enum Msg {
 pub enum Modal {
     Confirm(String),
     RepoMenu(RepoMenu),
+    ActionMenu(ActionMenu),
+}
+
+/// One row of the actions menu: the fully specified choice. No strings cross
+/// this boundary — a row IS the typed parameters the action runs with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionPick {
+    Merge(MergeMethod, bool),
+    Close,
+}
+
+impl ActionPick {
+    pub fn text(&self) -> &str {
+        match self {
+            ActionPick::Merge(MergeMethod::Squash, false) => "merge — squash",
+            ActionPick::Merge(MergeMethod::Squash, true) => "merge — squash + delete branch",
+            ActionPick::Merge(MergeMethod::Merge, false) => "merge — merge",
+            ActionPick::Merge(MergeMethod::Merge, true) => "merge — merge + delete branch",
+            ActionPick::Merge(MergeMethod::Rebase, false) => "merge — rebase",
+            ActionPick::Merge(MergeMethod::Rebase, true) => "merge — rebase + delete branch",
+            ActionPick::Close => "close issue",
+        }
+    }
+}
+
+/// The single constructor: a menu pick becomes the action it runs. `a`
+/// (fast merge with defaults) goes through here too, so "merge with
+/// defaults" lives in one place no matter which key asked for it.
+pub fn action_for_pick(repo: RepoSlug, number: u64, pick: &ActionPick) -> Action {
+    match pick {
+        ActionPick::Merge(method, delete_branch) => Action::Merge {
+            repo,
+            number,
+            method: *method,
+            delete_branch: *delete_branch,
+        },
+        ActionPick::Close => Action::Close {
+            repo,
+            number,
+            reason: None,
+            comment: None,
+        },
+    }
+}
+
+/// The `m` single-select: one row per action the current item allows.
+/// `Space`/arrows choose, `Enter` confirms, `Esc` cancels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionMenu {
+    pub rows: Vec<ActionPick>,
+    pub cursor: usize,
 }
 
 /// The `R` multi-select: which of the configured repos the list shows.
@@ -348,6 +399,9 @@ impl App {
                     menu.marked.len()
                 );
             }
+            Some(Modal::ActionMenu(_)) => {
+                return String::from("↑/↓ choose · Enter confirm · Esc cancel");
+            }
             None => {}
         }
         if self.searching {
@@ -479,6 +533,69 @@ impl App {
         self.visible_items().get(self.list_cursor).copied()
     }
 
+    /// One row of the actions menu: the fully specified choice. No strings
+    /// cross this boundary — a row IS the typed parameters the action runs
+    /// with, so the menu cannot promise what the type cannot build.
+    pub fn action_menu_rows(kind: crate::model::ItemKind) -> Vec<ActionPick> {
+        match kind {
+            crate::model::ItemKind::Pr => [
+                (MergeMethod::Squash, false),
+                (MergeMethod::Merge, false),
+                (MergeMethod::Rebase, false),
+                (MergeMethod::Squash, true),
+                (MergeMethod::Merge, true),
+                (MergeMethod::Rebase, true),
+            ]
+            .into_iter()
+            .map(|(method, delete)| ActionPick::Merge(method, delete))
+            .collect(),
+            // Issues are closed, never merged — the menu offers exactly that.
+            crate::model::ItemKind::Issue => vec![ActionPick::Close],
+        }
+    }
+
+    /// `m` opens the menu on the selected item. Issues offer only closing;
+    /// anything without a parseable repo cannot be acted on at all.
+    pub fn open_action_menu(&mut self) {
+        let Some(item) = self.selected_item() else {
+            self.status = "nothing selected".to_string();
+            return;
+        };
+        if RepoSlug::parse(&item.repo).is_err() {
+            self.status = format!("cannot act on {}", item.repo);
+            return;
+        }
+        self.modal = Some(Modal::ActionMenu(ActionMenu {
+            rows: Self::action_menu_rows(item.kind),
+            cursor: 0,
+        }));
+    }
+
+    fn menu_step_action(&mut self, delta: i32) {
+        if let Some(Modal::ActionMenu(menu)) = self.modal.as_mut() {
+            let len = menu.rows.len();
+            menu.cursor = step(menu.cursor, delta, len);
+        }
+    }
+
+    /// `Enter` in the actions menu: the picked row becomes the action and
+    /// goes through the same confirmation as `a` — one dialog, one argv.
+    fn apply_action_pick(&mut self) {
+        if let Some(Modal::ActionMenu(menu)) = self.modal.take() {
+            let Some(item) = self.selected_item() else {
+                return;
+            };
+            let Some(pick) = menu.rows.get(menu.cursor) else {
+                return;
+            };
+            let Ok(slug) = RepoSlug::parse(&item.repo) else {
+                self.status = format!("cannot act on {}", item.repo);
+                return;
+            };
+            self.confirm_action(action_for_pick(slug, item.number, pick));
+        }
+    }
+
     /// Ask for the selected item's body, unless it is already loaded.
     pub fn request_detail(&mut self) {
         let Some(item) = self.selected_item() else {
@@ -539,15 +656,21 @@ impl App {
             self.status = format!("cannot act on {repo}");
             return;
         };
+        let action = action_for_pick(
+            slug,
+            number,
+            &ActionPick::Merge(FIRST_ACTION_METHOD, FIRST_ACTION_DELETES_BRANCH),
+        );
+        self.confirm_action(action);
+    }
+
+    /// Build the confirmation for an action: the sentence plus the exact
+    /// argv, shown before anything runs. `a` and the `m` menu meet here —
+    /// one dialog, one argv, whichever key asked.
+    fn confirm_action(&mut self, action: Action) {
         let Some(binaries) = self.binaries.clone() else {
             self.status = "no binaries resolved".into();
             return;
-        };
-        let action = Action::Merge {
-            repo: slug,
-            number,
-            method: FIRST_ACTION_METHOD,
-            delete_branch: FIRST_ACTION_DELETES_BRANCH,
         };
         match argv_for(&binaries, &action) {
             Ok(argv) => {
@@ -594,6 +717,16 @@ impl App {
                             self.apply_selection(selected);
                         }
                     }
+                    _ => {}
+                }
+                return;
+            }
+            if matches!(self.modal, Some(Modal::ActionMenu(_))) {
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Up => self.menu_step_action(-1),
+                    Key::Down | Key::Char(' ') => self.menu_step_action(1),
+                    Key::Enter => self.apply_action_pick(),
                     _ => {}
                 }
                 return;
@@ -651,6 +784,9 @@ impl App {
         match key {
             // `a` asks to run the first action on the selected row.
             Key::Char('a') => self.request_action(),
+            // `m` opens the same actions as a menu, so the method and the
+            // branch deletion are a choice instead of a constant.
+            Key::Char('m') => self.open_action_menu(),
             Key::Char('/') => self.searching = true,
             // `R` picks which repos the list shows (multi-select menu).
             Key::Char('R') => self.open_repo_menu(),

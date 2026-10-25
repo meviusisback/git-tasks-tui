@@ -33,6 +33,7 @@ const HELP_NOW: &[&str] = &[
     "/          filter the visible list",
     "r          refresh",
     "a          first action on the selected item",
+    "m          actions menu: method and branch deletion are a choice",
     "?          this keymap",
     "q          quit (with a confirmation if the agent is running)",
 ];
@@ -47,7 +48,6 @@ const HELP_NOW: &[&str] = &[
 /// `pub` (not `pub(crate)`) because the second reader is an integration
 /// test, outside the crate.
 pub const PLANNED: &[(char, &str)] = &[
-    ('m', "actions menu (stage 14)"),
     ('w', "worktree menu (stage 15)"),
     ('s', "agent sessions (stage 16)"),
 ];
@@ -96,6 +96,9 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
 
     if let Some(crate::app::Modal::RepoMenu(menu)) = &app.modal {
         draw_repo_menu(frame, frame.area(), menu);
+    }
+    if let Some(crate::app::Modal::ActionMenu(menu)) = &app.modal {
+        draw_action_menu(frame, frame.area(), menu);
     }
 }
 
@@ -305,6 +308,31 @@ fn draw_repo_menu(frame: &mut Frame, area: Rect, menu: &crate::app::RepoMenu) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" repos — Space mark · Enter apply · Esc cancel ")
+                .border_style(theme::overlay())
+                .title_style(theme::overlay()),
+        )
+        .highlight_style(theme::highlight());
+    let mut state = ListState::default().with_selected(Some(menu.cursor));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_action_menu(frame: &mut Frame, area: Rect, menu: &crate::app::ActionMenu) {
+    let area = centered_rect(70, 80, area);
+    frame.render_widget(Clear, area);
+    let items: Vec<ListItem> = menu
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mark = if i == menu.cursor { "▸" } else { " " };
+            ListItem::new(sanitize(&format!("{mark} {}", row.text())))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" action — ↑/↓ choose · Enter confirm · Esc cancel ")
                 .border_style(theme::overlay())
                 .title_style(theme::overlay()),
         )

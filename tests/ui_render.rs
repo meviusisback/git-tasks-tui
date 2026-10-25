@@ -173,8 +173,12 @@ fn help_overlay_lists_the_full_keymap() {
         "future keys get their own section: {screen}"
     );
     assert!(
-        screen.contains("actions menu (stage 14)"),
-        "future keys name their stage: {screen}"
+        screen.contains("m          actions menu"),
+        "m is available today: {screen}"
+    );
+    assert!(
+        !screen.contains("actions menu (stage"),
+        "m is not promised for later anymore: {screen}"
     );
     assert!(
         screen.contains("R          repo selection menu"),
@@ -352,6 +356,51 @@ fn a_body_belonging_to_another_item_is_not_shown() {
         view.detail
     );
     assert!(view.detail.contains("Enter — body"));
+}
+
+#[test]
+fn the_action_menu_fits_at_80_columns() {
+    // The menu is a choice, not a surprise: all six rows must be visible at
+    // the decisive width, with the method and the branch flag readable.
+    use gtasks::actions::RepoSlug;
+    use gtasks::model::{Item, ItemKind};
+    let slug = RepoSlug::parse("o/r").expect("valid slug");
+    let mut app = App {
+        repos: vec![gtasks::app::RepoRow::All, gtasks::app::RepoRow::Repo(slug)],
+        ..App::default()
+    };
+    app.items = vec![Item {
+        number: 7,
+        title: "seven".to_string(),
+        state: "OPEN".to_string(),
+        is_draft: None,
+        author: None,
+        labels: vec![],
+        assignees: vec![],
+        created_at: String::new(),
+        updated_at: String::new(),
+        url: String::new(),
+        head_ref_name: None,
+        base_ref_name: None,
+        review_decision: None,
+        mergeable: None,
+        status_check_rollup: vec![],
+        closing_issues_references: vec![],
+        repo: "o/r".to_string(),
+        kind: ItemKind::Pr,
+    }];
+    app.update(Msg::Key(Key::Char('m')));
+    assert!(matches!(app.modal, Some(gtasks::app::Modal::ActionMenu(_))));
+    let view = view_for(&app);
+    let screen = render_sized(&app, &view, 80, 24);
+    for line in [
+        "merge — squash",
+        "merge — rebase + delete branch",
+        "↑/↓ choose · Enter confirm · Esc cancel",
+        "▸ merge — squash",
+    ] {
+        assert!(screen.contains(line), "80x24 shows {line}: {screen}");
+    }
 }
 
 #[test]
