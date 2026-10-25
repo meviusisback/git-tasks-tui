@@ -165,3 +165,15 @@ fn the_selection_survives_a_restart_on_disk() {
     let back = gtasks::state::State::load(&path).unwrap();
     assert_eq!(back.selected_repos, state.selected_repos);
 }
+
+#[test]
+fn applying_a_selection_resets_the_repo_cursor() {
+    // The contract behind "no last_repo": a new list zeroes the cursor, so
+    // no stale index can survive a reorder. If the reset ever goes away, an
+    // identity would be needed again — this test says so first.
+    let mut app = app_with_three_repos();
+    app.repos_cursor = 2;
+    open_menu(&mut app);
+    app.update(Msg::Key(Key::Enter)); // apply, selection unchanged
+    assert_eq!(app.repos_cursor, 0, "a new list starts at the top");
+}
