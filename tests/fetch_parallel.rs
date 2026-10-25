@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use gtasks::fetch::{FetchError, FetchOutcome, fetch_many_with};
+use gtasks::fetch::{FetchError, FetchOutcome, MAX_PARALLEL, fetch_many_with};
 use gtasks::model::{Item, ItemKind};
 
 fn item(number: u64, repo: &str) -> Item {
@@ -102,7 +102,10 @@ fn concurrency_is_bounded_and_every_repo_is_fetched_once() {
 }
 
 #[test]
-fn parallel_is_clamped_to_four() {
+fn parallel_is_capped_at_the_documented_ceiling() {
+    // The ceiling lives in MAX_PARALLEL with its reason (heavy GraphQL reads
+    // vs GitHub's secondary limits); this test follows the constant, so a
+    // re-tuned ceiling updates the test instead of fossilising the old one.
     let names: Vec<String> = (0..8).map(|i| format!("org/r{i}")).collect();
     let in_flight = AtomicUsize::new(0);
     let peak = AtomicUsize::new(0);
@@ -116,8 +119,9 @@ fn parallel_is_clamped_to_four() {
     });
 
     assert!(
-        peak.load(Ordering::SeqCst) <= 4,
-        "cap is 4, peak was {}",
+        peak.load(Ordering::SeqCst) <= MAX_PARALLEL,
+        "cap is MAX_PARALLEL ({}), peak was {}",
+        MAX_PARALLEL,
         peak.load(Ordering::SeqCst)
     );
 }

@@ -119,6 +119,27 @@ fn a_full_pr_shows_every_present_field() {
 }
 
 #[test]
+fn failed_checks_count_by_name_and_cap_at_two_plus_n() {
+    // (ci, ci) reads like a misprint; the user wants to know *which* workflow
+    // is red. And a long tail of names would burst the pane at 80 columns.
+    fn failing(name: &str) -> Check {
+        Check {
+            name: Some(name.to_string()),
+            status: Some("COMPLETED".to_string()),
+            conclusion: Some("FAILURE".to_string()),
+        }
+    }
+    let mut item = rich_pr();
+    item.status_check_rollup = vec![failing("ci"), failing("ci")];
+    let rows = item.detail_fields(NEW_YEAR);
+    assert!(rows.contains(&"checks: 0 passed, 2 failed (ci ×2)".to_string()));
+
+    item.status_check_rollup = vec![failing("lint"), failing("ci"), failing("docs")];
+    let rows = item.detail_fields(NEW_YEAR);
+    assert!(rows.contains(&"checks: 0 passed, 3 failed (lint, ci, +1)".to_string()));
+}
+
+#[test]
 fn empty_fields_are_omitted_never_blank() {
     let mut item = rich_pr();
     item.author = None;
