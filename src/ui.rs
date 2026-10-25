@@ -390,7 +390,7 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
                 spans.remove(0);
             }
             if *has_wt {
-                let marker = icons::branch();
+                let marker = icons::worktree();
                 let marker = if marker.is_empty() { "◉ " } else { marker };
                 spans.insert(0, Span::styled(marker, theme::worktree_marker()));
             }

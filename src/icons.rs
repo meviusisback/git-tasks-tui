@@ -84,6 +84,13 @@ pub fn branch() -> &'static str {
     if nerd() { "\u{f126} " } else { "" }
 }
 
+/// Worktree glyph: the marker in front of list rows that already have a
+/// worktree on disk. Deliberately NOT the fork glyph — the two got mixed up
+/// on screen. A hard disk reads as "bytes already here".
+pub fn worktree() -> &'static str {
+    if nerd() { "\u{f0a0} " } else { "" }
+}
+
 /// Agent pane glyph, empty without a Nerd Font.
 pub fn agent() -> &'static str {
     if nerd() { "\u{f120} " } else { "" }

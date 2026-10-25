@@ -59,10 +59,129 @@ fn map_color(color: VtTerm) -> Palette {
     }
 }
 
+/// Fullscreen TUIs (Pi, agy, …) draw on the alternate screen
+/// (`CSI ? 1049 h`), whose scrolls never reach the main scrollback — the
+/// wheel would sit on an empty history while the agent visibly works. The
+/// filter drops exactly the enter/exit sequences (`?1047`/`?1049` with
+/// `h`/`l`) and feeds everything else untouched, so the app draws on the
+/// main screen and every line it scrolls stays reachable from the wheel.
+///
+/// Only those four shapes are dropped: cursor visibility (`?25`), mouse
+/// tracking (`?1000`) and bracketed paste (`?2004`) pass through (the parser
+/// ignores them, as before), and a combined parameter list (`?25;1049h`)
+/// passes through whole — dropping half a request would be worse than
+/// keeping the alternate screen. Streaming-safe: a sequence split across
+/// two reads is held back (bounded) until it completes or proves itself
+/// something else. Held bytes are only ever `ESC [ ? digits` — never text —
+/// so a child that dies mid-sequence loses nothing visible.
+pub struct AltScreenFilter {
+    pending: Vec<u8>,
+}
+
+impl Default for AltScreenFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AltScreenFilter {
+    pub fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut input = std::mem::take(&mut self.pending);
+        input.extend_from_slice(bytes);
+        let mut out = Vec::with_capacity(input.len());
+        let mut i = 0;
+        while i < input.len() {
+            if input[i] != 0x1b {
+                out.push(input[i]);
+                i += 1;
+                continue;
+            }
+            match scan_csi(&input[i..]) {
+                Csi::Complete { len, drop } => {
+                    if !drop {
+                        out.extend_from_slice(&input[i..i + len]);
+                    }
+                    i += len;
+                }
+                Csi::Incomplete => {
+                    if input.len() - i > 32 {
+                        // Longer than any sequence we drop: not ours, flush.
+                        out.extend_from_slice(&input[i..]);
+                        i = input.len();
+                    } else {
+                        break;
+                    }
+                }
+                Csi::Other => {
+                    out.push(input[i]);
+                    i += 1;
+                }
+            }
+        }
+        self.pending = input[i..].to_vec();
+        out
+    }
+}
+
+enum Csi {
+    Complete { len: usize, drop: bool },
+    Incomplete,
+    Other,
+}
+
+/// Classify the CSI starting at `buf[0]` (`ESC`): complete (with whether it
+/// is an alternate-screen switch), incomplete (need more bytes — including a
+/// lone trailing `ESC`, which may be a split sequence), or not a CSI at all.
+fn scan_csi(buf: &[u8]) -> Csi {
+    if buf.len() < 2 {
+        return Csi::Incomplete;
+    }
+    if buf[1] != b'[' {
+        return Csi::Other;
+    }
+    let mut j = 2;
+    let mut private = false;
+    if j < buf.len() && buf[j] == b'?' {
+        private = true;
+        j += 1;
+    }
+    let params_start = j;
+    while j < buf.len() && (buf[j].is_ascii_digit() || buf[j] == b';') {
+        j += 1;
+    }
+    if j >= buf.len() {
+        return Csi::Incomplete;
+    }
+    let params_end = j;
+    while j < buf.len() && (0x20..=0x2f).contains(&buf[j]) {
+        j += 1;
+    }
+    if j >= buf.len() {
+        return Csi::Incomplete;
+    }
+    if !(0x40..=0x7e).contains(&buf[j]) {
+        return Csi::Other;
+    }
+    let len = j + 1;
+    // A combined list (`?25;1049h`) is not ours: only the exact single
+    // parameter drops, the rest passes through whole.
+    let params = &buf[params_start..params_end];
+    let drop =
+        private && (buf[j] == b'h' || buf[j] == b'l') && (params == b"1047" || params == b"1049");
+    Csi::Complete { len, drop }
+}
+
 /// One agent inside the box: the pty child, its output parsed live, the seed
 /// file kept until the run ends.
 pub struct EmbeddedSession {
     parser: vt100::Parser,
+    alt: AltScreenFilter,
     rx: mpsc::Receiver<Vec<u8>>,
     writer: Box<dyn std::io::Write + Send>,
     master: Box<dyn MasterPty + Send>,
@@ -136,6 +255,7 @@ impl EmbeddedSession {
                 NonZeroU16::new(cols).unwrap_or(NonZeroU16::MIN),
                 1000,
             ),
+            alt: AltScreenFilter::new(),
             rx,
             writer,
             master: pair.master,
@@ -153,14 +273,17 @@ impl EmbeddedSession {
         })
     }
 
-    /// Feed every pending output chunk into the parser. True when the screen
+    /// Feed every pending output chunk into the parser. Alternate-screen
+    /// switches are folded out first, so fullscreen apps scroll the main
+    /// screen and the wheel reaches their history. True when the screen
     /// changed and the caller should re-snapshot.
     pub fn drain(&mut self) -> bool {
         let mut changed = false;
         for _ in 0..256 {
             match self.rx.try_recv() {
                 Ok(bytes) => {
-                    self.parser.process(&bytes);
+                    let clean = self.alt.feed(&bytes);
+                    self.parser.process(&clean);
                     changed = true;
                 }
                 Err(_) => break,

@@ -34,14 +34,16 @@ is always off, so neither is reachable from the keyboard yet.
 `g` starts the agent **inside the agent box** (bottom-right, about 60% of the
 right column): the program never closes, the agent streams into the pane.
 Before anything runs, `g` asks two things: which agent (hermes, pi, omp,
-opencode, agy) and on which worktree. A fork marker (`◉` without a Nerd Font)
+opencode, agy) and on which worktree. A worktree marker (`◉` without a Nerd Font)
 in front of a list row means a worktree directory already exists for that
 branch — `g` then works on it instead of creating one. While the box has
 focus every key but `Esc`, `Tab` and `Shift`+arrows is agent input — typing,
 arrows, `Ctrl-C` (interrupt). `Esc` unfocuses, `Tab` cycles panes,
 `Shift`+arrows move between boxes, the agent keeps running either way. The
-mouse wheel scrolls the box back through history; typing jumps back to the
-live tail. Quitting kills the agent. A finished run leaves its record card in
+mouse wheel scrolls the box back through history (fullscreen agents like Pi
+draw on the box's main screen — their alternate screen is folded away, so
+the history is there for every agent); typing jumps back to the live tail.
+Quitting kills the agent. A finished run leaves its record card in
 the detail column.
 
 `m`, `s` are **planned, not implemented** — and the overlay announces

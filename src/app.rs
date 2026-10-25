@@ -773,6 +773,7 @@ impl App {
     /// `Enter` on the already-active tab changes nothing: the cached body
     /// is reused instead of being cleared and fetched again.
     pub fn open_tab_for_selected(&mut self) {
+        self.dismiss_finished_card();
         let Some(item) = self.selected_item().cloned() else {
             return;
         };
@@ -804,8 +805,9 @@ impl App {
     }
 
     /// Activate tab `idx` (clamped): the detail follows it and loads its
-    /// body when missing.
+    /// body when missing. A finished record's card yields to the detail.
     pub fn activate_tab(&mut self, idx: usize) {
+        self.dismiss_finished_card();
         if self.tabs.is_empty() {
             self.active_tab = None;
             return;
@@ -1495,6 +1497,22 @@ impl App {
         None
     }
 
+    /// A finished run's card yields to the detail as soon as the user moves:
+    /// after the close, arrows/tabs/clicks show the item again, not the
+    /// agent's last frame. A running session keeps its card — it is still
+    /// the news. `x` deletes the record entirely, this only hides the card
+    /// (reselecting after a new run shows the new one).
+    fn dismiss_finished_card(&mut self) {
+        let finished = matches!(
+            self.agent_record.as_ref().map(|r| &r.status),
+            Some(AgentStatus::Finished { .. })
+        );
+        if finished {
+            if let Some(record) = self.agent_record.as_ref() {
+                self.agent_dismissed_for = Some((record.repo.clone(), record.number));
+            }
+        }
+    }
     /// `x` deletes the single record. After the exit there is nothing to
     /// stop, so closing only forgets — it never claims to kill anything.
     pub fn close_agent_record(&mut self) {
@@ -1975,7 +1993,10 @@ impl App {
                 self.repos_cursor = step(self.repos_cursor, delta, self.repos_len);
                 self.apply_repo_filter();
             }
-            Pane::List => self.list_cursor = step(self.list_cursor, delta, self.list_len),
+            Pane::List => {
+                self.list_cursor = step(self.list_cursor, delta, self.list_len);
+                self.dismiss_finished_card();
+            }
             Pane::Detail => {
                 let next = self.detail_scroll as i32 + delta;
                 self.detail_scroll = next.max(0) as u16;

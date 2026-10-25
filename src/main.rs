@@ -728,8 +728,12 @@ fn run_tui() -> anyhow::Result<()> {
             }
             if let Some(record) = sess.poll_exit() {
                 let summary = record.status.summary();
+                let key = (record.repo.clone(), record.number);
                 app.agent_record = Some(record);
-                app.agent_dismissed_for = None;
+                // The finish is announced in the status line; the detail
+                // returns at once instead of gluing the finished card to
+                // the item. A new run clears the dismissal at launch.
+                app.agent_dismissed_for = Some(key);
                 app.agent_running = false;
                 app.agent_screen = Vec::new();
                 app.status = format!("agent finished: {summary}");

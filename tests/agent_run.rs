@@ -371,6 +371,41 @@ fn esc_hides_the_card_but_keeps_the_record() {
 }
 
 #[test]
+fn moving_after_a_finished_run_returns_the_detail() {
+    // After the close the card must not glue itself to the item: arrows,
+    // Enter and tabs show the detail again. A still-running session keeps
+    // its card — it is the news, not leftovers.
+    let (mut app, _tmp) = pr_app();
+    app.agent_record = Some(record());
+    assert!(app.visible_record().is_some());
+    app.update(Msg::Key(Key::Down));
+    assert!(
+        app.visible_record().is_none(),
+        "arrows dismiss a finished card"
+    );
+    assert!(app.agent_record.is_some(), "the record itself stays");
+
+    let (mut app, _tmp) = pr_app();
+    app.agent_record = Some(record());
+    app.update(Msg::Key(Key::Enter));
+    assert!(
+        app.visible_record().is_none(),
+        "opening the tab dismisses a finished card"
+    );
+
+    let (mut app, _tmp) = pr_app();
+    let mut running = record();
+    running.status = AgentStatus::Running;
+    app.agent_record = Some(running);
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Enter));
+    assert!(
+        app.visible_record().is_some(),
+        "a running session keeps its card while moving"
+    );
+}
+
+#[test]
 fn x_forgets_the_record_and_says_so() {
     let (mut app, _tmp) = pr_app();
     app.agent_record = Some(record());
