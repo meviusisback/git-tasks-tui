@@ -3,21 +3,41 @@
 #
 # The requirement (docs/ux-redesign.md): with 69 configured repos the list must
 # be populated within ten seconds. "Populated" is not "the process started" and
-# not "the spinner appeared": it is the first moment the left column shows a
-# repo with a non-zero count.
+# not "the spinner appeared": it is the first moment the left column shows an
+# item row.
 #
 # Usage:  sh scripts/measure-startup.sh [seconds_to_wait] [binary]
 #         default: 120 seconds, target/release/gtasks
 #
-# It runs the real binary in a detached tmux session with an isolated
-# XDG_STATE_HOME, so a measurement never writes into the real log or state.
+# Four things this script refuses to get wrong, each learned by measuring badly
+# first:
+#
+#   1. ENVIRONMENT. `VAR=x tmux new-session ...` does NOT pass VAR to the
+#      session when a tmux server is already running — the session inherits the
+#      *server's* environment. On a desktop that is always the case, so the
+#      isolation was theoretical. `-e` is the only way that works.
+#   2. IDENTITY. A duration with no object attached is a rumour: the source sha
+#      and the binary's own hash are printed, so "7 s" cannot later belong to a
+#      different tree.
+#   3. THE CONTROL. If the pattern that recognises an item row matches nothing,
+#      "never within Ns" is indistinguishable from "the pattern is wrong". A
+#      known-good screen is measured first; if the pattern cannot match there,
+#      the script refuses to give a verdict instead of inventing one.
+#   4. RESOLUTION. The requirement is ten seconds; sampling at one second
+#      rounds every result up by up to a second. Sampling is 250 ms.
 set -eu
 
 limit=${1:-120}
 bin=${2:-target/release/gtasks}
 session="gtasks-measure-$$"
+control_session="gtasks-control-$$"
 payload=$(mktemp -d)
-trap 'tmux kill-session -t "$session" 2>/dev/null || true; rm -rf "$payload"' EXIT INT TERM
+cleanup() {
+    tmux kill-session -t "$session" 2>/dev/null || true
+    tmux kill-session -t "$control_session" 2>/dev/null || true
+    rm -rf "$payload"
+}
+trap cleanup EXIT INT TERM
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -26,38 +46,74 @@ if [ ! -x "$bin" ]; then
     exit 2
 fi
 
-XDG_STATE_HOME="$payload/state" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}" \
-    tmux new-session -d -s "$session" -x 120 -y 30 "$(pwd)/$bin"
+# What is being measured (2).
+abs_bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
+echo "source sha        : $(git rev-parse --short HEAD)"
+echo "binary            : $abs_bin"
+echo "binary sha256     : $(sha256sum "$abs_bin" | cut -c1-16)"
 
-start=$(date +%s)
-first=''
-while :; do
-    now=$(date +%s)
-    elapsed=$((now - start))
-    # An item row in the left column (`││#12345 …`): that is the list being
-    # worth a look. A repo count is not the signal — counts can stay at zero
-    # while the items themselves are already drawn under the repo.
-    line=$(tmux capture-pane -p -t "$session" 2>/dev/null | grep -oE '││#[0-9]+ ' | head -1 || true)
-    if [ -n "$line" ]; then
-        first=$elapsed
-        break
-    fi
-    if [ "$elapsed" -ge "$limit" ]; then
-        break
-    fi
-    sleep 1
-done
+# A row looks like `││#12345 …`; keep the pattern in one place so the control and
+# the measurement cannot disagree about what they are looking for.
+pattern='││#[0-9][0-9]* '
 
-echo "binary            : $bin"
-echo "repos configured  : $(grep -c '^ *"meviusisback/\|^ *"[a-zA-Z0-9_.-]*/[a-zA-Z0-9_.-]*"' "${XDG_CONFIG_HOME:-$HOME/.config}/gtasks/config.toml" 2>/dev/null || echo '?')"
-if [ -n "$first" ]; then
-    echo "first useful row  : ${first}s"
-    if [ "$first" -le 10 ]; then
+wait_for_row() { # wait_for_row <session> <seconds> <step>
+    session=$1; wait_s=$2; step=$3
+    started=$(date +%s%N)
+    while :; do
+        line=$(tmux capture-pane -p -t "$session" 2>/dev/null | grep -oE "$pattern" | head -1 || true)
+        if [ -n "$line" ]; then
+            now=$(date +%s%N)
+            echo $(( (now - started) / 1000000 ))
+            return 0
+        fi
+        elapsed_ms=$(( ($(date +%s%N) - started) / 1000000 ))
+        [ "$elapsed_ms" -ge $((wait_s * 1000)) ] && return 1
+        sleep "$step"
+    done
+}
+
+# The control (3): one repo, isolated config, must show a row.
+mkdir -p "$payload/control/gtasks"
+printf 'repos = ["cli/cli"]\nlimit = 5\n' > "$payload/control/gtasks/config.toml"
+tmux new-session -d -s "$control_session" -x 120 -y 30 \
+    -e XDG_CONFIG_HOME="$payload/control" -e XDG_STATE_HOME="$payload/control-state" \
+    "$abs_bin"
+if ! control_ms=$(wait_for_row "$control_session" 60 0.25); then
+    echo "control           : the pattern matched no item row on a known-good screen"
+    echo "verdict           : unmeasurable — the pattern is wrong, not the program"
+    exit 3
+fi
+echo "control           : row visible after ${control_ms}ms (one repo) — the pattern works"
+tmux kill-session -t "$control_session" 2>/dev/null || true
+
+# The measurement (1, 4): the user's own config, isolated state, real sampling.
+mkdir -p "$payload/state"
+config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+repos=$(grep -cE '"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"' "$config_home/gtasks/config.toml" 2>/dev/null || echo 0)
+echo "config read by app: $config_home/gtasks/config.toml ($repos repos)"
+tmux new-session -d -s "$session" -x 120 -y 30 \
+    -e XDG_CONFIG_HOME="$config_home" -e XDG_STATE_HOME="$payload/state" \
+    "$abs_bin"
+
+# A binary that never started must not be reported as a slow binary: the two
+# verdicts are different, and the first one is a defect of the harness.
+sleep 1
+if ! tmux has-session -t "$session" 2>/dev/null; then
+    echo "binary started    : no — the session died within a second"
+    echo "verdict           : unmeasurable — the binary did not start" 
+    exit 4
+fi
+
+
+if first_ms=$(wait_for_row "$session" "$limit" 0.25); then
+    secs=$((first_ms / 1000))
+    printf 'first useful row  : %sms (%ss)\n' "$first_ms" "$secs"
+    if [ "$first_ms" -le 10000 ]; then
         echo "verdict           : within the ten-second requirement"
     else
         echo "verdict           : too slow — over ten seconds"
     fi
 else
     echo "first useful row  : never within ${limit}s"
-    echo "verdict           : too slow — nothing on screen"
+    echo "verdict           : too slow — nothing on screen (the control proved the pattern works)"
 fi
