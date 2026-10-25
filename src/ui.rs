@@ -115,7 +115,7 @@ pub fn view_for(app: &App) -> ViewModel {
         app.detail.clone()
     };
     ViewModel {
-        repos: app.repos.clone(),
+        repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
         detail,
     }
@@ -284,7 +284,7 @@ fn draw_repo_menu(frame: &mut Frame, area: Rect, menu: &crate::app::RepoMenu) {
             } else {
                 "[ ]"
             };
-            ListItem::new(sanitize(&format!("{mark} {row}")))
+            ListItem::new(sanitize(&format!("{mark} {}", row.as_str())))
         })
         .collect();
     let list = List::new(items)

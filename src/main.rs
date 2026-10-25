@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use gtasks::actions;
+use gtasks::actions::RepoSlug;
 use gtasks::app::{App, Msg};
 use gtasks::binaries::Binaries;
 use gtasks::config::Config;
@@ -202,7 +203,6 @@ fn run_tui() -> anyhow::Result<()> {
     };
 
     let config = load_config();
-    let repos = config.repos.clone();
     let timeout = Duration::from_secs(config.timeout_s.max(1));
     let parallel = config.parallel;
     let limit = config.limit as usize;
@@ -216,7 +216,10 @@ fn run_tui() -> anyhow::Result<()> {
         ..App::default()
     };
     // The pane lists what the user configured, including repos with no items.
-    // A saved selection narrows it; an empty one means "everything".
+    // A saved selection narrows it; an empty one means "everything". Both
+    // lists are validated `RepoSlug`s from here on — `config` was checked at
+    // load, and a hand-edited state file only loses the entries that do not
+    // parse instead of breaking the startup.
     let state_path = state_path();
     let mut state = match state_path.as_deref() {
         Some(path) => match State::load(path) {
@@ -228,16 +231,36 @@ fn run_tui() -> anyhow::Result<()> {
         },
         None => State::default(),
     };
-    let selected = if state.selected_repos.is_empty() {
-        repos.clone()
+    let all: Vec<RepoSlug> = config
+        .repos
+        .iter()
+        .map(|repo| RepoSlug::parse(repo).expect("config validated at load"))
+        .collect();
+    let mut skipped = 0;
+    let selected: Vec<RepoSlug> = state
+        .selected_repos
+        .iter()
+        .filter_map(|repo| match RepoSlug::parse(repo) {
+            Ok(slug) => Some(slug),
+            Err(_) => {
+                skipped += 1;
+                None
+            }
+        })
+        .collect();
+    if skipped > 0 {
+        tracing::warn!(skipped, "state file holds invalid slugs, ignored");
+    }
+    let shown = if selected.is_empty() {
+        all.clone()
     } else {
-        state.selected_repos.clone()
+        selected
     };
-    app.set_repos(selected);
-    app.all_repos = repos.clone();
+    app.set_repos(shown);
+    app.all_repos = all;
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
-        repos.clone(),
+        config.repos.clone(),
         ItemKind::Pr,
         limit,
         timeout,
@@ -294,13 +317,19 @@ fn run_tui() -> anyhow::Result<()> {
 
         // `R`: the key handler already updated the live list; the file is
         // the loop's job, atomically and 0600, like every private write.
+        // An empty check means "everything", like an empty state file: one
+        // meaning, said out loud — not "0 repos" with all of them shown.
         if let Some(selected) = app.selection_applied.take() {
+            let cleared = selected.is_empty();
             state.selected_repos = selected;
             match state_path.as_deref() {
                 Some(path) => match state.save(path) {
                     Ok(()) => {
-                        app.status =
+                        app.status = if cleared {
+                            "selection cleared — showing all repos".to_string()
+                        } else {
                             format!("selection saved ({} repos)", state.selected_repos.len())
+                        };
                     }
                     Err(err) => app.status = format!("cannot save selection: {err:#}"),
                 },
@@ -335,7 +364,7 @@ fn run_tui() -> anyhow::Result<()> {
             app.refresh_requested = false;
             pending = Some(spawn_fetch(
                 binaries.clone(),
-                repos.clone(),
+                config.repos.clone(),
                 ItemKind::Pr,
                 limit,
                 timeout,

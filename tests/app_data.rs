@@ -48,7 +48,7 @@ fn a_finished_fetch_fills_the_state_and_keeps_repo_order() {
     assert!(!app.loading, "the spinner stops when data arrives");
     assert_eq!(app.items.len(), 3);
     assert_eq!(
-        app.repos,
+        app.repos.iter().map(|r| r.text()).collect::<Vec<_>>(),
         vec!["acme/one", "acme/two"],
         "unique, first-seen order"
     );
