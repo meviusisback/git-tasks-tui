@@ -148,6 +148,18 @@ This probe is what proved it, kept here rather than in `tests/` because it **can
 suite red for the wrong reason — a missing field, not a wrong behaviour — so it is a manual
 experiment with a recorded result, **not a gate test**.
 
+**Outcome (2026-10-25).** The field was removed, then a later stage reintroduced it, and
+removed it again — the second removal is `67d2a9a`. The lesson is not "remember to delete
+dead code": it is that a field can only be justified by a state the program can reach, and
+the way to show that is a test that drives the real path (`R` → apply), never one that
+assigns `app.repos` by hand. A test that builds an unreachable state certifies itself.
+
+The same probe also asserts that `Esc` in the list pane must move the user. That part was
+**measured and rejected**: with no filter the list *is* the first level, so the key must not
+move the user — but it must not fall silent either. It answers `Esc — nothing to close` in
+the status line. A key that answers with a true sentence is not a dead end; a key that says
+nothing is.
+
 Measured on `5aecae6` (both red for the right reason, not on a compile error):
 
 ```
