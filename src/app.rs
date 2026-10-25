@@ -824,7 +824,16 @@ impl App {
                         // `Unknown` says "it may have been applied", which is the
                         // only honest sentence when a write times out.
                         Some(Pending::Action(pending)) => {
-                            self.status = describe(execute(&pending.argv, self.write_timeout));
+                            let outcome = execute(&pending.argv, self.write_timeout);
+                            // The transport touched the server when the
+                            // process ran (whatever it answered) or may have
+                            // run (timeout): re-read instead of trusting the
+                            // return code. A refusal or a spawn failure never
+                            // reached the server, so there is nothing to read.
+                            if matches!(&outcome, Executed::Finished(_) | Executed::Unknown(_)) {
+                                self.refresh_requested = true;
+                            }
+                            self.status = describe(outcome);
                         }
                         // A worktree write needs the loop (git, seed file,
                         // terminal): `y` only moves the agreed plan there.
@@ -995,11 +1004,20 @@ fn step(cursor: usize, delta: i32, len: usize) -> usize {
 /// One sentence per outcome, taken from the type: the UI never guesses what
 /// happened to a write.
 fn describe(outcome: Executed) -> String {
+    // The sentence reports the REQUEST, never the server's state: `done`
+    // says the process finished, and the refresh the caller triggers says
+    // when the screen shows what the server confirms. A non-zero exit is a
+    // failure with the code visible — never "done".
     match outcome {
-        Executed::Finished(status) => format!("done ({status})"),
+        Executed::Finished(status) if status.success() => {
+            format!("done ({status}) — re-reading…")
+        }
+        Executed::Finished(status) => format!("failed ({status}) — re-reading…"),
         Executed::Refused(why) => format!("refused: {why}"),
         Executed::SpawnFailed(why) => format!("cannot run: {why}"),
-        Executed::Unknown(why) => format!("unknown — it may have been applied: {why}"),
+        Executed::Unknown(why) => {
+            format!("unknown — it may have been applied: {why} — re-reading…")
+        }
     }
 }
 
