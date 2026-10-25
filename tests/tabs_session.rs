@@ -100,6 +100,7 @@ fn x_closes_the_tab_first_then_the_record() {
         repo: "me/a".to_string(),
         number: 1,
         profile: "default".to_string(),
+        agent: "hermes".to_string(),
         worktree: std::path::PathBuf::from("/tmp/wt"),
         seed_lines: 1,
         status: AgentStatus::Finished {
@@ -142,7 +143,7 @@ fn the_agent_panel_names_the_worktree_steps() {
     let app = app_with_items();
     let text = app.agent_panel_text();
     for line in [
-        "g creates the worktree + launches the agent",
+        "g chooses the agent + worktree, then launches",
         "task ·",
         "profile ·",
         "clones ·",
@@ -270,6 +271,7 @@ fn the_agent_pane_shows_only_for_work_in_progress() {
         repo: "me/a".to_string(),
         number: 1,
         profile: "default".to_string(),
+        agent: "hermes".to_string(),
         worktree: std::path::PathBuf::from("/tmp/wt"),
         seed_lines: 1,
         status: AgentStatus::Running,
@@ -279,6 +281,7 @@ fn the_agent_pane_shows_only_for_work_in_progress() {
         repo: "me/a".to_string(),
         number: 1,
         profile: "default".to_string(),
+        agent: "hermes".to_string(),
         worktree: std::path::PathBuf::from("/tmp/wt"),
         seed_lines: 1,
         status: AgentStatus::Finished {
@@ -415,7 +418,7 @@ fn the_view_carries_tabs_and_agent_to_the_screen() {
         view.tabs
     );
     assert!(
-        view.agent.contains("g creates the worktree"),
+        view.agent.contains("g chooses the agent + worktree"),
         "agent pane reaches the screen: {}",
         view.agent
     );

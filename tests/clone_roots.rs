@@ -10,7 +10,18 @@
 
 use std::path::PathBuf;
 
-use gtasks::agent::plan_agent;
+use gtasks::agent::{AgentChoice, AgentId, PlanInputs, plan_agent};
+
+fn test_inputs<'a>(profile: &'a str, roots: &'a [std::path::PathBuf]) -> PlanInputs<'a> {
+    PlanInputs {
+        profile,
+        roots,
+        default_agent: AgentChoice {
+            id: AgentId::Hermes,
+            program: std::path::PathBuf::from("/bin/hermes"),
+        },
+    }
+}
 use gtasks::config::Config;
 use gtasks::model::ItemKind;
 
@@ -57,8 +68,7 @@ fn the_clone_is_found_in_the_second_root() {
         "https://github.com/meviusisback/git-tasks-tui/pull/7",
         ItemKind::Pr,
         Some("fix-foo"),
-        "default",
-        &roots,
+        test_inputs("default", &roots),
     )
     .expect("the clone exists in the second root");
 
@@ -85,8 +95,7 @@ fn a_missing_clone_names_every_root_tried() {
         "https://example.invalid/pull/1",
         ItemKind::Pr,
         Some("x"),
-        "default",
-        &[a.clone(), b.clone()],
+        test_inputs("default", &[a.clone(), b.clone()]),
     )
     .expect_err("no clone anywhere must be refused");
 
@@ -107,8 +116,7 @@ fn no_roots_keeps_the_sentence_that_explains_the_config() {
         "https://github.com/meviusisback/git-tasks-tui/pull/1",
         ItemKind::Pr,
         Some("x"),
-        "default",
-        &[],
+        test_inputs("default", &[]),
     )
     .expect_err("no roots must be refused");
     assert_eq!(err, "no clone_root configured — agents need local clones");

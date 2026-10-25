@@ -125,6 +125,12 @@ pub fn overlay() -> Style {
     Style::default().fg(WARN)
 }
 
+/// The worktree marker in the issues list: dimmer than the kind colour,
+/// because it is metadata about the row, not the row itself.
+pub fn worktree_marker() -> Style {
+    Style::default().fg(SUBTEXT)
+}
+
 /// Error overlay frame: the config problem box. Same shape as help, the
 /// error colour instead of the warning one — the kind is visible before
 /// a word is read.

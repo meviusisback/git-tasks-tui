@@ -24,18 +24,25 @@ disagree, the handler is right and this file is a bug.
 | `a` | ask to act on the selected PR: opens a confirmation showing the exact command |
 | `y` | in the confirmation: run the command |
 | `n` / `Esc` | in the confirmation: cancel — nothing runs |
+| `g` | choose the agent + worktree for the selected PR: first the agent menu (hermes, pi, omp, opencode, agy — only installed ones), then the worktree — use an existing tree, `n` name a new parallel one (head branch suggested), `r` rename, `d` delete (asks first, the branch stays) |
+| click on a tab | opens it (same strip the keyboard uses; separators switch nothing, clicks while a dialog is open are ignored) |
 
 `a` on an **issue** does nothing and says why: issues are not merged. The merge
 method is a constant (`FIRST_ACTION_METHOD`, today `squash`) and `--delete-branch`
 is always off, so neither is reachable from the keyboard yet.
 
-`g` starts the agent **inside the agent box** (bottom-right): the program never
-closes, the agent streams into the pane. While the box has focus every key but
-`Esc` and `Tab` is agent input — typing, arrows, `Ctrl-C` (interrupt). `Esc`
-unfocuses, `Tab` cycles panes, the agent keeps running either way. The mouse
-wheel scrolls the box back through history; typing jumps back to the live
-tail. Quitting kills the agent. A finished run leaves its record card in the
-detail column.
+`g` starts the agent **inside the agent box** (bottom-right, about 60% of the
+right column): the program never closes, the agent streams into the pane.
+Before anything runs, `g` asks two things: which agent (hermes, pi, omp,
+opencode, agy) and on which worktree. A fork marker (`◉` without a Nerd Font)
+in front of a list row means a worktree directory already exists for that
+branch — `g` then works on it instead of creating one. While the box has
+focus every key but `Esc`, `Tab` and `Shift`+arrows is agent input — typing,
+arrows, `Ctrl-C` (interrupt). `Esc` unfocuses, `Tab` cycles panes,
+`Shift`+arrows move between boxes, the agent keeps running either way. The
+mouse wheel scrolls the box back through history; typing jumps back to the
+live tail. Quitting kills the agent. A finished run leaves its record card in
+the detail column.
 
 `m`, `s` are **planned, not implemented** — and the overlay announces
 exactly these two, in its own section ("coming in the next stages"), with the

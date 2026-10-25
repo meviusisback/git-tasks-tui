@@ -71,6 +71,7 @@ pub struct EmbeddedSession {
     repo: String,
     number: u64,
     profile: String,
+    agent: String,
     worktree: PathBuf,
     seed_lines: usize,
     start: Instant,
@@ -90,6 +91,7 @@ impl EmbeddedSession {
         repo: String,
         number: u64,
         profile: String,
+        agent: String,
         worktree: PathBuf,
         cols: u16,
         rows: u16,
@@ -142,6 +144,7 @@ impl EmbeddedSession {
             repo,
             number,
             profile,
+            agent,
             worktree,
             seed_lines,
             start: Instant::now(),
@@ -204,6 +207,12 @@ impl EmbeddedSession {
         self.parser.screen_mut().set_scrollback(next);
     }
 
+    /// The directory the child runs in: the loop refuses to rename or delete
+    /// the tree a live session is working in.
+    pub fn worktree(&self) -> &std::path::Path {
+        &self.worktree
+    }
+
     /// Send raw bytes to the agent. Typing jumps back to the live tail, so a
     /// reply never lands on a history view the user is reading. Failures are
     /// ignored — a dead child is reported by `poll_exit` on the next tick,
@@ -251,6 +260,7 @@ impl EmbeddedSession {
             repo: self.repo.clone(),
             number: self.number,
             profile: self.profile.clone(),
+            agent: self.agent.clone(),
             worktree: self.worktree.clone(),
             seed_lines: self.seed_lines,
             status,

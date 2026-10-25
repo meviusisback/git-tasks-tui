@@ -9,6 +9,7 @@
 //! Command building (`build_command`, `build_seed_message`) and the
 //! synchronous suspend/run window are Task 11a/11b.
 
+use std::ffi::OsString;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,6 +129,9 @@ pub struct AgentRecord {
     pub repo: String,
     pub number: u64,
     pub profile: String,
+    /// Which agent ran: the record card names it, so two runs with two
+    /// agents do not look identical.
+    pub agent: String,
     pub worktree: PathBuf,
     pub seed_lines: usize,
     pub status: AgentStatus,
@@ -168,11 +172,17 @@ impl AgentStatus {
 impl AgentRecord {
     /// The card the right column shows for the recorded item.
     pub fn card(&self) -> String {
+        // Hermes runs with a profile; the rest run as themselves, so the
+        // profile would be noise on their card.
+        let via = if self.agent == AgentId::Hermes.name() {
+            format!("profile {} · ", self.profile)
+        } else {
+            format!("{} · ", self.agent)
+        };
         format!(
-            "agent · {repo}#{number}\nprofile {profile} · seed {lines} lines\nworktree {worktree}\n{status}",
+            "agent · {repo}#{number}\n{via}seed {lines} lines\nworktree {worktree}\n{status}",
             repo = self.repo,
             number = self.number,
-            profile = self.profile,
             lines = self.seed_lines,
             worktree = self.worktree.display(),
             status = self.status.summary(),
@@ -180,29 +190,104 @@ impl AgentRecord {
     }
 }
 
+/// Which agent program runs in the box. `g` offers the installed ones; each
+/// has its own prompt-passing shape, but all five take the seed as a *file* —
+/// never as argv text, because the seed is untrusted issue text that may
+/// start with `-`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentId {
+    Hermes,
+    Pi,
+    Omp,
+    OpenCode,
+    Agy,
+}
+
+impl AgentId {
+    /// Every agent we can launch, menu order.
+    pub fn all() -> [AgentId; 5] {
+        [
+            AgentId::Hermes,
+            AgentId::Pi,
+            AgentId::Omp,
+            AgentId::OpenCode,
+            AgentId::Agy,
+        ]
+    }
+
+    /// The binary name on `PATH`.
+    pub fn binary(self) -> &'static str {
+        match self {
+            AgentId::Hermes => "hermes",
+            AgentId::Pi => "pi",
+            AgentId::Omp => "omp",
+            AgentId::OpenCode => "opencode",
+            AgentId::Agy => "agy",
+        }
+    }
+
+    /// The name shown in the menu and the record card.
+    pub fn name(self) -> &'static str {
+        self.binary()
+    }
+}
+
+/// One menu row: the agent plus the resolved program that runs it. Resolved
+/// at menu time (not startup), so an install mid-session just appears.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentChoice {
+    pub id: AgentId,
+    pub program: PathBuf,
+}
+
+impl AgentChoice {
+    /// The menu line: hermes carries its profile (the only agent that has
+    /// one), the rest run as themselves.
+    pub fn label(&self, profile: &str) -> String {
+        match self.id {
+            AgentId::Hermes => format!("hermes — profile {profile}"),
+            other => other.name().to_string(),
+        }
+    }
+}
 /// Everything `g` validated before the loop does anything on disk: the seed
 /// is built at launch time, so agreeing to start never leaves a file behind.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPlan {
     pub repo: String,
     pub number: u64,
     pub url: String,
     pub branch: String,
     pub profile: String,
+    /// The agent the menu picked (hermes until a row is confirmed).
+    pub agent: AgentChoice,
     pub clone: PathBuf,
 }
 
+/// The agent-side inputs to [`plan_agent`]: profile, clone roots and the
+/// default agent. One struct instead of three parameters (clippy allows
+/// seven function arguments, and the item side already takes five).
+pub struct PlanInputs<'a> {
+    pub profile: &'a str,
+    pub roots: &'a [std::path::PathBuf],
+    pub default_agent: AgentChoice,
+}
+
 /// `g` on the selected item. Every refusal names its reason; the happy path
-/// returns the plan and touches nothing.
+/// returns the plan and touches nothing. The agent starts as hermes (the
+/// only one the app resolves at startup); the menu replaces it with the
+/// row the user confirms.
 pub fn plan_agent(
     repo: &str,
     number: u64,
     url: &str,
     kind: crate::model::ItemKind,
     head_branch: Option<&str>,
-    profile: &str,
-    roots: &[std::path::PathBuf],
+    inputs: PlanInputs<'_>,
 ) -> Result<AgentPlan, String> {
+    let profile = inputs.profile;
+    let roots = inputs.roots;
+    let default_agent = inputs.default_agent;
     if kind != crate::model::ItemKind::Pr {
         return Err("agents start on pull requests — issues have no branch".to_string());
     }
@@ -242,6 +327,7 @@ pub fn plan_agent(
         url: url.to_string(),
         branch: branch.to_string(),
         profile: profile.to_string(),
+        agent: default_agent,
         clone,
     })
 }
@@ -358,6 +444,74 @@ pub fn agent_argv(
     })
 }
 
+/// The argv for whichever agent the menu picked. Every shape passes the
+/// seed as a *file* (`@seed` / `--file` / `--query-file`): the seed is
+/// untrusted issue text, and a file can never land in flag position the way
+/// a prompt starting with `-` could as argv text.
+///
+/// Shapes (from each binary's own `--help`, verified live under a pty for
+/// `pi` and `omp`; `agy` and `opencode` are best-effort — their auth is
+/// expired on this host, so a full run could not be watched here):
+/// - hermes: the proven `-p … chat --query-file … --in …` form above.
+/// - pi: `pi @seed` — the `@file` form from its own examples, interactive
+///   with the file as the initial message; the worktree is the child cwd.
+/// - omp: `omp --cwd <worktree> @seed` — same family, plus an explicit cwd.
+/// - opencode: `opencode run --file <seed> <worktree>` — `run` streams the
+///   session and exits at the end, so this one is watch-the-work, not chat.
+/// - agy: `agy --prompt-interactive @seed` — same `@file` family; without a
+///   sign-in the box shows its login screen, which is honest, not broken.
+pub fn agent_argv_for(
+    agent: AgentId,
+    program: &Path,
+    profile: &str,
+    seed: &Path,
+    worktree: &Path,
+) -> crate::gh::CheckedArgv {
+    match agent {
+        AgentId::Hermes => agent_argv(program, profile, seed, worktree),
+        AgentId::Pi => file_argv(program, vec![at_file(seed)], worktree),
+        AgentId::Omp => {
+            let mut args = vec![OsString::from("--cwd"), worktree.as_os_str().to_os_string()];
+            args.push(at_file(seed));
+            file_argv(program, args, worktree)
+        }
+        AgentId::OpenCode => file_argv(
+            program,
+            vec![
+                OsString::from("run"),
+                OsString::from("--file"),
+                seed.as_os_str().to_os_string(),
+                worktree.as_os_str().to_os_string(),
+            ],
+            worktree,
+        ),
+        AgentId::Agy => file_argv(
+            program,
+            vec![OsString::from("--prompt-interactive"), at_file(seed)],
+            worktree,
+        ),
+    }
+}
+
+/// `@/path/to/seed`: the file-include form of the pi/omp/agy family. It
+/// starts with `@`, so it can never be mistaken for a flag.
+fn at_file(seed: &Path) -> OsString {
+    let mut out = OsString::from("@");
+    out.push(seed.as_os_str());
+    out
+}
+
+/// The shared shape: program + args, empty env (the child builds the
+/// allowlist itself in `interactive_command`), worktree cwd. Built through
+/// the same [`CheckedArgv`] gate as every spawn.
+fn file_argv(program: &Path, args: Vec<OsString>, worktree: &Path) -> crate::gh::CheckedArgv {
+    crate::gh::CheckedArgv::from_checked(crate::gh::Argv {
+        program: program.to_path_buf(),
+        args,
+        env: Vec::new(),
+        cwd: worktree.to_path_buf(),
+    })
+}
 /// The blocking handoff core: wait, time, drop the seed. The seed travels by
 /// value and dies on every path — normal exit, signal, or a launch that never
 /// started — so no prompt survives its run. Hermetic: a binary that cannot

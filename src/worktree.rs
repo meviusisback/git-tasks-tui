@@ -86,6 +86,153 @@ impl std::fmt::Display for BranchName {
     }
 }
 
+/// One existing worktree of a repo: the real branch (read from its own
+/// `.git` file, never trusted from the directory name) plus where it lives.
+/// Detached trees are skipped — with no branch, the agent cannot be placed
+/// on them reliably.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeRow {
+    pub branch: BranchName,
+    pub path: PathBuf,
+}
+
+/// Every worktree directory of `owner/repo` under `root`: subdirectories
+/// with a `.git` file (a linked worktree keeps a `gitdir:` pointer there, a
+/// main clone a directory — the base or a stray main clone is skipped).
+/// Symlinks are skipped, same as creation refuses them. No git is run: the
+/// caller resolves the real branch from the `.git` file when it needs it.
+pub fn list_worktrees(root: &Path, slug: &RepoSlug) -> Vec<PathBuf> {
+    let mut dir = root.to_path_buf();
+    match slug.as_str().split_once('/') {
+        Some((owner, name)) => {
+            dir.push(owner);
+            dir.push(name);
+        }
+        None => dir.push(slug.as_str()),
+    }
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            if path.is_symlink() {
+                return false;
+            }
+            match std::fs::symlink_metadata(path.join(".git")) {
+                Ok(meta) => !meta.is_dir(),
+                Err(_) => false,
+            }
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The branch a worktree is really on, from its own `.git` file
+/// (`gitdir: <real-gitdir>` → `<gitdir>/HEAD` → `ref: refs/heads/<branch>`).
+/// Pure file reads: the menus need this without owning git. Detached (`HEAD`
+/// is a hash) or unreadable files mean `None` — those trees are listed
+/// without a branch, never placed under an agent.
+pub fn worktree_branch(path: &Path) -> Option<BranchName> {
+    let pointer = std::fs::read_to_string(path.join(".git")).ok()?;
+    let gitdir = pointer.strip_prefix("gitdir:")?.trim();
+    // The pointer is usually relative (`../.git/worktrees/<name>`): anchor
+    // it at the tree, or it resolves against our own cwd.
+    let gitdir = Path::new(gitdir);
+    let gitdir = if gitdir.is_absolute() {
+        gitdir.to_path_buf()
+    } else {
+        path.join(gitdir)
+    };
+    let head = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
+    let name = head
+        .strip_prefix("ref:")?
+        .trim()
+        .strip_prefix("refs/heads/")?;
+    BranchName::parse(name).ok()
+}
+
+/// Rename a worktree: the branch first, the directory after. Branch-first
+/// means a failed move leaves a valid tree at the old path on the new
+/// branch — still usable, never half-moved. Both steps run in the loop
+/// (they need git); these builders are the testable argv half.
+pub fn rename_branch_argv(
+    binaries: &crate::binaries::Binaries,
+    clone: &Path,
+    old: &BranchName,
+    new: &BranchName,
+) -> crate::gh::Argv {
+    crate::gh::git(
+        binaries,
+        clone,
+        vec![
+            "branch".into(),
+            "-m".into(),
+            old.as_str().into(),
+            new.as_str().into(),
+        ],
+    )
+}
+
+pub fn move_argv(
+    binaries: &crate::binaries::Binaries,
+    clone: &Path,
+    old_path: &Path,
+    new_path: &Path,
+) -> crate::gh::Argv {
+    crate::gh::git(
+        binaries,
+        clone,
+        vec![
+            "worktree".into(),
+            "move".into(),
+            old_path.as_os_str().into(),
+            new_path.as_os_str().into(),
+        ],
+    )
+}
+
+/// Delete a worktree. `--force`: the dialog already asked, and a dirty tree
+/// would otherwise refuse — the confirmation IS the force. The branch is
+/// kept on purpose: deleting history is a separate decision.
+pub fn remove_argv(
+    binaries: &crate::binaries::Binaries,
+    clone: &Path,
+    path: &Path,
+) -> crate::gh::Argv {
+    crate::gh::git(
+        binaries,
+        clone,
+        vec![
+            "worktree".into(),
+            "remove".into(),
+            "--force".into(),
+            path.as_os_str().into(),
+        ],
+    )
+}
+
+/// A validated rename order: both paths resolved, both branches parsed. The
+/// loop executes it after the guards (no agent running inside).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeRename {
+    pub clone: PathBuf,
+    pub old_branch: BranchName,
+    pub new_branch: BranchName,
+    pub old_path: PathBuf,
+    pub new_path: PathBuf,
+}
+
+/// A validated delete order: the loop executes it after the guards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeDelete {
+    pub clone: PathBuf,
+    pub branch: BranchName,
+    pub path: PathBuf,
+}
 /// The default worktree root: `$XDG_DATA_HOME/gtasks/worktrees`. The caller
 /// applies the configured `worktree_root` when set. One function, so every
 /// path computation starts from the same base.

@@ -28,7 +28,7 @@ use gtasks::state::State;
 use gtasks::ui;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, MouseEventKind};
+use ratatui::crossterm::event::{self, Event, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
 
 /// gtasks: GitHub issues & PRs across repos, in the terminal.
@@ -181,7 +181,7 @@ fn start_agent(
     if agreed.is_some() {
         match gtasks::worktree::create(&root, &plan.clone, &slug, &branch, binaries) {
             Ok(created) => {
-                launch_agent(app, binaries, &plan, &created.path, term_size, session);
+                launch_agent(app, &plan, &created.path, term_size, session);
             }
             // The refusal goes to the screen as it is: a check failure must
             // not become indistinguishable from a bug in the check.
@@ -191,7 +191,7 @@ fn start_agent(
     }
     match agent::next_step(target) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, binaries, &plan, &path, term_size, session);
+            launch_agent(app, &plan, &path, term_size, session);
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -205,21 +205,119 @@ fn start_agent(
     }
 }
 
+/// Rename a worktree from a validated order: the branch first, then the
+/// move. Branch-first means a failed move leaves a valid tree at the old
+/// path on the new branch — still usable, never half-moved. Refused while a
+/// live session works inside the tree.
+fn rename_worktree(
+    app: &mut App,
+    binaries: &Binaries,
+    order: gtasks::worktree::WorktreeRename,
+    session: &Option<EmbeddedSession>,
+) {
+    if session
+        .as_ref()
+        .is_some_and(|s| s.worktree() == order.old_path)
+    {
+        app.status = "an agent is still running in that worktree".to_string();
+        return;
+    }
+    let rename = gtasks::worktree::rename_branch_argv(
+        binaries,
+        &order.clone,
+        &order.old_branch,
+        &order.new_branch,
+    );
+    match gtasks::gh::run_pipe(&rename, std::time::Duration::from_secs(60)) {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            app.status = format!(
+                "cannot rename the branch: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            return;
+        }
+        Err(err) => {
+            app.status = format!("cannot rename the branch: {err:#}");
+            return;
+        }
+    }
+    let mv = gtasks::worktree::move_argv(binaries, &order.clone, &order.old_path, &order.new_path);
+    match gtasks::gh::run_pipe(&mv, std::time::Duration::from_secs(60)) {
+        Ok(out) if out.status.success() => {
+            if let Some(record) = app.agent_record.as_mut() {
+                if record.worktree == order.old_path {
+                    record.worktree = order.new_path.clone();
+                }
+            }
+            app.status = format!("renamed {} to {}", order.old_branch, order.new_branch);
+        }
+        Ok(out) => {
+            app.status = format!(
+                "branch renamed, move failed (tree still at {}): {}",
+                order.old_path.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Err(err) => {
+            app.status = format!(
+                "branch renamed, move failed (tree still at {}): {err:#}",
+                order.old_path.display()
+            );
+        }
+    }
+}
+
+/// Delete a worktree from a confirmed order. The branch is kept on purpose.
+/// Refused while a live session works inside; a finished record for the
+/// tree is cleared, so no card points at a deleted directory.
+fn delete_worktree(
+    app: &mut App,
+    binaries: &Binaries,
+    order: gtasks::worktree::WorktreeDelete,
+    session: &Option<EmbeddedSession>,
+) {
+    if session.as_ref().is_some_and(|s| s.worktree() == order.path) {
+        app.status = "an agent is still running in that worktree".to_string();
+        return;
+    }
+    let remove = gtasks::worktree::remove_argv(binaries, &order.clone, &order.path);
+    match gtasks::gh::run_pipe(&remove, std::time::Duration::from_secs(60)) {
+        Ok(out) if out.status.success() => {
+            if let Some(record) = app.agent_record.as_ref() {
+                if record.worktree == order.path {
+                    app.agent_record = None;
+                    app.agent_dismissed_for = None;
+                }
+            }
+            app.status = format!(
+                "deleted worktree {} (branch {} kept)",
+                order.path.display(),
+                order.branch
+            );
+        }
+        Ok(out) => {
+            app.status = format!(
+                "cannot delete the worktree: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Err(err) => {
+            app.status = format!("cannot delete the worktree: {err:#}");
+        }
+    }
+}
+
 /// Run the handoff the user validated: seed file plus an agent spawned
 /// embedded in the agent box. The TUI never suspends; the child lives in a
 /// pty sized to the box, and the loop polls it every tick.
 fn launch_agent(
     app: &mut App,
-    binaries: &Binaries,
     plan: &AgentPlan,
     path: &std::path::Path,
     term_size: (u16, u16),
     session: &mut Option<EmbeddedSession>,
 ) {
-    let Some(hermes) = binaries.hermes.as_deref() else {
-        app.status = "no agent binary (hermes) found".to_string();
-        return;
-    };
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
         Err(err) => {
@@ -236,7 +334,13 @@ fn launch_agent(
             return;
         }
     };
-    let argv = agent::agent_argv(hermes, &plan.profile, seed.path(), path);
+    let argv = agent::agent_argv_for(
+        plan.agent.id,
+        &plan.agent.program,
+        &plan.profile,
+        seed.path(),
+        path,
+    );
     // The box the pty is sized to: the same geometry the draw uses, so the
     // terminal and its box never disagree by a row.
     let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
@@ -250,6 +354,7 @@ fn launch_agent(
         plan.repo.clone(),
         plan.number,
         plan.profile.clone(),
+        plan.agent.id.name().to_string(),
         path.to_path_buf(),
         cols,
         rows,
@@ -262,6 +367,7 @@ fn launch_agent(
                 repo: plan.repo.clone(),
                 number: plan.number,
                 profile: plan.profile.clone(),
+                agent: plan.agent.id.name().to_string(),
                 worktree: path.to_path_buf(),
                 seed_lines: lines,
                 status: gtasks::agent::AgentStatus::Running,
@@ -345,6 +451,12 @@ fn run_tui() -> anyhow::Result<()> {
         agent_profile: config.agent_profile.clone(),
         clone_roots: config.agent_roots(),
         config_fallback,
+        // The list icons and the worktree picker read it; `None` means no
+        // icons, and the picker explains instead of guessing.
+        worktree_root: config
+            .worktree_root
+            .clone()
+            .or_else(|| gtasks::worktree::default_root().ok()),
         ..App::default()
     };
     // A broken config is a notice, not a whisper in the log: it stays on
@@ -596,6 +708,12 @@ fn run_tui() -> anyhow::Result<()> {
                 &mut embedded,
             );
         }
+        if let Some(order) = app.rename_go.take() {
+            rename_worktree(&mut app, &binaries, order, &embedded);
+        }
+        if let Some(order) = app.delete_go.take() {
+            delete_worktree(&mut app, &binaries, order, &embedded);
+        }
 
         // The embedded agent, if any: keep the pty sized to its box, feed
         // fresh output into the screen, and finalize the record on exit.
@@ -660,10 +778,21 @@ fn run_tui() -> anyhow::Result<()> {
                 }
                 // Resizes only need a redraw, which the loop does anyway.
                 Event::Resize(_, _) => {}
+                // Clicking a tab opens it: the same strip draw renders, mapped
+                // back through the shared geometry. Clicks while a dialog is
+                // open are ignored — the dialog owns every input then.
                 // The wheel scrolls the agent box through history — never
                 // the agent's input: with mouse capture on, the terminal no
                 // longer turns the wheel into arrow keys.
                 Event::Mouse(me) => {
+                    if app.modal.is_none() {
+                        if let MouseEventKind::Down(MouseButton::Left) = me.kind {
+                            let area = Rect::new(0, 0, term_size.0, term_size.1);
+                            if let Some(idx) = ui::tab_at(&app, area, me.column, me.row) {
+                                app.activate_tab(idx);
+                            }
+                        }
+                    }
                     let box_shown = app.agent_active() || app.pane == gtasks::app::Pane::Agent;
                     match me.kind {
                         MouseEventKind::ScrollUp if box_shown => {

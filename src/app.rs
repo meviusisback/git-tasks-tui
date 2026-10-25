@@ -4,7 +4,9 @@
 
 use crate::actions::{Action, MergeMethod, RepoSlug, argv_for};
 use crate::actions_ui::{Confirmation, Executed, confirmation_for, execute};
-use crate::agent::{AgentPlan, AgentRecord, AgentStatus, plan_agent};
+use crate::agent::{
+    AgentChoice, AgentId, AgentPlan, AgentRecord, AgentStatus, PlanInputs, plan_agent,
+};
 use crate::binaries::Binaries;
 use crate::fetch::FetchOutcome;
 use crate::gh::CheckedArgv;
@@ -123,6 +125,8 @@ pub struct PendingAction {
 pub enum Pending {
     Action(PendingAction),
     Agent(AgentPlan, std::path::PathBuf),
+    /// `d` on a worktree row, confirmed with `y`: the loop deletes it.
+    Delete(crate::worktree::WorktreeDelete),
 }
 
 /// Everything that can change the state.
@@ -139,9 +143,69 @@ pub enum Modal {
     Confirm(String),
     RepoMenu(RepoMenu),
     ActionMenu(ActionMenu),
+    /// `g`: which agent runs the selected PR. Rows are the installed
+    /// binaries; the plan waits inside until a row is confirmed.
+    AgentMenu(AgentMenu),
+    /// After the agent is picked: the repo's existing worktrees. `Enter`
+    /// works on one, `n` names a new parallel one, `r` renames, `d` deletes.
+    Worktrees(WorktreeMenu),
+    /// The name of a worktree to create — or the new name of one to rename.
+    /// Prepopulated with the suggestion (head branch, or the old name), so
+    /// confirming untouched keeps the obvious choice.
+    NameInput(NameInput),
     /// A startup notice (broken config): information, not a question. `Esc`
     /// dismisses it, `q` quits through it; nothing else acts while it is up.
     Notice(String),
+}
+
+/// The `g` menu: one row per installed agent binary, cursor, and the
+/// validated plan the pick applies to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentMenu {
+    pub rows: Vec<crate::agent::AgentChoice>,
+    pub cursor: usize,
+    pub plan: AgentPlan,
+}
+
+/// The worktree picker for one repo: existing trees plus the agent and plan
+/// the choice applies to. The current item's branch (if any tree matches it)
+/// is marked at draw time by comparing branches — no stored flag to go stale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeMenu {
+    pub agent: crate::agent::AgentChoice,
+    pub plan: AgentPlan,
+    pub rows: Vec<crate::worktree::WorktreeRow>,
+    pub cursor: usize,
+}
+
+/// What the name being typed is for: a fresh worktree (agent + plan wait
+/// for it) or a rename (the old tree waits for its new name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamePurpose {
+    Create {
+        agent: crate::agent::AgentChoice,
+        plan: AgentPlan,
+    },
+    Rename {
+        order: RenameDraft,
+    },
+}
+
+/// A rename before the new name is known: everything but the new branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameDraft {
+    pub clone: std::path::PathBuf,
+    pub slug: crate::actions::RepoSlug,
+    pub old_branch: crate::worktree::BranchName,
+    pub old_path: std::path::PathBuf,
+}
+
+/// The name prompt: purpose plus the value being edited (append-only, like
+/// the search box — `Enter` confirms, `Esc` cancels).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameInput {
+    pub purpose: NamePurpose,
+    pub value: String,
 }
 
 /// One row of the actions menu: the fully specified choice. No strings cross
@@ -284,6 +348,15 @@ pub struct App {
     /// Set by `y` on the create question, consumed by the loop: the plan
     /// plus the worktree the user agreed to create.
     pub agent_go: Option<(AgentPlan, std::path::PathBuf)>,
+    /// Set by `Enter` on the rename prompt, consumed by the loop: rename
+    /// the branch, then move the tree. No confirm — nothing is lost.
+    pub rename_go: Option<crate::worktree::WorktreeRename>,
+    /// Set by `y` on the delete question, consumed by the loop.
+    pub delete_go: Option<crate::worktree::WorktreeDelete>,
+    /// Where worktrees live (configured root, or the default). The list
+    /// icons and the worktree picker read it; `None` (unresolvable home)
+    /// means no icons, and the picker explains instead of guessing.
+    pub worktree_root: Option<std::path::PathBuf>,
     /// True while an embedded agent session is alive in the box. Set by the
     /// loop on spawn, cleared on exit: the loop owns the child, `App` only
     /// carries what the screen needs (flag + last parsed screen).
@@ -327,6 +400,9 @@ impl Default for App {
             agent_dismissed_for: None,
             agent_requested: None,
             agent_go: None,
+            rename_go: None,
+            delete_go: None,
+            worktree_root: None,
             agent_running: false,
             agent_screen: Vec::new(),
             detail: String::new(),
@@ -494,6 +570,15 @@ impl App {
             }
             Some(Modal::ActionMenu(_)) => {
                 return String::from("↑/↓ choose · Enter confirm · Esc cancel");
+            }
+            Some(Modal::AgentMenu(_)) => {
+                return String::from("↑/↓ choose · Enter confirm · Esc cancel");
+            }
+            Some(Modal::Worktrees(_)) => {
+                return String::from("Enter use · n new · r rename · d delete · Esc cancel");
+            }
+            Some(Modal::NameInput(_)) => {
+                return String::from("type the name · Enter confirm · Esc cancel");
             }
             Some(Modal::Notice(_)) => {
                 // The box above says what is wrong, in full. The row only
@@ -1016,6 +1101,181 @@ impl App {
         }
     }
 
+    /// Cursor moves for the agent and worktree menus: same wrap as every
+    /// other menu (first after last), so `Up` on the first row is not dead.
+    fn menu_step_agent(&mut self, delta: i32) {
+        if let Some(Modal::AgentMenu(menu)) = self.modal.as_mut() {
+            let len = menu.rows.len();
+            menu.cursor = step(menu.cursor, delta, len);
+        }
+    }
+
+    fn menu_step_worktree(&mut self, delta: i32) {
+        if let Some(Modal::Worktrees(menu)) = self.modal.as_mut() {
+            let len = menu.rows.len();
+            menu.cursor = step(menu.cursor, delta, len);
+        }
+    }
+
+    /// `Enter` on a worktree row: work on it — the plan takes the row's
+    /// branch and goes to the loop, which launches straight into the
+    /// existing tree (no creation question for what is already there).
+    fn use_worktree_row(&mut self) {
+        if let Some(Modal::Worktrees(menu)) = self.modal.take() {
+            let Some(row) = menu.rows.get(menu.cursor).cloned() else {
+                self.modal = Some(Modal::Worktrees(menu));
+                return;
+            };
+            let mut plan = menu.plan;
+            plan.branch = row.branch.as_str().to_string();
+            plan.agent = menu.agent;
+            self.agent_requested = Some(plan);
+        }
+    }
+
+    /// `n` in the worktree menu: name a new parallel tree. The suggestion
+    /// is the head branch — confirming untouched names it the usual way.
+    fn name_new_worktree(&mut self) {
+        if let Some(Modal::Worktrees(menu)) = self.modal.take() {
+            let suggestion = menu.plan.branch.clone();
+            self.modal = Some(Modal::NameInput(NameInput {
+                value: suggestion,
+                purpose: NamePurpose::Create {
+                    agent: menu.agent,
+                    plan: menu.plan,
+                },
+            }));
+        }
+    }
+
+    /// `r` in the worktree menu: rename the row's tree. The prompt opens on
+    /// the old name; confirming renames the branch, then moves the tree.
+    fn rename_worktree_row(&mut self) {
+        if let Some(Modal::Worktrees(menu)) = self.modal.take() {
+            let Some(row) = menu.rows.get(menu.cursor).cloned() else {
+                self.modal = Some(Modal::Worktrees(menu));
+                return;
+            };
+            let Ok(slug) = crate::actions::RepoSlug::parse(&menu.plan.repo) else {
+                self.status = format!("cannot rename in {}", menu.plan.repo);
+                self.modal = Some(Modal::Worktrees(menu));
+                return;
+            };
+            let value = row.branch.as_str().to_string();
+            self.modal = Some(Modal::NameInput(NameInput {
+                value,
+                purpose: NamePurpose::Rename {
+                    order: RenameDraft {
+                        clone: menu.plan.clone.clone(),
+                        slug,
+                        old_branch: row.branch,
+                        old_path: row.path,
+                    },
+                },
+            }));
+        }
+    }
+
+    /// `d` in the worktree menu: delete the row's tree after the usual
+    /// confirmation. The branch is kept — deleting history is separate.
+    fn delete_worktree_row(&mut self) {
+        if let Some(Modal::Worktrees(menu)) = self.modal.take() {
+            let Some(row) = menu.rows.get(menu.cursor).cloned() else {
+                self.modal = Some(Modal::Worktrees(menu));
+                return;
+            };
+            let order = crate::worktree::WorktreeDelete {
+                clone: menu.plan.clone.clone(),
+                branch: row.branch,
+                path: row.path,
+            };
+            self.pending = Some(Pending::Delete(order.clone()));
+            self.modal = Some(Modal::Confirm(format!(
+                "delete worktree {}? the branch {} stays",
+                order.path.display(),
+                order.branch
+            )));
+        }
+    }
+
+    /// `Enter` in the name prompt. An invalid name keeps the prompt open
+    /// with the reason — retyping beats reopening.
+    fn confirm_name_input(&mut self) {
+        let Some(Modal::NameInput(input)) = self.modal.take() else {
+            return;
+        };
+        match input.purpose {
+            NamePurpose::Create { agent, mut plan } => {
+                let name = input.value.trim();
+                match crate::worktree::BranchName::parse(name) {
+                    Ok(branch) => {
+                        plan.branch = branch.as_str().to_string();
+                        plan.agent = agent;
+                        // The loop decides: existing tree launches straight
+                        // in, missing tree gets the creation question.
+                        self.agent_requested = Some(plan);
+                    }
+                    Err(err) => {
+                        self.status = format!("bad worktree name: {err:#}");
+                        self.modal = Some(Modal::NameInput(NameInput {
+                            purpose: NamePurpose::Create { agent, plan },
+                            value: input.value,
+                        }));
+                    }
+                }
+            }
+            NamePurpose::Rename { order } => {
+                let name = input.value.trim();
+                match crate::worktree::BranchName::parse(name) {
+                    Ok(new_branch) => {
+                        if new_branch == order.old_branch {
+                            self.status = "same name — nothing to rename".to_string();
+                            return;
+                        }
+                        let root = match self.worktree_root.clone() {
+                            Some(root) => root,
+                            None => {
+                                self.status =
+                                    "no worktree root — cannot place the rename".to_string();
+                                return;
+                            }
+                        };
+                        match crate::worktree::resolve_in(
+                            &root,
+                            &order.clone,
+                            &order.slug,
+                            &new_branch,
+                        ) {
+                            Ok(new_path) => {
+                                if new_path.exists() {
+                                    self.status = format!("already exists: {}", new_path.display());
+                                    return;
+                                }
+                                self.rename_go = Some(crate::worktree::WorktreeRename {
+                                    clone: order.clone,
+                                    old_branch: order.old_branch,
+                                    new_branch,
+                                    old_path: order.old_path,
+                                    new_path,
+                                });
+                            }
+                            Err(err) => {
+                                self.status = format!("bad worktree name: {err:#}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.status = format!("bad worktree name: {err:#}");
+                        self.modal = Some(Modal::NameInput(NameInput {
+                            purpose: NamePurpose::Rename { order },
+                            value: input.value,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
     /// `Enter` in the actions menu: the picked row becomes the action and
     /// goes through the same confirmation as `a` — one dialog, one argv.
     fn apply_action_pick(&mut self) {
@@ -1078,12 +1338,29 @@ impl App {
     /// `g` asks for an agent handoff on the selected row. Validation happens
     /// here; the terminal, git and the seed file belong to the loop, which
     /// consumes `agent_requested` (outbox, like `detail_requested`). Nothing
-    /// is written and nothing is spawned by pressing `g`.
+    /// is written and nothing is spawned by pressing `g`: it opens the agent
+    /// menu, and the menu leads to the worktree choice.
     /// Follows the active tab when one is open.
     pub fn request_agent(&mut self) {
+        if self.agent_running {
+            self.status = "an agent is already running in the box below".to_string();
+            return;
+        }
         let Some(item) = self.effective_item().cloned() else {
             self.status = "nothing selected".to_string();
             return;
+        };
+        let hermes = match self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
+            Some(hermes) => AgentChoice {
+                id: AgentId::Hermes,
+                program: hermes,
+            },
+            None => AgentChoice {
+                id: AgentId::Hermes,
+                // Resolved again at launch; a missing binary then fails with
+                // its own message instead of refusing the menu now.
+                program: std::path::PathBuf::from("hermes"),
+            },
         };
         match plan_agent(
             &item.repo,
@@ -1091,12 +1368,115 @@ impl App {
             &item.url,
             item.kind,
             item.head_ref_name.as_deref(),
-            &self.agent_profile,
-            &self.clone_roots,
+            PlanInputs {
+                profile: &self.agent_profile,
+                roots: &self.clone_roots,
+                default_agent: hermes,
+            },
         ) {
-            Ok(plan) => self.agent_requested = Some(plan),
+            Ok(plan) => self.open_agent_menu(plan),
             Err(reason) => self.status = reason,
         }
+    }
+
+    /// The installed agent binaries as menu rows, hermes first. Resolved now
+    /// (not at startup), so an install mid-session just appears.
+    fn agent_choices(&self) -> Vec<AgentChoice> {
+        let mut rows = Vec::new();
+        if let Some(hermes) = self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
+            rows.push(AgentChoice {
+                id: AgentId::Hermes,
+                program: hermes,
+            });
+        }
+        for id in AgentId::all() {
+            if id == AgentId::Hermes {
+                continue;
+            }
+            if let Ok(program) = crate::binaries::resolve(id.binary()) {
+                rows.push(AgentChoice { id, program });
+            }
+        }
+        rows
+    }
+
+    /// `g` validated: show the agent menu, or say why there is nothing to show.
+    fn open_agent_menu(&mut self, plan: AgentPlan) {
+        let rows = self.agent_choices();
+        if rows.is_empty() {
+            self.status = "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
+            return;
+        }
+        self.modal = Some(Modal::AgentMenu(AgentMenu {
+            rows,
+            cursor: 0,
+            plan,
+        }));
+    }
+
+    /// An agent row was confirmed: with existing worktrees the user picks
+    /// one (or manages them); without, they name the new one directly.
+    fn pick_agent(&mut self, agent: AgentChoice, plan: AgentPlan) {
+        let rows = self.repo_worktrees(&plan);
+        if rows.is_empty() {
+            self.modal = Some(Modal::NameInput(NameInput {
+                value: plan.branch.clone(),
+                purpose: NamePurpose::Create { agent, plan },
+            }));
+        } else {
+            self.modal = Some(Modal::Worktrees(WorktreeMenu {
+                agent,
+                plan,
+                rows,
+                cursor: 0,
+            }));
+        }
+    }
+
+    /// The repo's worktrees as menu rows: every directory with a `.git`
+    /// file, branch read from the tree itself. Detached or unreadable trees
+    /// are skipped — the agent cannot be placed on them reliably.
+    fn repo_worktrees(&self, plan: &AgentPlan) -> Vec<crate::worktree::WorktreeRow> {
+        let (Some(root), Ok(slug)) = (
+            self.worktree_root.as_deref(),
+            crate::actions::RepoSlug::parse(&plan.repo),
+        ) else {
+            return Vec::new();
+        };
+        crate::worktree::list_worktrees(root, &slug)
+            .iter()
+            .filter_map(|path| {
+                let branch = crate::worktree::worktree_branch(path)?;
+                Some(crate::worktree::WorktreeRow {
+                    branch,
+                    path: path.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// True when a worktree directory with a `.git` entry exists for the
+    /// item's branch: the marker in the issues list. Pure existence — the
+    /// loop re-validates everything before launching.
+    pub fn has_worktree(&self, repo: &str, branch: Option<&str>) -> bool {
+        let (Some(root), Some(branch), Ok(slug)) = (
+            self.worktree_root.as_deref(),
+            branch,
+            crate::actions::RepoSlug::parse(repo),
+        ) else {
+            return false;
+        };
+        let Ok(branch) = crate::worktree::BranchName::parse(branch) else {
+            return false;
+        };
+        // `resolve_in` ignores the clone (the slug already scopes the path);
+        // the empty path is a placeholder, not a lookup.
+        let Ok(target) =
+            crate::worktree::resolve_in(root, std::path::Path::new(""), &slug, &branch)
+        else {
+            return false;
+        };
+        std::fs::symlink_metadata(target.join(".git")).is_ok()
     }
 
     /// The record card shows for the selected item when it is that item's
@@ -1174,7 +1554,8 @@ impl App {
         } else if let Some(record) = &self.agent_record {
             out.push(String::new());
             out.push(format!(
-                "last agent · {}#{} · {}",
+                "last agent · {} · {}#{} · {}",
+                record.agent,
                 record.repo,
                 record.number,
                 record.status.summary()
@@ -1195,7 +1576,7 @@ impl App {
         };
         out.push(format!("clones · {roots}"));
         out.push(String::new());
-        out.push("g creates the worktree + launches the agent (asks once)".to_string());
+        out.push("g chooses the agent + worktree, then launches".to_string());
         out.join("\n")
     }
 
@@ -1302,6 +1683,55 @@ impl App {
                 }
                 return;
             }
+            if matches!(self.modal, Some(Modal::AgentMenu(_))) {
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Up => self.menu_step_agent(-1),
+                    Key::Down => self.menu_step_agent(1),
+                    Key::Enter => {
+                        if let Some(Modal::AgentMenu(menu)) = self.modal.take() {
+                            if let Some(row) = menu.rows.get(menu.cursor).cloned() {
+                                self.pick_agent(row, menu.plan);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            if matches!(self.modal, Some(Modal::Worktrees(_))) {
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Up => self.menu_step_worktree(-1),
+                    Key::Down => self.menu_step_worktree(1),
+                    Key::Enter => self.use_worktree_row(),
+                    Key::Char('n') => self.name_new_worktree(),
+                    Key::Char('r') => self.rename_worktree_row(),
+                    Key::Char('d') => self.delete_worktree_row(),
+                    _ => {}
+                }
+                return;
+            }
+            if matches!(self.modal, Some(Modal::NameInput(_))) {
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Enter => self.confirm_name_input(),
+                    Key::Backspace => {
+                        if let Some(Modal::NameInput(mut input)) = self.modal.take() {
+                            input.value.pop();
+                            self.modal = Some(Modal::NameInput(input));
+                        }
+                    }
+                    Key::Char(c) => {
+                        if let Some(Modal::NameInput(mut input)) = self.modal.take() {
+                            input.value.push(c);
+                            self.modal = Some(Modal::NameInput(input));
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
             if matches!(self.modal, Some(Modal::Notice(_))) {
                 // Information, not a question: `Esc` puts it away, `q` quits
                 // through it, everything else waits its turn. Quitting must
@@ -1337,6 +1767,11 @@ impl App {
                         // terminal): `y` only moves the agreed plan there.
                         Some(Pending::Agent(plan, path)) => {
                             self.agent_go = Some((plan, path));
+                        }
+                        // A delete is a write too (to the clone, via the
+                        // loop): `y` moves the agreed order there.
+                        Some(Pending::Delete(order)) => {
+                            self.delete_go = Some(order);
                         }
                         // Nothing was asked: never claim success for it.
                         None => self.status = "nothing to run".into(),
@@ -1416,7 +1851,7 @@ impl App {
                 self.pane = Pane::Agent;
                 if let Some(item) = self.effective_item().cloned() {
                     self.status = format!(
-                        "agent pane for {}#{} — g creates the worktree and launches",
+                        "agent pane for {}#{} — g chooses the agent and worktree",
                         item.repo, item.number
                     );
                 } else {

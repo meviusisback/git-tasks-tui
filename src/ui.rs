@@ -25,6 +25,9 @@ pub struct ViewModel {
     pub repos: Vec<String>,
     pub items: Vec<String>,
     pub item_kinds: Vec<Option<ItemKind>>,
+    /// One per item: a worktree directory with a `.git` entry exists for
+    /// the item's branch. The marker in the issues list.
+    pub item_worktrees: Vec<bool>,
     pub detail: String,
     pub tabs: Vec<String>,
     pub active_tab: Option<usize>,
@@ -65,7 +68,7 @@ const HELP_NOW: &[&str] = &[
     "Esc        back one level: overlay → agent → detail → list (never quits)",
     "R          repo selection menu (Space mark · a all · n none)",
     "o          open the selected item in the browser",
-    "g          hand the selected PR to an agent (runs inside the agent box)",
+    "g          choose the agent + worktree for the selected PR",
     "/          filter the visible list",
     "r          refresh",
     "a          first action on the selected item",
@@ -89,22 +92,44 @@ const HELP_NOW: &[&str] = &[
 /// (sessions) is still promised.
 pub const PLANNED: &[(char, &str)] = &[('s', "agent sessions (stage 16)")];
 
-/// The outer agent box when shown, from the full frame area. Main uses the
-/// same function to size the pty before drawing, so the terminal and its
-/// box never disagree by a row.
-pub fn agent_box(area: Rect) -> Rect {
+/// The right column (detail + agent) from the full frame area: outer
+/// border, status row and the left 30% removed. Draw and mouse clicks share
+/// it, so a click can never target a row the boxes are not on.
+pub fn right_column(area: Rect) -> Rect {
+    let inner = Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(area);
+        .split(inner);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(rows[0]);
+    columns[1]
+}
+
+/// The one-line tabs strip: the top row of the right column. Draw renders
+/// the strip here and mouse clicks are mapped here — one function, so the
+/// two can never disagree by a row.
+pub fn tabs_row(area: Rect) -> Rect {
+    let right = right_column(area);
+    Rect::new(right.x, right.y, right.width, 1)
+}
+
+/// The outer agent box when shown, from the full frame area. Main uses the
+/// same function to size the pty before drawing, so the terminal and its
+/// box never disagree by a row.
+pub fn agent_box(area: Rect) -> Rect {
+    let right = right_column(area);
     let right_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(columns[1]);
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(right);
     right_rows[1]
 }
 
@@ -141,27 +166,38 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     // but only while an agent is being arranged or is running, or while the
     // pane has focus (so `w`/`Tab` still reach the instructions when idle).
     // Idle and unfocused screens give the whole column to the detail.
+    // Geometry comes from `right_column`/`tabs_row`, the same functions the
+    // mouse click mapping uses.
+    let right = right_column(frame.area());
+    let tabs = tabs_row(frame.area());
+    let detail_below_tabs = Rect::new(
+        right.x,
+        tabs.y.saturating_add(1),
+        right.width,
+        right.height.saturating_sub(1),
+    );
     if app.agent_active() || app.pane == Pane::Agent {
         let right_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(columns[1]);
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(right);
         // The tabs are one line, not a box: at 80x12 every row counts, and a
         // bordered strip would eat the detail it labels.
-        let detail_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(1)])
-            .split(right_rows[0]);
-        frame.render_widget(tabs_bar(app, view), detail_rows[0]);
-        frame.render_widget(detail(app, view, detail_rows[1].width), detail_rows[1]);
+        frame.render_widget(tabs_bar(app, view), tabs);
+        let detail_area = Rect::new(
+            right.x,
+            tabs.y.saturating_add(1),
+            right.width,
+            right_rows[0].height.saturating_sub(1),
+        );
+        frame.render_widget(detail(app, view, detail_area.width), detail_area);
         frame.render_widget(agent_panel(app, view, right_rows[1].width), right_rows[1]);
     } else {
-        let detail_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(1)])
-            .split(columns[1]);
-        frame.render_widget(tabs_bar(app, view), detail_rows[0]);
-        frame.render_widget(detail(app, view, detail_rows[1].width), detail_rows[1]);
+        frame.render_widget(tabs_bar(app, view), tabs);
+        frame.render_widget(
+            detail(app, view, detail_below_tabs.width),
+            detail_below_tabs,
+        );
     }
 
     // Two panels, so the status cannot be pushed off the right edge by the
@@ -192,6 +228,15 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     if let Some(crate::app::Modal::Notice(notice)) = &app.modal {
         draw_notice(frame, frame.area(), notice);
     }
+    if let Some(crate::app::Modal::AgentMenu(menu)) = &app.modal {
+        draw_agent_menu(frame, frame.area(), menu);
+    }
+    if let Some(crate::app::Modal::Worktrees(menu)) = &app.modal {
+        draw_worktrees_menu(frame, frame.area(), menu);
+    }
+    if let Some(crate::app::Modal::NameInput(input)) = &app.modal {
+        draw_name_input(frame, frame.area(), input);
+    }
 }
 
 /// Build what the frame needs from the current state: the repo column, the
@@ -202,6 +247,10 @@ pub fn view_for(app: &App) -> ViewModel {
     let items = visible
         .iter()
         .map(|item| format!("#{} {}", item.number, item.title))
+        .collect();
+    let item_worktrees = visible
+        .iter()
+        .map(|item| app.has_worktree(&item.repo, item.head_ref_name.as_deref()))
         .collect();
     // Structured fields from the item, always; the fetched body below them
     // only when it belongs to this item. A missing field is omitted, never
@@ -244,6 +293,7 @@ pub fn view_for(app: &App) -> ViewModel {
     ViewModel {
         repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
+        item_worktrees,
         item_kinds,
         detail,
         tabs: app.tab_labels(),
@@ -306,8 +356,10 @@ fn split_number_title(entry: &str) -> (String, String) {
 
 /// Left column, bottom: the issues/PRs of the repo under the cursor.
 /// The repo filter follows the repos cursor, so this box always shows the
-/// repo above — no `R` menu needed for the common case. The number carries
-/// the kind colour (green PR, yellow issue); the title stays plain.
+/// repo above — no `R` menu needed for the common case. The number carries the
+/// kind colour (green PR, yellow issue); the title stays plain. A worktree
+/// marker (`⎇` with a Nerd Font, `◉` without) in front of the number says a
+/// worktree directory exists for the item's branch: `g` then works on it.
 fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     let selected = if view.items.is_empty() {
         None
@@ -320,7 +372,8 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
         .items
         .iter()
         .zip(view.item_kinds.iter().chain(std::iter::repeat(&None)))
-        .map(|(entry, kind)| {
+        .zip(view.item_worktrees.iter().chain(std::iter::repeat(&false)))
+        .map(|((entry, kind), has_wt)| {
             let (number, title) = split_number_title(entry);
             let icon = match kind {
                 Some(ItemKind::Pr) => icons::kind_pr(),
@@ -335,6 +388,11 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
             ];
             if icon.is_empty() {
                 spans.remove(0);
+            }
+            if *has_wt {
+                let marker = icons::branch();
+                let marker = if marker.is_empty() { "◉ " } else { marker };
+                spans.insert(0, Span::styled(marker, theme::worktree_marker()));
             }
             ListItem::new(Line::from(spans))
         })
@@ -356,19 +414,25 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
     (widget, state)
 }
 
-/// Right column, top strip: the open tabs on a single line, so small
-/// terminals keep their detail rows. The active tab is bold, the rest dim;
-/// the number carries the kind colour (green PR, yellow issue). No prefix,
-/// no keys — the legend below owns those.
-fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
-    if view.tabs.is_empty() {
-        let style = theme::title(app.pane == Pane::Detail);
-        return Paragraph::new("no tabs — Enter opens one").style(style);
-    }
-    let mut spans: Vec<Span<'static>> = Vec::new();
+/// One visual chunk of the tabs strip: text, style, and the tab it belongs
+/// to (`None` for separators). Both the render and the mouse-click mapping
+/// walk this same list, so a click can never land on a tab the drawing did
+/// not show.
+struct TabChunk {
+    text: String,
+    style: Style,
+    tab: Option<usize>,
+}
+
+fn tab_chunks(app: &App) -> Vec<TabChunk> {
+    let mut chunks: Vec<TabChunk> = Vec::new();
     for (i, info) in app.tab_infos().iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw("  │  "));
+            chunks.push(TabChunk {
+                text: "  │  ".to_string(),
+                style: Style::default(),
+                tab: None,
+            });
         }
         let mark = if info.active { "●" } else { "○" };
         let mark_style = if info.active {
@@ -378,23 +442,90 @@ fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
         } else {
             Style::default().fg(theme::SUBTEXT)
         };
+        chunks.push(TabChunk {
+            text: mark.to_string(),
+            style: mark_style,
+            tab: Some(i),
+        });
+        chunks.push(TabChunk {
+            text: " ".to_string(),
+            style: Style::default(),
+            tab: Some(i),
+        });
         let icon = match info.kind {
             Some(ItemKind::Pr) => icons::kind_pr(),
             Some(ItemKind::Issue) => icons::kind_issue(),
             None => "",
         };
-        spans.push(Span::styled(mark.to_string(), mark_style));
-        spans.push(Span::raw(" "));
         if !icon.is_empty() {
-            spans.push(Span::styled(icon.to_string(), kind_style(info.kind)));
+            chunks.push(TabChunk {
+                text: icon.to_string(),
+                style: kind_style(info.kind),
+                tab: Some(i),
+            });
         }
         let (number, title) = split_number_title(&info.label);
-        spans.push(Span::styled(sanitize(&number), kind_style(info.kind)));
+        chunks.push(TabChunk {
+            text: sanitize(&number),
+            style: kind_style(info.kind),
+            tab: Some(i),
+        });
         if !title.is_empty() {
-            spans.push(Span::raw(" "));
-            spans.push(Span::raw(sanitize(&title)));
+            chunks.push(TabChunk {
+                text: " ".to_string(),
+                style: Style::default(),
+                tab: Some(i),
+            });
+            chunks.push(TabChunk {
+                text: sanitize(&title),
+                style: Style::default(),
+                tab: Some(i),
+            });
         }
     }
+    chunks
+}
+
+/// Which tab sits under a mouse click, if any. Pure over the app (no
+/// terminal needed), so tests pin the mapping: separators and the empty
+/// strip map to `None` — a click between tabs switches nothing.
+pub fn tab_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
+    use unicode_width::UnicodeWidthStr;
+    let row = tabs_row(area);
+    if y != row.y || x < row.x {
+        return None;
+    }
+    let end = row.x.saturating_add(row.width);
+    if x >= end {
+        return None;
+    }
+    let mut cursor = row.x;
+    for chunk in tab_chunks(app) {
+        let width = chunk.text.width() as u16;
+        if x >= cursor && x < cursor.saturating_add(width) {
+            return chunk.tab;
+        }
+        cursor = cursor.saturating_add(width);
+        if cursor >= end {
+            break;
+        }
+    }
+    None
+}
+
+/// Right column, top strip: the open tabs on a single line, so small
+/// terminals keep their detail rows. The active tab is bold, the rest dim;
+/// the number carries the kind colour (green PR, yellow issue). No prefix,
+/// no keys — the legend below owns those.
+fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
+    if view.tabs.is_empty() {
+        let style = theme::title(app.pane == Pane::Detail);
+        return Paragraph::new("no tabs — Enter opens one").style(style);
+    }
+    let spans: Vec<Span<'static>> = tab_chunks(app)
+        .into_iter()
+        .map(|chunk| Span::styled(chunk.text, chunk.style))
+        .collect();
     Paragraph::new(Line::from(spans))
 }
 
@@ -640,4 +771,102 @@ fn draw_notice(frame: &mut Frame, area: Rect, notice: &str) {
     let remedy = Paragraph::new(ratatui::text::Line::from(sanitize("Esc dismiss · q quit")))
         .style(theme::overlay_text());
     frame.render_widget(remedy, rows[1]);
+}
+
+/// The `g` menu: one row per installed agent binary, hermes carrying its
+/// profile. Same centered shape as the actions menu, so all pickers read
+/// the same.
+fn draw_agent_menu(frame: &mut Frame, area: Rect, menu: &crate::app::AgentMenu) {
+    let area = centered_rect(70, 80, area);
+    frame.render_widget(Clear, area);
+    let items: Vec<ListItem> = menu
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mark = if i == menu.cursor { "▸" } else { " " };
+            ListItem::new(sanitize(&format!(
+                "{mark} {}",
+                row.label(&menu.plan.profile)
+            )))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" agent — ↑/↓ choose · Enter confirm · Esc cancel ")
+                .border_style(theme::overlay())
+                .title_style(theme::overlay()),
+        )
+        .highlight_style(theme::highlight());
+    let mut state = ListState::default().with_selected(Some(menu.cursor));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// The worktree picker: one row per existing tree (branch — path, the
+/// current item's branch marked), chosen with `Enter`, managed with
+/// `n`/`r`/`d`.
+fn draw_worktrees_menu(frame: &mut Frame, area: Rect, menu: &crate::app::WorktreeMenu) {
+    let area = centered_rect(70, 80, area);
+    frame.render_widget(Clear, area);
+    let items: Vec<ListItem> = menu
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mark = if i == menu.cursor { "▸" } else { " " };
+            let current = if row.branch.as_str() == menu.plan.branch {
+                " · this PR"
+            } else {
+                ""
+            };
+            ListItem::new(sanitize(&format!(
+                "{mark} {} — {}{current}",
+                row.branch,
+                row.path.display()
+            )))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(
+                    " worktrees for {} — Enter use · n new · r rename · d delete · Esc cancel ",
+                    menu.plan.repo,
+                ))
+                .border_style(theme::overlay())
+                .title_style(theme::overlay()),
+        )
+        .highlight_style(theme::highlight());
+    let mut state = ListState::default().with_selected(Some(menu.cursor));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// The name prompt: create or rename, with the suggestion prepopulated so
+/// confirming untouched keeps the obvious choice. Append-only editing, like
+/// the search box.
+fn draw_name_input(frame: &mut Frame, area: Rect, input: &crate::app::NameInput) {
+    let area = centered_rect(70, 25, area);
+    frame.render_widget(Clear, area);
+    let title = match input.purpose {
+        crate::app::NamePurpose::Create { .. } => {
+            " name the worktree — Enter confirm · Esc cancel "
+        }
+        crate::app::NamePurpose::Rename { .. } => {
+            " rename the worktree — Enter confirm · Esc cancel "
+        }
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(theme::overlay())
+        .title_style(theme::overlay())
+        .style(theme::overlay_text());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let value = Paragraph::new(ratatui::text::Line::from(sanitize(&input.value)))
+        .style(theme::overlay_text());
+    frame.render_widget(value, inner);
 }

@@ -4,12 +4,29 @@
 use std::path::PathBuf;
 
 use gtasks::agent::{
-    AgentNext, AgentOutcome, AgentRecord, AgentStatus, SeedFile, agent_argv, agent_seed_body,
-    next_step, plan_agent, run_agent_inner,
+    AgentChoice, AgentId, AgentNext, AgentOutcome, AgentRecord, AgentStatus, PlanInputs, SeedFile,
+    agent_argv, agent_seed_body, next_step, plan_agent, run_agent_inner,
 };
 use gtasks::app::{App, Key, Modal, Msg, Pending};
 use gtasks::fetch::FetchOutcome;
 use gtasks::model::{Item, ItemKind};
+
+/// The default agent in tests: hermes at a fake path (never spawned here,
+/// only carried through the plan).
+fn hermes_choice() -> AgentChoice {
+    AgentChoice {
+        id: AgentId::Hermes,
+        program: PathBuf::from("/bin/hermes"),
+    }
+}
+
+fn test_inputs<'a>(profile: &'a str, roots: &'a [PathBuf]) -> PlanInputs<'a> {
+    PlanInputs {
+        profile,
+        roots,
+        default_agent: hermes_choice(),
+    }
+}
 
 fn item(repo: &str, number: u64, kind: ItemKind, head: Option<&str>) -> Item {
     Item {
@@ -51,6 +68,10 @@ fn pr_app() -> (App, tempfile::TempDir) {
     });
     app.agent_profile = "default".to_string();
     app.clone_roots = vec![root];
+    let mut binaries =
+        gtasks::binaries::Binaries::new(PathBuf::from("/bin/gh"), PathBuf::from("/usr/bin/git"));
+    binaries.hermes = Some(PathBuf::from("/bin/hermes"));
+    app.binaries = Some(binaries);
     (app, tmp)
 }
 
@@ -97,8 +118,7 @@ fn plan_refuses_issues_because_they_have_no_branch() {
         "https://github.com/o/r/issues/9",
         ItemKind::Issue,
         None,
-        "default",
-        &[PathBuf::from("/x")],
+        test_inputs("default", &[PathBuf::from("/x")]),
     )
     .expect_err("issues must be refused");
     assert_eq!(err, "agents start on pull requests — issues have no branch");
@@ -112,8 +132,7 @@ fn plan_refuses_a_pr_without_a_head_branch() {
         "https://github.com/o/r/pull/7",
         ItemKind::Pr,
         None,
-        "default",
-        &[PathBuf::from("/x")],
+        test_inputs("default", &[PathBuf::from("/x")]),
     )
     .expect_err("a PR without a branch cannot be placed");
     assert_eq!(err, "no head branch for o/r#7 — refresh and try again");
@@ -127,8 +146,7 @@ fn plan_refuses_without_clone_root() {
         "https://github.com/o/r/pull/7",
         ItemKind::Pr,
         Some("fix-foo"),
-        "default",
-        &[],
+        test_inputs("default", &[]),
     )
     .expect_err("no clone root must be refused");
     assert_eq!(err, "no clone_root configured — agents need local clones");
@@ -144,8 +162,7 @@ fn plan_refuses_a_missing_clone_with_its_place_named() {
         "https://github.com/meviusisback/git-tasks-tui/pull/3",
         ItemKind::Pr,
         Some("x"),
-        "default",
-        std::slice::from_ref(&missing),
+        test_inputs("default", std::slice::from_ref(&missing)),
     )
     .expect_err("a missing clone must be refused");
     assert_eq!(
@@ -267,12 +284,19 @@ fn g_on_an_issue_says_why_not() {
 }
 
 #[test]
-fn g_validates_and_asks_for_nothing_yet() {
+fn g_opens_the_agent_menu_not_the_launch() {
     let (mut app, _tmp) = pr_app();
     app.update(Msg::Key(Key::Char('g')));
-    let plan = app.agent_requested.as_ref().expect("a valid PR validates");
-    assert_eq!(plan.branch, "fix-foo");
-    assert!(app.modal.is_none(), "asking is the loop's job, not `g`'s");
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("g must open the agent menu, got {:?}", app.modal);
+    };
+    assert_eq!(menu.plan.branch, "fix-foo");
+    assert!(
+        app.agent_requested.is_none(),
+        "nothing launches before a row is confirmed"
+    );
+    assert!(!menu.rows.is_empty(), "hermes is configured");
+    assert_eq!(menu.rows[0].id, AgentId::Hermes, "hermes first");
 }
 
 #[test]
@@ -284,8 +308,7 @@ fn y_on_an_agent_question_moves_the_agreed_plan_to_the_loop() {
         "https://github.com/o/r/pull/7",
         ItemKind::Pr,
         Some("fix-foo"),
-        "default",
-        &app.clone_roots,
+        test_inputs("default", &app.clone_roots),
     )
     .expect("the fixture validates");
     let path = PathBuf::from("/tmp/wt/o/r/fix-foo");
@@ -305,6 +328,7 @@ fn record() -> AgentRecord {
         repo: "o/r".to_string(),
         number: 7,
         profile: "default".to_string(),
+        agent: "hermes".to_string(),
         worktree: PathBuf::from("/tmp/wt/o/r/fix-foo"),
         seed_lines: 4,
         status: AgentStatus::Finished {

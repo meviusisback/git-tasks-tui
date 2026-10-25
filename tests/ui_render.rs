@@ -38,6 +38,7 @@ fn sample() -> (App, ViewModel) {
         repos: vec!["owner/repo".into()],
         items: vec!["#12 Add widget".into(), "#7 Fix crash".into()],
         item_kinds: vec![None, None],
+        item_worktrees: vec![false, false],
         detail: "Body line one\nBody line two".into(),
         tabs: Vec::new(),
         active_tab: None,
@@ -448,6 +449,7 @@ fn the_agent_record_shows_at_80_columns() {
         repo: "o/r".to_string(),
         number: 7,
         profile: "default".to_string(),
+        agent: "hermes".to_string(),
         worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
         seed_lines: 4,
         status: AgentStatus::Finished {
@@ -469,6 +471,7 @@ fn the_agent_record_shows_at_80_columns() {
         repo: "o/r".to_string(),
         number: 7,
         profile: "default".to_string(),
+        agent: "hermes".to_string(),
         worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
         seed_lines: 4,
         status: AgentStatus::Running,
