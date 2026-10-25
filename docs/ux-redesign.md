@@ -329,6 +329,13 @@ round trip; they are written here so the next stage does not pay again.
   `limit` per call**, not the product, and never design a call that sits near ten
   seconds; (3) **bisect** only what persists, and report **one** repo failed,
   never twenty.
+- **When the subject of the measurement is `main`, the command names it.** A
+  fifth form of the same family, found 2026-10-25: `git log -1 --format='%s'`
+  without a revision answers "where is HEAD", which is a different question from
+  "where is main" — and it cost two minutes of believing the feature had landed.
+  A command that *omits* the subject cannot get the subject wrong; it can only
+  answer about something else. `git log origin/main`, `git grep … origin/main`,
+  `git rev-parse origin/main`.
 - **When a measurement contradicts a report, the first hypothesis is not "I
   was wrong" — it is "which tree did I measure".** And to answer that, look at
   the *parent* of the commit that introduced the code. Measured 2026-10-25: a
