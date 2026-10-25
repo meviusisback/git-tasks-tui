@@ -23,6 +23,7 @@ fn defaults_are_sane() {
     assert_eq!(config.refresh_s, 300);
     assert_eq!(config.limit, 30);
     assert!(!config.trust_worktree_rules);
+    assert!(!config.sandbox_agents);
     assert!(config.repos.is_empty());
     assert_eq!(config.agent_profile, "default");
     assert!(config.clone_root.is_none());

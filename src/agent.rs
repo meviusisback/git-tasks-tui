@@ -444,6 +444,24 @@ pub fn agent_argv(
     })
 }
 
+/// The `<agent>-sandboxed` wrapper next to the resolved binary, when the
+/// `sandbox_agents` setting is on: same directory, `-sandboxed` suffixed to
+/// the file name, and it must exist — a sibling that was never installed is
+/// `None`, not a launch into the wrong binary. The menu still lists the
+/// plain binaries (availability), so a missing wrapper refuses at launch
+/// with its own name instead of hiding the row.
+pub fn sandboxed_program(program: &Path) -> Option<PathBuf> {
+    let dir = program.parent()?;
+    let stem = program.file_name()?;
+    let mut name = stem.to_os_string();
+    name.push("-sandboxed");
+    let candidate = dir.join(name);
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(meta) if meta.file_type().is_file() => Some(candidate),
+        _ => None,
+    }
+}
+
 /// The argv for whichever agent the menu picked. Every shape passes the
 /// seed as a *file* (`@seed` / `--file` / `--query-file`): the seed is
 /// untrusted issue text, and a file can never land in flag position the way
@@ -460,18 +478,35 @@ pub fn agent_argv(
 ///   session and exits at the end, so this one is watch-the-work, not chat.
 /// - agy: `agy --prompt-interactive @seed` — same `@file` family; without a
 ///   sign-in the box shows its login screen, which is honest, not broken.
+///
+/// With `sandbox` the program is already the wrapper (resolved by
+/// [`sandboxed_program`], not here), and omp additionally gets
+/// `--approval-mode yolo` — the only agent whose YOLO switch lives outside
+/// its wrapper. hermes keeps its Smart approvals (the default
+/// `approvals.mode`: an auxiliary model auto-approves the low-risk commands
+/// and still asks for the dangerous ones), opencode/agy carry theirs inside
+/// their wrappers (`--auto`, `--dangerously-skip-permissions`), and pi has
+/// no such flag at all (`--approval-mode` is rejected as unknown) — for pi
+/// the setting means containment only.
 pub fn agent_argv_for(
     agent: AgentId,
     program: &Path,
     profile: &str,
     seed: &Path,
     worktree: &Path,
+    sandbox: bool,
 ) -> crate::gh::CheckedArgv {
     match agent {
         AgentId::Hermes => agent_argv(program, profile, seed, worktree),
         AgentId::Pi => file_argv(program, vec![at_file(seed)], worktree),
         AgentId::Omp => {
-            let mut args = vec![OsString::from("--cwd"), worktree.as_os_str().to_os_string()];
+            let mut args = Vec::new();
+            if sandbox {
+                args.push(OsString::from("--approval-mode"));
+                args.push(OsString::from("yolo"));
+            }
+            args.push(OsString::from("--cwd"));
+            args.push(worktree.as_os_str().to_os_string());
             args.push(at_file(seed));
             file_argv(program, args, worktree)
         }

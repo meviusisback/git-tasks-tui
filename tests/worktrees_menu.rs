@@ -101,6 +101,7 @@ fn argv_args(id: AgentId, program: &str) -> Vec<String> {
         "default",
         PathBuf::from("/tmp/seed-1").as_path(),
         PathBuf::from("/tmp/wt").as_path(),
+        false,
     );
     argv.as_argv()
         .args

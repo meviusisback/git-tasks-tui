@@ -24,6 +24,14 @@ pub struct Config {
     pub limit: u32,
     pub default_profile: Option<String>,
     pub trust_worktree_rules: bool,
+    /// Launch agents through their `<agent>-sandboxed` wrapper (off by
+    /// default). The wrapper contains the filesystem (bubblewrap); the
+    /// launch also adds each agent's non-interactive mode where one exists:
+    /// omp gets `--approval-mode yolo`, opencode/agy already carry theirs
+    /// inside the wrapper, hermes keeps its Smart approvals (the default
+    /// `approvals.mode`), pi has no equivalent flag. Off means the plain
+    /// binaries with their normal approval prompts.
+    pub sandbox_agents: bool,
     /// Profile the agent handoff (`g`) passes to `hermes -p`. Validated like
     /// every profile: lowercase, digits, `_`/`-`, starting alphanumeric.
     pub agent_profile: String,
@@ -50,6 +58,7 @@ impl Default for Config {
             limit: 30,
             default_profile: None,
             trust_worktree_rules: false,
+            sandbox_agents: false,
             agent_profile: "default".to_string(),
             clone_root: None,
             clone_roots: Vec::new(),

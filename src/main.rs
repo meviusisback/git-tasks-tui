@@ -366,13 +366,39 @@ fn launch_agent(
             return;
         }
     };
-    let argv = agent::agent_argv_for(
-        plan.agent.id,
-        &plan.agent.program,
-        &plan.profile,
-        seed.path(),
-        path,
-    );
+    let argv = {
+        // Sandboxed: the `<agent>-sandboxed` wrapper next to the resolved
+        // binary. A wrapper that was never installed refuses here, naming
+        // itself — launching the plain binary instead would silently drop
+        // the containment the setting promises.
+        let program = if app.sandbox_agents {
+            match agent::sandboxed_program(&plan.agent.program) {
+                Some(wrapped) => wrapped,
+                None => {
+                    let wrapper = plan.agent.program.file_name().map(|stem| {
+                        let mut name = stem.to_os_string();
+                        name.push("-sandboxed");
+                        name.to_string_lossy().into_owned()
+                    });
+                    app.status = format!(
+                        "sandbox_agents is on but {} is not installed",
+                        wrapper.as_deref().unwrap_or("the wrapper")
+                    );
+                    return;
+                }
+            }
+        } else {
+            plan.agent.program.clone()
+        };
+        agent::agent_argv_for(
+            plan.agent.id,
+            &program,
+            &plan.profile,
+            seed.path(),
+            path,
+            app.sandbox_agents,
+        )
+    };
     // The box the pty is sized to: the same geometry the draw uses, so the
     // terminal and its box never disagree by a row.
     let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
@@ -406,7 +432,11 @@ fn launch_agent(
             });
             app.agent_dismissed_for = None;
             app.pane = gtasks::app::Pane::Agent;
-            app.status = "agent running below — Esc unfocuses, Ctrl-C interrupts".to_string();
+            app.status = if app.sandbox_agents {
+                "agent running below — sandboxed, Esc unfocuses, Ctrl-C interrupts".to_string()
+            } else {
+                "agent running below — Esc unfocuses, Ctrl-C interrupts".to_string()
+            };
             *session = Some(sess);
         }
         Err(err) => app.status = format!("cannot run the agent: {err:#}"),
@@ -499,6 +529,7 @@ fn run_tui() -> anyhow::Result<()> {
         binaries: Some(binaries.clone()),
         write_timeout: timeout,
         agent_profile: config.agent_profile.clone(),
+        sandbox_agents: config.sandbox_agents,
         clone_roots: config.agent_roots(),
         config_fallback,
         // The list icons and the worktree picker read it; `None` means no

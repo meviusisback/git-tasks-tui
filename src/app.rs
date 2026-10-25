@@ -349,6 +349,10 @@ pub struct App {
     pub session_dirty: bool,
     /// Profile passed to `hermes -p` by the agent handoff; validated at load.
     pub agent_profile: String,
+    /// Mirror of `Config::sandbox_agents`: launch through the
+    /// `<agent>-sandboxed` wrappers with non-interactive approvals. Off by
+    /// default; set from the config at startup, never flipped at runtime.
+    pub sandbox_agents: bool,
     /// Where to look for local clones, in order (`<root>/<repo-name>`); empty refuses.
     /// A list, not a path: clones really do live in more than one directory, and one path
     /// cannot say so without making the other directory invisible.
@@ -422,6 +426,7 @@ impl Default for App {
             write_timeout: std::time::Duration::from_secs(30),
             pending: None,
             agent_profile: String::from("default"),
+            sandbox_agents: false,
             clone_roots: Vec::new(),
             config_fallback: false,
             agent_record: None,

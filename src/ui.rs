@@ -229,7 +229,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
         draw_notice(frame, frame.area(), notice);
     }
     if let Some(crate::app::Modal::AgentMenu(menu)) = &app.modal {
-        draw_agent_menu(frame, frame.area(), menu);
+        draw_agent_menu(frame, frame.area(), menu, app);
     }
     if let Some(crate::app::Modal::Worktrees(menu)) = &app.modal {
         draw_worktrees_menu(frame, frame.area(), menu);
@@ -779,7 +779,12 @@ fn draw_notice(frame: &mut Frame, area: Rect, notice: &str) {
 /// The `g` menu: one row per installed agent binary, hermes carrying its
 /// profile. Same centered shape as the actions menu, so all pickers read
 /// the same.
-fn draw_agent_menu(frame: &mut Frame, area: Rect, menu: &crate::app::AgentMenu) {
+fn draw_agent_menu(
+    frame: &mut Frame,
+    area: Rect,
+    menu: &crate::app::AgentMenu,
+    app: &crate::app::App,
+) {
     let area = centered_rect(70, 80, area);
     frame.render_widget(Clear, area);
     let items: Vec<ListItem> = menu
@@ -788,10 +793,14 @@ fn draw_agent_menu(frame: &mut Frame, area: Rect, menu: &crate::app::AgentMenu) 
         .enumerate()
         .map(|(i, row)| {
             let mark = if i == menu.cursor { "▸" } else { " " };
-            ListItem::new(sanitize(&format!(
-                "{mark} {}",
+            // Sandboxed launches are YOLO inside containment: the suffix
+            // says so on the row itself, before anything is confirmed.
+            let label = if app.sandbox_agents {
+                format!("{} · sandboxed", row.label(&menu.plan.profile))
+            } else {
                 row.label(&menu.plan.profile)
-            )))
+            };
+            ListItem::new(sanitize(&format!("{mark} {label}")))
         })
         .collect();
     let list = List::new(items)

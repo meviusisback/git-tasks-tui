@@ -12,6 +12,29 @@ hermes -p <profile> chat --query-file <seed-file> --in <worktree> [--ignore-rule
 `<seed-file>` is a **regular file** `0600` under `$XDG_RUNTIME_DIR/gtasks` (dir `0700`) containing the
 fenced seed, unlinked after the child exits (normal exit and failure alike, via a `Drop` guard).
 
+## Sandboxed launches (`sandbox_agents = true`, off by default)
+
+`config.toml` key `sandbox_agents` (default `false`). When on, every agent
+starts through its `<agent>-sandboxed` wrapper — the bubblewrap containment
+in `~/.local/bin` (read-only `/`, the worktree plus data dirs bound
+read-write, `--die-with-parent`) — with non-interactive approvals so it does
+not ask at every step:
+
+| Agent | Program | Extra flags | Why |
+|---|---|---|---|
+| hermes | `hermes-sandboxed` | none | Smart approvals are the hermes default (`approvals.mode: smart`): an auxiliary model auto-approves low-risk commands, dangerous ones still prompt |
+| pi | `pi-sandboxed` | none | pi has no YOLO flag (`--approval-mode` is rejected as unknown) — containment only |
+| omp | `omp-sandboxed` | `--approval-mode yolo` | verified live: the flag is accepted and the session runs |
+| opencode | `opencode-sandboxed` | none | the wrapper already passes `--auto` |
+| agy | `agy-sandboxed` | none | the wrapper already passes `--dangerously-skip-permissions` |
+
+The wrapper is resolved as the `-sandboxed` sibling of the binary `gtasks`
+would otherwise run, and it must exist: a missing wrapper refuses at launch
+(`sandbox_agents is on but pi-sandboxed is not installed`) instead of
+silently falling back to the plain binary. Menu rows carry a `· sandboxed`
+suffix and the launch status says `sandboxed`, so the mode is visible before
+and after confirming.
+
 ## Why not `--query-file -` (blocking finding C1)
 
 `--query-file -` **cannot** seed an interactive session. In v0.22.5:
@@ -44,7 +67,7 @@ Both violate S7 (approvals ON) and S8.
 
 | Flag | Why |
 |---|---|
-| `--yolo` | bypasses all dangerous-command approval prompts |
+| `--yolo` | bypasses all dangerous-command approval prompts (allowed only for omp inside a sandboxed launch — see above) |
 | `--accept-hooks` | auto-approves unseen shell hooks from config |
 | `--tui` | we run the classic interactive chat, not the TUI |
 | `--oneshot` | agent answers and exits; no approvals |
