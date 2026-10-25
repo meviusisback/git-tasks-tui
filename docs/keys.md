@@ -25,7 +25,13 @@ disagree, the handler is right and this file is a bug.
 method is a constant (`FIRST_ACTION_METHOD`, today `squash`) and `--delete-branch`
 is always off, so neither is reachable from the keyboard yet.
 
-`m`, `w`, `s`, `p`, `f`, `c`, `x` are **planned, not implemented** — and the
-overlay says so, in its own section. A key that is promised in the overlay and
-does nothing is a lie on screen; a test (`coming_next_keys_produce_no_screen_change`)
-fails when one of them starts working, so the overlay shrinks at the same moment.
+`m`, `w`, `s` are **planned, not implemented** — and the overlay announces
+exactly these three, in its own section ("coming in the next stages"), with the
+stage that will bring each one. `p`, `f`, `c`, `x` are names that were discussed
+and **are not promised anywhere on screen**: this document used to claim the
+overlay covered seven keys when it covered three, and a document that speaks for
+the screen has to be checked against it (K-1, 2026-10-25).
+
+A key that is promised in the overlay and does nothing is a lie on screen; the
+test `coming_next_keys_produce_no_screen_change` fails when one of them starts
+working, so the overlay shrinks at the same moment the stage lands.
