@@ -25,6 +25,12 @@ pub struct Config {
     pub limit: u32,
     pub default_profile: Option<String>,
     pub trust_worktree_rules: bool,
+    /// Profile the agent handoff (`g`) passes to `hermes -p`. Validated like
+    /// every profile: lowercase, digits, `_`/`-`, starting alphanumeric.
+    pub agent_profile: String,
+    /// Directory holding local clones (`<clone_root>/<repo-name>`). `None`
+    /// means the agent cannot be placed: refusing beats guessing.
+    pub clone_root: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -40,6 +46,8 @@ impl Default for Config {
             limit: 30,
             default_profile: None,
             trust_worktree_rules: false,
+            agent_profile: "default".to_string(),
+            clone_root: None,
         }
     }
 }
@@ -80,6 +88,7 @@ impl Config {
         if let Some(profile) = &self.default_profile {
             validate_profile(profile)?;
         }
+        validate_profile(&self.agent_profile).context("invalid agent_profile")?;
         Ok(())
     }
 

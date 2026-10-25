@@ -93,7 +93,7 @@ fn esc_closes_the_menu_without_acting() {
     assert!(app.modal.is_some());
     app.update(Msg::Key(Key::Esc));
     assert!(app.modal.is_none(), "Esc cancels");
-    assert!(app.pending_action.is_none(), "nothing was confirmed");
+    assert!(app.pending.is_none(), "nothing was confirmed");
 }
 
 #[test]
@@ -103,7 +103,10 @@ fn enter_confirms_the_picked_row_through_the_same_dialog_as_a() {
     app.update(Msg::Key(Key::Down));
     app.update(Msg::Key(Key::Down)); // row 2: merge — rebase
     app.update(Msg::Key(Key::Enter));
-    let pending = app.pending_action.as_ref().expect("a pick was confirmed");
+    let gtasks::app::Pending::Action(pending) = app.pending.as_ref().expect("a pick was confirmed")
+    else {
+        panic!("the menu confirms actions, not agent launches");
+    };
     assert_eq!(
         pending.action,
         gtasks::actions::Action::Merge {
@@ -137,7 +140,10 @@ fn picking_delete_branch_shows_the_flag_before_anything_runs() {
         app.update(Msg::Key(Key::Down));
     } // row 5: merge — rebase + delete branch
     app.update(Msg::Key(Key::Enter));
-    let pending = app.pending_action.as_ref().expect("a pick was confirmed");
+    let gtasks::app::Pending::Action(pending) = app.pending.as_ref().expect("a pick was confirmed")
+    else {
+        panic!("the menu confirms actions, not agent launches");
+    };
     assert_eq!(
         pending.action,
         gtasks::actions::Action::Merge {
@@ -160,7 +166,10 @@ fn a_still_fast_merges_with_defaults() {
     // Same constructor underneath, different jobs on top.
     let mut app = pr_app();
     app.update(Msg::Key(Key::Char('a')));
-    let pending = app.pending_action.as_ref().expect("fast merge confirmed");
+    let gtasks::app::Pending::Action(pending) = app.pending.as_ref().expect("fast merge confirmed")
+    else {
+        panic!("a confirms an action, not an agent launch");
+    };
     assert_eq!(
         pending.action,
         gtasks::actions::Action::Merge {

@@ -4,6 +4,7 @@
 
 use crate::actions::{Action, MergeMethod, RepoSlug, argv_for};
 use crate::actions_ui::{Confirmation, Executed, confirmation_for, execute};
+use crate::agent::{AgentPlan, AgentRecord, plan_agent};
 use crate::binaries::Binaries;
 use crate::fetch::FetchOutcome;
 use crate::gh::CheckedArgv;
@@ -87,6 +88,15 @@ const FIRST_ACTION_DELETES_BRANCH: bool = false;
 pub struct PendingAction {
     pub action: Action,
     pub argv: CheckedArgv,
+}
+
+/// What `y` will run when the confirmation dialog is open. One dialog, one
+/// pending — an action and an agent launch can never wait together, so the
+/// key that confirms cannot run the wrong one.
+#[derive(Debug, Clone)]
+pub enum Pending {
+    Action(PendingAction),
+    Agent(AgentPlan, std::path::PathBuf),
 }
 
 /// Everything that can change the state.
@@ -201,8 +211,6 @@ pub struct App {
     pub binaries: Option<Binaries>,
     /// Limit for a write started from the UI.
     pub write_timeout: std::time::Duration,
-    /// The action awaiting `y`: confirmation and argv are the same object.
-    pub pending_action: Option<PendingAction>,
     /// Markdown body of the selected item.
     pub detail: String,
     /// Which item `detail` belongs to, so the same body is not fetched twice.
@@ -213,6 +221,24 @@ pub struct App {
     pub open_requested: Option<String>,
     /// The `?` overlay with the full keymap is on screen.
     pub show_help: bool,
+    /// Profile passed to `hermes -p` by the agent handoff; validated at load.
+    pub agent_profile: String,
+    /// Local clones live here (`<clone_root>/<repo-name>`); `None` refuses.
+    pub clone_root: Option<std::path::PathBuf>,
+    /// The last agent run, if any. It stays after the exit: `Esc` hides the
+    /// card, `x` deletes the record, a new run replaces it.
+    pub agent_record: Option<AgentRecord>,
+    /// The item the record card was dismissed for: the card shows again when
+    /// that item is reselected, and stays hidden while it is selected.
+    pub agent_dismissed_for: Option<(String, u64)>,
+    /// Set by `g`, consumed by the loop that owns the terminal: validate
+    /// here, hand over there, like every other outbox.
+    pub agent_requested: Option<AgentPlan>,
+    /// Set by `y` on the create question, consumed by the loop: the plan
+    /// plus the worktree the user agreed to create.
+    pub agent_go: Option<(AgentPlan, std::path::PathBuf)>,
+    /// What `y` runs: an action or an agent launch, never both.
+    pub pending: Option<Pending>,
 }
 
 impl Default for App {
@@ -239,7 +265,13 @@ impl Default for App {
             refresh_requested: false,
             binaries: None,
             write_timeout: std::time::Duration::from_secs(30),
-            pending_action: None,
+            pending: None,
+            agent_profile: String::from("default"),
+            clone_root: None,
+            agent_record: None,
+            agent_dismissed_for: None,
+            agent_requested: None,
+            agent_go: None,
             detail: String::new(),
             detail_for: None,
             detail_requested: None,
@@ -636,6 +668,58 @@ impl App {
         }
     }
 
+    /// `g` asks for an agent handoff on the selected row. Validation happens
+    /// here; the terminal, git and the seed file belong to the loop, which
+    /// consumes `agent_requested` (outbox, like `detail_requested`). Nothing
+    /// is written and nothing is spawned by pressing `g`.
+    pub fn request_agent(&mut self) {
+        let Some(item) = self.selected_item() else {
+            self.status = "nothing selected".to_string();
+            return;
+        };
+        match plan_agent(
+            &item.repo,
+            item.number,
+            &item.url,
+            item.kind,
+            item.head_ref_name.as_deref(),
+            &self.agent_profile,
+            self.clone_root.as_deref(),
+        ) {
+            Ok(plan) => self.agent_requested = Some(plan),
+            Err(reason) => self.status = reason,
+        }
+    }
+
+    /// The record card shows for the selected item when it is that item's
+    /// record and the card was not dismissed for it. A record glued to a PR
+    /// that is not on screen would be a lie, so anything else shows detail.
+    pub fn visible_record(&self) -> Option<&AgentRecord> {
+        let record = self.agent_record.as_ref()?;
+        let item = self.selected_item()?;
+        if record.repo == item.repo && record.number == item.number {
+            let key = (item.repo.clone(), item.number);
+            if self.agent_dismissed_for.as_ref() != Some(&key) {
+                return Some(record);
+            }
+        }
+        None
+    }
+
+    /// `x` deletes the single record. After the exit there is nothing to
+    /// stop, so closing only forgets — it never claims to kill anything.
+    pub fn close_agent_record(&mut self) {
+        if let Some(record) = self.agent_record.take() {
+            self.agent_dismissed_for = None;
+            self.status = format!(
+                "closed the agent record for {}#{}",
+                record.repo, record.number
+            );
+        } else {
+            self.status = "no agent record to close".to_string();
+        }
+    }
+
     /// Build the first action for the selected row, show what it would run, and
     /// keep the pair (confirmation, argv) so `y` executes exactly that.
     fn request_action(&mut self) {
@@ -680,7 +764,7 @@ impl App {
                 } = confirmation_for(&action, &argv);
                 self.status = shown.join(" ");
                 self.modal = Some(Modal::Confirm(summary));
-                self.pending_action = Some(PendingAction { action, argv });
+                self.pending = Some(Pending::Action(PendingAction { action, argv }));
             }
             Err(err) => self.status = format!("cannot build the action: {err}"),
         }
@@ -735,12 +819,17 @@ impl App {
                 Key::Esc | Key::Char('n') => self.modal = None,
                 Key::Char('y') => {
                     self.modal = None;
-                    match self.pending_action.take() {
+                    match self.pending.take() {
                         // X-1: the message comes from the type, never invented.
                         // `Unknown` says "it may have been applied", which is the
                         // only honest sentence when a write times out.
-                        Some(pending) => {
+                        Some(Pending::Action(pending)) => {
                             self.status = describe(execute(&pending.argv, self.write_timeout));
+                        }
+                        // A worktree write needs the loop (git, seed file,
+                        // terminal): `y` only moves the agreed plan there.
+                        Some(Pending::Agent(plan, path)) => {
+                            self.agent_go = Some((plan, path));
                         }
                         // Nothing was asked: never claim success for it.
                         None => self.status = "nothing to run".into(),
@@ -787,6 +876,12 @@ impl App {
             // `m` opens the same actions as a menu, so the method and the
             // branch deletion are a choice instead of a constant.
             Key::Char('m') => self.open_action_menu(),
+            // `g` hands the selected PR to an agent (the loop owns the
+            // terminal, so this only validates and asks).
+            Key::Char('g') => self.request_agent(),
+            // `x` forgets the last agent record; there is no process left
+            // to stop by the time the TUI is back.
+            Key::Char('x') => self.close_agent_record(),
             Key::Char('/') => self.searching = true,
             // `R` picks which repos the list shows (multi-select menu).
             Key::Char('R') => self.open_repo_menu(),
@@ -801,6 +896,16 @@ impl App {
             // Esc climbs one level and stops at the first: it never quits.
             // The match is exhaustive on purpose, so a new pane is a compile
             // error here instead of silently inheriting an exit.
+            // A visible record card closes first, from any pane: the card
+            // lives in the right column, which both panes share.
+            Key::Esc if self.visible_record().is_some() => {
+                // First Esc closes the record card and shows the detail; the
+                // record itself stays (a new run replaces it, `x` deletes it).
+                // Reselecting the item shows the card again.
+                if let Some(item) = self.selected_item() {
+                    self.agent_dismissed_for = Some((item.repo.clone(), item.number));
+                }
+            }
             Key::Esc => match self.pane {
                 Pane::Detail => self.pane = Pane::List,
                 // Drilled in (a repo filter is active): back to the repos

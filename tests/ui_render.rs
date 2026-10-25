@@ -404,6 +404,76 @@ fn the_action_menu_fits_at_80_columns() {
 }
 
 #[test]
+fn the_agent_record_shows_at_80_columns() {
+    // The record card replaces the detail for its own item — finished and
+    // running alike. "Running" can only ever be seen here in a test: on a
+    // real terminal the agent owns the screen while it is alive.
+    use gtasks::actions::RepoSlug;
+    use gtasks::agent::{AgentOutcome, AgentRecord, AgentStatus};
+    use gtasks::model::{Item, ItemKind};
+    let slug = RepoSlug::parse("o/r").expect("valid slug");
+    let mut app = App {
+        repos: vec![gtasks::app::RepoRow::All, gtasks::app::RepoRow::Repo(slug)],
+        ..App::default()
+    };
+    app.items = vec![Item {
+        number: 7,
+        title: "seven".to_string(),
+        state: "OPEN".to_string(),
+        is_draft: None,
+        author: None,
+        labels: vec![],
+        assignees: vec![],
+        created_at: String::new(),
+        updated_at: String::new(),
+        url: String::new(),
+        head_ref_name: None,
+        base_ref_name: None,
+        review_decision: None,
+        mergeable: None,
+        status_check_rollup: vec![],
+        closing_issues_references: vec![],
+        repo: "o/r".to_string(),
+        kind: ItemKind::Pr,
+    }];
+    app.agent_record = Some(AgentRecord {
+        repo: "o/r".to_string(),
+        number: 7,
+        profile: "default".to_string(),
+        worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
+        seed_lines: 4,
+        status: AgentStatus::Finished {
+            outcome: AgentOutcome::Exit(0),
+            secs: 42,
+        },
+    });
+    let view = view_for(&app);
+    let screen = render_sized(&app, &view, 80, 24);
+    for line in [
+        "agent · o/r#7",
+        "profile default · seed 4 lines",
+        "worktree /tmp/wt/o/r/fix-foo",
+        "exit 0 · 42 s",
+    ] {
+        assert!(screen.contains(line), "80x24 shows {line}: {screen}");
+    }
+    app.agent_record = Some(AgentRecord {
+        repo: "o/r".to_string(),
+        number: 7,
+        profile: "default".to_string(),
+        worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
+        seed_lines: 4,
+        status: AgentStatus::Running,
+    });
+    let view = view_for(&app);
+    let screen = render_sized(&app, &view, 80, 24);
+    assert!(
+        screen.contains("running…"),
+        "the live state has its own word: {screen}"
+    );
+}
+
+#[test]
 fn coming_next_keys_produce_no_screen_change() {
     // The auditor's proof: every key in the overlay's "coming in the next
     // stages" section must be a no-op today. The keys come from the same
