@@ -29,7 +29,6 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event};
 
-
 /// gtasks: GitHub issues & PRs across repos, in the terminal.
 #[derive(Debug, Parser)]
 #[command(name = "gtasks", version, about)]
