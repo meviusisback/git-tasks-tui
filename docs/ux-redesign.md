@@ -360,7 +360,16 @@ where work survives.
 2. **`last_repo` must not come back.** It has been added and removed twice. The
    fact that makes it unnecessary — *every* writer of the repo list resets the
    cursor — belongs in a comment on `set_repos`, not on the clamp.
-3. **`set_repos` does not refresh the status line.** The sentence is composed in
+3. **A config that cannot be read must say so on screen, not only in the log.**
+   Today a broken or invalid config falls back to a demo repo with a
+   `tracing::warn!` nobody reads: the user sees a repository they never
+   configured, and nothing explains it. Fall back if you must, but the screen
+   must carry the reason (file, value, accepted range). Stage 17.
+4. **`demo_config()` is not revalidated.** It derives from `Config::default()`,
+   so it is valid today only because the default is valid — a guarantee by
+   coincidence. One guard (`debug_assert!(demo.validate().is_ok())` plus a
+   `warn!` in release) turns it into a checked fact.
+5. **`set_repos` does not refresh the status line.** The sentence is composed in
    `apply_repo_filter` only, so a list rebuilt elsewhere leaves the previous
    status on screen — the one part of the screen that does not restart with the
    list. Today it is masked: the loop writes `selection saved — N repos` right
