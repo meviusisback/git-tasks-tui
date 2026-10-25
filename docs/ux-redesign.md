@@ -335,6 +335,16 @@ round trip; they are written here so the next stage does not pay again.
   head of an open pull request, which closed itself. Nothing was lost only
   because the work existed in two places. Deletion is the one operation a
   `revert` does not undo, so `git ls-remote` immediately before, every time.
+- **A pull request is closed by looking at two things: the ancestry of the
+  object and the presence of the artefact.** `git merge-base --is-ancestor
+  <head> origin/main` answers "was this branch merged as it is"; `git grep -c
+  '<marker>' origin/main -- <file>` answers "did the work land anyway". Use both,
+  in that order: if the first is no and the second is yes, the PR is
+  **superseded, not lost** — the category that was needed three times in one day
+  (#41, #32/#35, #52). Squash merges make the first question useless by
+  construction, which is why the second cannot be dropped. Measured 2026-10-25:
+  `ff21874` (head of #52) is not an ancestor of `main`, yet all five tests it
+  wanted are there — ancestry looks at history, the marker looks at the present.
 - **An open PR is a claim about push history, not about the tree.** A branch
   pushed again from a stale view reopens its pull request, and the queue then
   shows work that already landed. `git merge-base --is-ancestor <head>
