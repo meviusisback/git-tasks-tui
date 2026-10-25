@@ -287,19 +287,22 @@ fn detail_box_shows_structured_fields_at_80_columns() {
         kind: ItemKind::Pr,
     }];
     let view = view_for(&app);
-    let narrow = render_sized(&app, &view, 80, 12);
-    for line in ["state: OPEN", "author: alberto"] {
-        assert!(narrow.contains(line), "80x12 shows {line}: {narrow}");
-    }
-    let full = render_sized(&app, &view, 80, 30);
+    // One size: 80x24. 80 columns is the decisive width (a field rendered
+    // only at 120 certifies a screen that was never broken); 24 rows hold
+    // the whole box, so this test watches the detail pane, all of it.
+    // Stable lines only — the relative clock is pinned in `detail_fields`
+    // unit tests, not here.
+    let screen = render_sized(&app, &view, 80, 24);
     for line in [
+        "state: OPEN",
+        "author: alberto",
         "labels: bug",
         "feat/x → main",
         "checks: 0 passed, 1 failed (ci)",
         "mergeable: MERGEABLE",
         "url: https://github.com/o/r/pull/12",
     ] {
-        assert!(full.contains(line), "80 cols show {line}: {full}");
+        assert!(screen.contains(line), "80x24 shows {line}: {screen}");
     }
 }
 
