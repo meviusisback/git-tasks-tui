@@ -97,17 +97,20 @@ fn a_failed_enter_undoes_what_it_did() {
     // enabled, the second step fails, and the error travels out of `enter_with` with raw mode
     // still on.
     let (calls, restore) = counter();
-    let mut raw_on = false;
+    // `Arc<AtomicBool>` and not a borrowed `bool`: the enable step is stored for `resume`, so it
+    // must be `'static`. The claim does not change.
+    let raw_on = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let for_enable = Arc::clone(&raw_on);
     let err = Tui::enter_with(
-        || {
-            raw_on = true;
+        move || {
+            for_enable.store(true, Ordering::SeqCst);
             Ok(())
         },
         || Err(std::io::Error::other("EnterAlternateScreen failed")),
         restore,
     );
     assert!(err.is_err(), "the failure must propagate");
-    assert!(raw_on, "the fixture must have reached the raw-mode step");
+    assert!(raw_on.load(Ordering::SeqCst), "the fixture must have reached the raw-mode step");
     // Raw mode is ON and `Self` was never built, so `Drop` cannot run: the only thing that can
     // put the terminal back is this call. Measured before the fix: it returned Err with raw
     // mode still on, and the user got a terminal with no echo and no line editing.
@@ -115,5 +118,91 @@ fn a_failed_enter_undoes_what_it_did() {
         calls.load(Ordering::SeqCst),
         1,
         "the half-entry was left in raw mode: nothing restored it"
+    );
+}
+
+
+/// The agent handoff: leave the screen, hand the terminal to the child, come back. Two ownership
+/// windows, and the restore must run **once per window** — not once overall (the second window
+/// would leak raw mode) and not twice per window (Drop and the hook would fight).
+#[test]
+fn suspend_then_drop_restores_once() {
+    let (calls, restore) = counter();
+    let tui = Tui::enter_with(|| Ok(()), || Ok(()), restore).expect("enter");
+    tui.suspend();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "suspend restores immediately");
+    drop(tui);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "dropping a suspended guard must not restore a terminal it no longer owns"
+    );
+}
+
+#[test]
+fn suspend_resume_drop_restores_once_per_window() {
+    let (calls, restore) = counter();
+    let tui = Tui::enter_with(|| Ok(()), || Ok(()), restore).expect("enter");
+    tui.suspend();
+    tui.resume().expect("resume");
+    drop(tui);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "two ownership windows, two restores: one when the child had the terminal, one at exit"
+    );
+}
+
+#[test]
+fn a_panic_while_suspended_restores_nothing() {
+    let (calls, restore) = counter();
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        let tui = Tui::enter_with(|| Ok(()), || Ok(()), restore).expect("enter");
+        tui.suspend();
+        panic!("the child panicked while it had the terminal");
+    }));
+
+    assert!(outcome.is_err(), "the panic must propagate");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "while suspended the terminal is not ours: the hook must not restore it again"
+    );
+}
+
+#[test]
+fn a_resume_that_fails_undoes_its_own_first_step() {
+    // The deliberate path: the guard enters fine, is suspended, and then **resume** fails on the
+    // second step. That is not the same case as a failing `enter_with` — it is the one that only
+    // exists because stage 16 hands the terminal over and takes it back.
+    let (calls, restore) = counter();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let screen = {
+        let a = Arc::clone(&attempts);
+        move || {
+            if a.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("no alternate screen the second time"))
+            }
+        }
+    };
+    let tui = Tui::enter_with(|| Ok(()), screen, restore).expect("enter");
+    tui.suspend();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let err = tui.resume();
+    assert!(err.is_err(), "the second attempt must fail");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a resume that fails on the second step must undo the first: raw mode is not ours to keep"
+    );
+
+    drop(tui);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "the failed resume left the guard not-live, so dropping it restores nothing"
     );
 }
