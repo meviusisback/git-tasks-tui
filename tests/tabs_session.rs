@@ -140,7 +140,7 @@ fn the_agent_panel_names_the_worktree_steps() {
     for line in [
         "g create worktree + launch agent",
         "Enter opens a tab",
-        "t/T next/prev tab",
+        "t/T switch",
         "profile ·",
         "clones ·",
     ] {
@@ -198,6 +198,37 @@ fn a_stale_session_never_breaks_startup() {
     assert_eq!(app.pane, Pane::List);
     assert!(app.tabs.is_empty());
     assert_eq!(app.active_tab, None);
+}
+
+#[test]
+fn the_screen_names_tab_and_repo_keys() {
+    // Regression: the tab keys used to live only in the legend, which
+    // truncates on narrow terminals. They now sit on the tabs strip and in
+    // the agent pane, so this renders a real frame and reads it back.
+    use gtasks::ui::{draw, view_for};
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter);
+    let view = view_for(&app);
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..30 {
+        for x in 0..100 {
+            out.push_str(buffer[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    for needle in [
+        "Tab repos",         // bottom legend: how to reach the repos
+        "t/T switch",        // tabs strip: how to move between tabs
+        "x close",           // tabs strip: how to close one
+        "g create worktree", // agent pane: the most important step
+    ] {
+        assert!(out.contains(needle), "screen names {needle:?}:\n{out}");
+    }
 }
 
 #[test]

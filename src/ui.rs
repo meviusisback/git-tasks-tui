@@ -27,7 +27,7 @@ pub struct ViewModel {
 
 /// The keys that work today. Also the source of the `?` overlay.
 const HELP_NOW: &[&str] = &[
-    "← / →      move between the left column and the right column",
+    "← / →      move between the columns (the mouse is not supported)",
     "↑ / ↓      move the selection, or scroll detail/agent",
     "Enter      open a tab + open the detail box",
     "t / T      next / previous tab",
@@ -265,8 +265,10 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
 /// the rest `○`; `t`/`T` switch, `x` closes. No tabs yet says how to open
 /// one instead of leaving a blank strip.
 fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
+    // The keys live on the strip itself, not only in the legend: the legend
+    // truncates on narrow terminals, this line does not.
     let line = if view.tabs.is_empty() {
-        "tabs: no tabs — Enter opens one".to_string()
+        "tabs: no tabs — Enter opens one · t/T switch · x close".to_string()
     } else {
         let labels = view
             .tabs
@@ -282,7 +284,7 @@ fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
             })
             .collect::<Vec<_>>()
             .join("  │  ");
-        format!("tabs: {labels}")
+        format!("tabs: {labels} · t/T switch · x close")
     };
     let focused = app.pane == Pane::Detail;
     Paragraph::new(sanitize(&line)).style(theme::title(focused))

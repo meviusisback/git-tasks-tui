@@ -41,7 +41,9 @@ impl Default for State {
             selected_repos: Vec::new(),
             sort_key: "updated".into(),
             ascending: false,
-            pane: String::from("list"),
+            // A fresh start lands on the repos: the left column is repos on
+            // top and issues below, so the first keypress picks a repo.
+            pane: String::from("repos"),
             repos_cursor: 0,
             list_cursor: 0,
             query: String::new(),

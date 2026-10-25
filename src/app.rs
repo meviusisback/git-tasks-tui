@@ -490,21 +490,21 @@ impl App {
         // legend in this one row would push every message off the edge.
         let text = if self.pane == Pane::Detail {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ scroll · Enter body · t tabs · x close tab · g agent",
+                "q quit · ? help · ←/→ panes · t/T tabs · x close tab · m actions · g agent",
             )
         } else if self.pane == Pane::Agent {
             String::from(
                 "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
             )
         } else if self.pane == Pane::Repos {
-            String::from("q quit · ? help · Enter drill in · ↑/↓ move · t tabs")
+            String::from("q quit · ? help · Enter drill in · ↑/↓ move · R repos")
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Enter open tab · R repos · m actions · g agent",
+                "q quit · ? help · ←/→ panes · Tab repos · ↑/↓ move · Enter open tab · R repos · m actions · g agent",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Enter open tab · R repos · m actions · g agent",
+                "q quit · ? help · Esc back · ←/→ panes · Tab repos · ↑/↓ move · Enter open tab · m actions · g agent",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -1043,9 +1043,13 @@ impl App {
     }
 
     /// Bottom-right pane: what to do next, always visible.
-    /// The record card lives here too, so the detail above never hides it.
+    /// The keys come first, so a short box still shows them; the record
+    /// card lives here too, below the task it belongs to.
     pub fn agent_panel_text(&self) -> String {
         let mut out = Vec::new();
+        out.push("g create worktree + launch agent (asks once)".to_string());
+        out.push("Enter opens a tab · t/T switch · x close · w here · o browser".to_string());
+        out.push(String::new());
         match self.effective_item() {
             Some(item) => {
                 out.push(format!(
@@ -1090,10 +1094,6 @@ impl App {
                 .join(", ")
         };
         out.push(format!("clones · {roots}"));
-        out.push(String::new());
-        out.push("g create worktree + launch agent (asks once)".to_string());
-        out.push("w this pane · o browser · x close tab/record".to_string());
-        out.push("Enter opens a tab · t/T next/prev tab".to_string());
         out.join("\n")
     }
 
