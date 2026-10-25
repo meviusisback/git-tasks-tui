@@ -424,6 +424,8 @@ impl App {
     /// empty check means "everything", like an empty state file. The list
     /// updates from the items already in memory; the loop saves the file.
     fn apply_selection(&mut self, selected: Vec<RepoSlug>) {
+        // A new list resets the cursor (see `set_repos`), so no row survives
+        // a reorder — that reset is why no `last_repo` identity is needed.
         let shown = if selected.is_empty() {
             self.all_repos.clone()
         } else {
