@@ -99,23 +99,28 @@ fn gh_env_knobs_present() {
     assert!(has_no_git_vars(&env));
 }
 
-/// The interactive child gets the agent allowlist too, not the parent's
-/// environment: it works inside an untrusted worktree, where a planted
-/// instruction reading `GH_TOKEN` out of the environment is the simplest
-/// exfiltration there is (F2). The test spawns exactly what the handoff
-/// spawns — same builder — and reads what the child really saw, because
-/// `Command` exposes no environment getter.
+/// The interactive child gets the agent allowlist too, not the parent's environment: it works
+/// inside an untrusted worktree, where a planted instruction reading `GH_TOKEN` out of the
+/// environment is the simplest exfiltration there is (F2).
+///
+/// Deterministic by construction, which took two rewrites to reach:
+///
+/// - the child is `/bin/sh -c env`, **not** a script written to a temporary directory, so nothing
+///   is created, chmod-ed or executed a microsecond after being written;
+/// - its output comes back over a **pipe**, not a file, so there is no "has it written yet";
+/// - `interactive_command` builds the environment and the test only reads what came out, so the
+///   subject of the test is the allowlist, not the transport.
+///
+/// The earlier version wrote a script and read a file. It failed once in seven runs on the merged
+/// tree and never again; the message carried no status, no stderr and no dump, so the only reading
+/// left was "it passes now". Whatever the cause was, this shape cannot express it: a missing file,
+/// a slow write, or an exec of a just-written file are not states this test can be in.
 #[test]
 fn interactive_child_gets_no_tokens() {
     use gtasks::gh::{Argv, CheckedArgv, interactive_command};
-    use std::os::unix::fs::PermissionsExt;
+    use std::process::Stdio;
 
     let tmp = tempfile::tempdir().unwrap();
-    let dump = tmp.path().join("child-env.txt");
-    let script = tmp.path().join("dump-env.sh");
-    std::fs::write(&script, format!("#!/bin/sh\nenv > {}\n", dump.display())).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-
     let dirty = parent(&[
         ("PATH", "/usr/bin:/bin"),
         ("HOME", tmp.path().to_str().unwrap()),
@@ -125,27 +130,25 @@ fn interactive_child_gets_no_tokens() {
         ("GIT_DIR", "/x"),
     ]);
     let argv = CheckedArgv::unchecked_for_tests(Argv {
-        program: script.clone(),
-        args: Vec::new(),
+        program: std::path::PathBuf::from("/bin/sh"),
+        args: vec![OsString::from("-c"), OsString::from("env")],
         env: Vec::new(),
         cwd: tmp.path().to_path_buf(),
     });
-    // `output()` instead of `spawn().wait()`: a failure here has to be diagnosable. This test
-    // failed once, on the first run after a merge, and the message said nothing — no status, no
-    // stderr, no dump — so the only reading left was "it passes now". A test that fails sometimes
-    // is worse than one that always fails: it teaches re-running instead of looking. Now the
-    // panic carries the status, the child's stderr and the environment that landed on disk.
-    let out = interactive_command(&script, &argv, &dirty)
-        .output()
-        .expect("the dump script runs");
-    let text = std::fs::read_to_string(&dump)
-        .unwrap_or_else(|err| format!("<the child dumped nothing: {err}>"));
+
+    // `stdout` is overridden after the builder: the allowlist is what `interactive_command` decides,
+    // and the pipe is only how this test listens.
+    let mut cmd = interactive_command(std::path::Path::new("/bin/sh"), &argv, &dirty);
+    cmd.stdout(Stdio::piped());
+    let out = cmd.output().expect("the child runs");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
         out.status.success(),
-        "the dump script must exit 0, got {:?}, stderr: {:?}, dump-so-far: {text:?}",
+        "the child must exit 0, got {:?}, stderr: {:?}, stdout-so-far: {text:?}",
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
+
     let child_env: Vec<(OsString, OsString)> = text
         .lines()
         .filter_map(|line| {
