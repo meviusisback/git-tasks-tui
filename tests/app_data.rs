@@ -147,6 +147,11 @@ fn enter_requests_the_selected_body_and_does_not_repeat_it() {
     assert!(app.detail_requested.is_none(), "request settled");
     assert_eq!(app.detail, "## Body");
     assert_eq!(app.detail_for, Some(("acme/one".to_string(), 2)));
+    assert!(
+        app.status.is_empty(),
+        "the loading line referred to this body: {status}",
+        status = app.status
+    );
 
     // Already loaded: no new request.
     app.update(Msg::Key(Key::Enter));
@@ -168,6 +173,22 @@ fn a_late_body_for_a_previous_selection_is_ignored() {
 
     app.apply_detail("acme/two", 9, "fresh body".to_string());
     assert_eq!(app.detail, "fresh body");
+}
+
+#[test]
+fn a_body_for_another_item_leaves_its_loading_line_alone() {
+    // apply_detail only clears the status that named its own number: anything
+    // else belongs to someone else (a refresh, a save, another item).
+    let mut app = App::default();
+    app.apply_outcome(outcome());
+    app.list_cursor = 2;
+    app.update(Msg::Key(Key::Enter)); // asks for #9
+    assert!(app.status.contains("loading #9"));
+
+    app.status = "saved".to_string();
+    app.apply_detail("acme/two", 9, "fresh body".to_string());
+    assert_eq!(app.detail, "fresh body");
+    assert_eq!(app.status, "saved", "foreign status survives");
 }
 
 #[test]

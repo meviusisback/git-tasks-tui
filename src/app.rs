@@ -478,6 +478,12 @@ impl App {
         self.detail = body;
         self.detail_for = Some(key);
         self.detail_scroll = 0;
+        // The "loading #N…" line referred to exactly this body: once it is
+        // here, leaving it would say "still loading" about a loaded screen.
+        // Anything else the status says belongs to someone else.
+        if self.status == format!("loading #{number}…") {
+            self.status.clear();
+        }
     }
 
     /// Build the first action for the selected row, show what it would run, and
