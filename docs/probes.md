@@ -277,3 +277,65 @@ fn the_key_sequence_reaches_a_list_pane_where_esc_does_nothing() {
 }
 ```
 
+## The perf baseline, and the shape that made it obvious (`ac41c4f`)
+
+Before stage 13b the fetch was **one `gh pr list` per repo**, so the time to a
+populated screen was the **sum** of those calls. This is the measurement that turned
+"the app takes 56 seconds" into an attribution, and it is kept because it is the *before*
+that makes the *after* readable.
+
+### Method (the numbers are only reusable with it)
+
+- a **fake `gh`** first in `PATH` that logs argv and duration and then **execs the real
+  `gh`** — it never answers on its own, so the timings are real and only the bookkeeping
+  is added (`scripts/measure-fetch.sh`);
+- `PATH` passed with `env` **inside** the tmux command string: `tmux -e PATH=…` does not
+  reach the session (measured — tmux special-cases `PATH`), while `-e` does work for
+  `XDG_*`;
+- an **isolated** `XDG_CONFIG_HOME` per run, so the fixture config is what the process
+  reads; tmux 120×30; polling for the first `#NNN` item row every 250 ms;
+- every figure below carries the **source sha** and the binary's **sha256**, because a
+  duration with no object attached cannot be compared with a later one.
+
+### The table
+
+| repos | first item row | `gh` calls | sum of call durations |
+|---|---|---|---|
+| 2 | **6 954 ms** | 3 | 9 076 ms |
+| 4 | **14 648 ms** | 5 | 28 955 ms |
+| 69 | **56 009 ms** | 138 (measured as 69×2 REST) | not summed — the wall was the sum |
+
+Source `ac41c4f`, binary sha256 `1a849fbb28ef0978`, release profile. The 2→4 ratio is
+**2.1×** for twice the repos: linear, which is what "the wall is the sum" means. The 69
+row is the same law at full size — and it is a **measurement**, not an extrapolation.
+
+### What was extrapolated, and labelled as such
+
+69 repos × ~4 s per call ≈ 276 s would be the serial cost of 138 REST calls. The
+observed 56 s is lower because the fetch already ran several calls in flight — so the
+number was *near*-serial, not serial. The prediction of "one request for all repos"
+therefore came from the **shape** (linear in repo count), not from that product.
+
+### What changed after (for comparison, `204e7eb`)
+
+Same instrument, same config, release: **5 344 ms** (coordinator's run) and
+**5 154 / 5 606 / 4 330 ms** (this reviewer's three runs, `4597e0c`). The `gh` call log
+shows why: **4** `gh api graphql` batches of 20 repos instead of 138 REST calls, so the
+wall clock became the **slowest** call instead of the sum.
+
+### The discriminating question, which is not "how long does it take"
+
+Absolute milliseconds move with the network and the machine. The test that survives both
+is: **doubling the repos, does the time double?** Before: yes (7.0 s → 14.6 s).
+After: no. That is the change of class, and it is the one worth re-measuring after any
+future rework of the fetch.
+
+### A wrong number this section exists to prevent
+
+An early run of `scripts/measure-startup.sh` reported *"never within 120s"* on this same
+tree, and it was **not a measurement**: the binary had been passed as an absolute path to
+a script that prefixes `$(pwd)/`, so the session died instantly and the harness reported a
+program that never painted a screen. With the path it documents (relative) the same script
+reported **58 s** on `ac41c4f`. The lesson is in the fix: a harness that cannot tell
+"the binary never started" from "the program is slow" will eventually accuse the program.
+
