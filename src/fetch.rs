@@ -17,6 +17,14 @@ use crate::model::{Item, ItemKind};
 /// How many items to ask per repo list.
 pub const DEFAULT_LIMIT: usize = 100;
 
+/// Concurrent fetch workers, ceiling included. Batches are heavy GraphQL
+/// reads and GitHub throttles abusive concurrency with secondary rate
+/// limits — eight at a time is the documented compromise, not a guess.
+/// The config load rejects anything outside 1..=8, so the executor never
+/// silently downgrades a value the user set: fewer threads than chunks is
+/// arithmetic (one thread per chunk at most), not policy.
+pub const MAX_PARALLEL: usize = 8;
+
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
     #[error("gh timed out")]
@@ -46,7 +54,7 @@ pub fn fetch_graphql_many(
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let chunks: Vec<&[RepoSlug]> = repos.chunks(crate::graphql::BATCH_SIZE).collect();
-    let parallel = parallel.clamp(1, 8).min(chunks.len().max(1));
+    let parallel = parallel.clamp(1, MAX_PARALLEL).min(chunks.len().max(1));
     let next = AtomicUsize::new(0);
     let collected: Mutex<Vec<BatchResult>> = Mutex::new(Vec::new());
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
@@ -243,7 +251,7 @@ where
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let parallel = parallel.clamp(1, 4).min(repos.len().max(1));
+    let parallel = parallel.clamp(1, MAX_PARALLEL).min(repos.len().max(1));
     let next = AtomicUsize::new(0);
     let collected: Mutex<Vec<IndexedResult>> = Mutex::new(Vec::new());
 
