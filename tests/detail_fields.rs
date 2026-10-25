@@ -1,8 +1,10 @@
-//! Task 13: the detail box shows structured fields from data `gh` really
-//! returned. Empty fields are omitted, never blank — a blank line would
-//! claim "none", and that is a different sentence from "never asked".
+//! The detail table: one structured row per present field, plugin order
+//! (context, CI verdicts, links), tones on the verdicts. Empty fields are
+//! omitted, never blank.
 
-use gtasks::model::{Author, Check, ClosingRef, Item, ItemKind, Label, relative_time};
+use gtasks::model::{
+    Author, Check, ClosingRef, DetailRow, FieldTone, Item, ItemKind, Label, relative_time,
+};
 
 // 2026-01-01T00:00:00Z. One verified anchor; every other timestamp in these
 // tests is an offset from it, so the suite does not rot.
@@ -63,6 +65,15 @@ fn rich_pr() -> Item {
     }
 }
 
+fn values(rows: &[DetailRow]) -> Vec<(&'static str, String, Option<FieldTone>)> {
+    rows.iter()
+        .filter_map(|row| match row {
+            DetailRow::Title => None,
+            DetailRow::Field(field) => Some((field.label, field.value.clone(), field.tone)),
+        })
+        .collect()
+}
+
 #[test]
 fn relative_time_counts_in_coarse_buckets() {
     assert_eq!(
@@ -96,28 +107,33 @@ fn relative_time_refuses_garbage_and_the_future() {
 }
 
 #[test]
-fn a_full_pr_shows_every_present_field() {
-    let rows = rich_pr().detail_fields(NEW_YEAR);
+fn a_full_pr_shows_every_present_field_in_plugin_order() {
+    let rows = rich_pr().detail_rows(NEW_YEAR);
+    assert!(matches!(rows.first(), Some(DetailRow::Title)));
     assert_eq!(
-        rows,
+        values(&rows),
         vec![
-            "**#12 Add widget**",
-            "",
-            "**state:** OPEN",
-            "**author:** alberto",
-            "**labels:** bug, ui",
-            "**assignees:** bob",
-            "created 2d ago · updated 1h ago",
-            "",
-            "feat/x → main",
-            "",
-            "**checks:** 1 passed, 1 failed (lint), 1 pending",
-            "**mergeable:** MERGEABLE",
-            "**review:** APPROVED",
-            "",
-            "**linked:** #5 linked issue",
-            "**url:** https://github.com/o/r/pull/12",
-            "**repo:** o/r",
+            ("repository", "o/r".to_string(), None),
+            ("type", "Pull request".to_string(), None),
+            ("author", "alberto".to_string(), None),
+            ("created", "2d ago".to_string(), None),
+            ("updated", "1h ago".to_string(), None),
+            (
+                "branch",
+                "feat/x → main".to_string(),
+                Some(FieldTone::Accent)
+            ),
+            ("labels", "bug, ui".to_string(), None),
+            ("assignees", "bob".to_string(), None),
+            ("review", "APPROVED".to_string(), Some(FieldTone::Good)),
+            (
+                "checks",
+                "1 passed, 1 failed (lint), 1 pending".to_string(),
+                Some(FieldTone::Bad),
+            ),
+            ("mergeable", "MERGEABLE".to_string(), Some(FieldTone::Good)),
+            ("linked", "#5 linked issue".to_string(), None),
+            ("url", "https://github.com/o/r/pull/12".to_string(), None),
         ]
     );
 }
@@ -135,12 +151,50 @@ fn failed_checks_count_by_name_and_cap_at_two_plus_n() {
     }
     let mut item = rich_pr();
     item.status_check_rollup = vec![failing("ci"), failing("ci")];
-    let rows = item.detail_fields(NEW_YEAR);
-    assert!(rows.contains(&"**checks:** 0 passed, 2 failed (ci ×2)".to_string()));
+    let checks = values(&item.detail_rows(NEW_YEAR));
+    let checks = checks
+        .iter()
+        .find(|(label, _, _)| *label == "checks")
+        .expect("checks row");
+    assert_eq!(checks.1, "0 passed, 2 failed (ci ×2)");
+    assert_eq!(checks.2, Some(FieldTone::Bad));
 
     item.status_check_rollup = vec![failing("lint"), failing("ci"), failing("docs")];
-    let rows = item.detail_fields(NEW_YEAR);
-    assert!(rows.contains(&"**checks:** 0 passed, 3 failed (lint, ci, +1)".to_string()));
+    let checks = values(&item.detail_rows(NEW_YEAR));
+    let checks = checks
+        .iter()
+        .find(|(label, _, _)| *label == "checks")
+        .expect("checks row");
+    assert_eq!(checks.1, "0 passed, 3 failed (lint, ci, +1)");
+}
+
+#[test]
+fn tones_read_the_verdicts() {
+    let mut item = rich_pr();
+    item.review_decision = Some("CHANGES_REQUESTED".to_string());
+    item.mergeable = Some("CONFLICTING".to_string());
+    item.status_check_rollup = vec![];
+    let rows = values(&item.detail_rows(NEW_YEAR));
+    let tone = |label: &str| {
+        rows.iter()
+            .find(|(l, _, _)| *l == label)
+            .map(|(_, _, t)| *t)
+    };
+    assert_eq!(tone("review"), Some(Some(FieldTone::Bad)));
+    assert_eq!(tone("mergeable"), Some(Some(FieldTone::Bad)));
+    // Empty rollup on a PR honestly means none: the line shows, all green.
+    assert_eq!(tone("checks"), Some(Some(FieldTone::Good)));
+
+    let mut pending = rich_pr();
+    pending.status_check_rollup = vec![Check {
+        name: Some("ci".to_string()),
+        status: Some("IN_PROGRESS".to_string()),
+        conclusion: None,
+    }];
+    let rows = values(&pending.detail_rows(NEW_YEAR));
+    let checks = rows.iter().find(|(l, _, _)| *l == "checks").unwrap();
+    assert_eq!(checks.1, "0 passed, 1 pending");
+    assert_eq!(checks.2, Some(FieldTone::Warn));
 }
 
 #[test]
@@ -159,30 +213,42 @@ fn empty_fields_are_omitted_never_blank() {
     item.closing_issues_references.clear();
     item.url.clear();
     item.repo.clear();
-    let rows = item.detail_fields(NEW_YEAR);
-    // A PR with no checks says "none" — the rollup was asked for (FIELDS_PR),
-    // so zero is a datum, not an absence.
-    assert_eq!(
-        rows,
-        vec![
-            "**#12 Add widget**",
-            "",
-            "**state:** OPEN",
-            "",
-            "**checks:** 0 passed"
-        ]
-    );
-    for row in &rows {
+    let rows = values(&item.detail_rows(NEW_YEAR));
+    let labels: Vec<&str> = rows.iter().map(|(l, _, _)| *l).collect();
+    for missing in [
+        "repository",
+        "author",
+        "labels",
+        "assignees",
+        "created",
+        "updated",
+        "branch",
+        "review",
+        "mergeable",
+        "linked",
+        "url",
+    ] {
         assert!(
-            !row.ends_with(':'),
-            "a blank field would claim \"none\": {row:?}"
+            !labels.contains(&missing),
+            "{missing} is omitted: {labels:?}"
         );
     }
-    // An issue is never asked for checks (FIELDS_ISSUE excludes the rollup):
-    // there the line is omitted — "never asked" is not "none".
+    // A PR with no checks says none — the rollup was asked for, so zero is
+    // a datum, not an absence. The type row always shows.
+    let shown: Vec<(&str, String)> = rows.iter().map(|(l, v, _)| (*l, v.clone())).collect();
+    assert_eq!(
+        shown,
+        vec![
+            ("type", "Pull request".to_string()),
+            ("checks", "0 passed".to_string()),
+        ]
+    );
+    // An issue is never asked for checks: there the line is omitted —
+    // "never asked" is not "none".
     item.kind = ItemKind::Issue;
-    let rows = item.detail_fields(NEW_YEAR);
-    assert_eq!(rows, vec!["**#12 Add widget**", "", "**state:** OPEN"]);
+    let rows = values(&item.detail_rows(NEW_YEAR));
+    let labels: Vec<&str> = rows.iter().map(|(l, _, _)| *l).collect();
+    assert_eq!(labels, vec!["type"]);
 }
 
 #[test]

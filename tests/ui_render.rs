@@ -131,10 +131,38 @@ fn the_focused_list_highlights_its_selected_row() {
 
 #[test]
 fn the_detail_renders_markdown_instead_of_raw_markers() {
-    let (app, mut view) = sample();
+    use gtasks::model::{Item, ItemKind};
+    let slug = gtasks::actions::RepoSlug::parse("o/r").expect("valid slug");
+    let mut app = App {
+        repos: vec![gtasks::app::RepoRow::All, gtasks::app::RepoRow::Repo(slug)],
+        ..App::default()
+    };
+    app.items = vec![Item {
+        number: 12,
+        title: "Add widget".to_string(),
+        state: "OPEN".into(),
+        is_draft: None,
+        author: None,
+        labels: vec![],
+        assignees: vec![],
+        created_at: String::new(),
+        updated_at: String::new(),
+        url: String::new(),
+        head_ref_name: None,
+        base_ref_name: None,
+        review_decision: None,
+        mergeable: None,
+        status_check_rollup: vec![],
+        closing_issues_references: vec![],
+        repo: "o/r".to_string(),
+        kind: ItemKind::Pr,
+    }];
+    let mut view = view_for(&app);
     view.detail = "## Summary\n\nUse **bold** and `code`.".to_string();
 
-    let screen = render(&app, &view);
+    // Roomy on purpose: this test watches the markdown mapping, not the
+    // layout — the table above the body is another test's business.
+    let screen = render_sized(&app, &view, 80, 24);
     assert!(screen.contains("Summary"), "heading text is shown");
     assert!(
         !screen.contains("##"),
@@ -308,13 +336,17 @@ fn detail_box_shows_structured_fields_at_80_columns() {
     // fetch it instead of leaving a blank zone.
     let screen = render_sized(&app, &view, 80, 24);
     for line in [
-        "state: OPEN",
-        "author: alberto",
-        "labels: bug",
-        "feat/x → main",
-        "checks: 0 passed, 1 failed (ci)",
-        "mergeable: MERGEABLE",
-        "url: https://github.com/o/r/pull/12",
+        "#12 Add widget",
+        "● OPEN",
+        "repository : o/r",
+        "type       : Pull request",
+        "author     : alberto",
+        "branch     : feat/x → main",
+        "labels     : bug",
+        "checks     : 0 passed, 1 failed (ci)",
+        "mergeable  : MERGEABLE",
+        "url        : https://github.com/o/r/pull/12",
+        "DESCRIPTION",
         "Enter — body",
     ] {
         assert!(screen.contains(line), "80x24 shows {line}: {screen}");
@@ -364,7 +396,16 @@ fn a_body_belonging_to_another_item_is_not_shown() {
         "another item's body leaked: {}",
         view.detail
     );
-    assert!(view.detail.contains("Enter — body"));
+    assert!(
+        view.detail.is_empty(),
+        "the body travels alone: {}",
+        view.detail
+    );
+    let screen = render_sized(&app, &view, 80, 24);
+    assert!(
+        screen.contains("Enter — body"),
+        "the pane says how to fetch it: {screen}"
+    );
 }
 
 #[test]

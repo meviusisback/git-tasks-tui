@@ -267,28 +267,25 @@ pub fn view_for(app: &App) -> ViewModel {
     // The detail follows the active tab when one is open, otherwise the row
     // under the list cursor — so a tab keeps its issue/PR while the list
     // moves underneath it.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
     // The record card replaces the detail for its own item: the last agent
     // run is shown where the detail would be, never beside a PR it is not for.
     let record_card = app.visible_record().map(|record| record.card());
+    // The body only: the meta table renders straight from the item in
+    // `detail()`, so a stale body can never glue itself under new fields.
     let detail = app
         .effective_item()
         .map(|item| {
-            if let Some(card) = &record_card {
-                return card.clone();
+            if record_card.is_some() {
+                // The card replaces everything, like before: `detail()`
+                // renders it as the whole pane.
+                return record_card.clone().unwrap_or_default();
             }
-            let mut text = item.detail_fields(now).join("\n");
             let key = (item.repo.clone(), item.number);
-            if app.detail_for.as_ref() == Some(&key) && !app.detail.trim().is_empty() {
-                text.push_str("\n\n");
-                text.push_str(&app.detail);
-            } else if app.detail_requested.as_ref() != Some(&key) {
-                text.push_str("\n\nEnter — body");
+            if app.detail_for.as_ref() == Some(&key) {
+                app.detail.clone()
+            } else {
+                String::new()
             }
-            text
         })
         .unwrap_or_default();
     let _ = visible;
@@ -547,14 +544,15 @@ fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
     Paragraph::new(Line::from(spans))
 }
 
-fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
+/// Markdown to spans: the shared mapping for bodies and record cards.
+fn md_lines(text: &str, width: u16) -> Vec<Line<'static>> {
     // Markdown is rendered at the column width, so the wrapping is real: the
     // paragraph must not wrap again.
-    let lines = md::render(&view.detail, width.saturating_sub(2).max(1) as usize);
-    let text: Vec<ratatui::text::Line<'static>> = lines
+    let lines = md::render(text, width.saturating_sub(2).max(1) as usize);
+    lines
         .into_iter()
         .map(|line| {
-            let spans: Vec<ratatui::text::Span<'static>> = line
+            let spans: Vec<Span<'static>> = line
                 .into_iter()
                 .map(|span| {
                     let style = match span.style {
@@ -563,26 +561,131 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
                         md::Style::Italic => theme::overlay_text().add_modifier(Modifier::ITALIC),
                         md::Style::Code => theme::overlay_text().add_modifier(Modifier::DIM),
                     };
-                    ratatui::text::Span::styled(span.text, style)
+                    Span::styled(span.text, style)
                 })
                 .collect();
-            ratatui::text::Line::from(spans)
+            Line::from(spans)
         })
-        .collect();
+        .collect()
+}
+
+/// The state pill: a coloured dot plus the state, the colour saying open,
+/// draft, merged or closed before the word is read.
+fn state_pill(item: &crate::model::Item) -> (String, Style) {
+    let bold =
+        |color: ratatui::style::Color| Style::default().fg(color).add_modifier(Modifier::BOLD);
+    if item.is_draft == Some(true) {
+        return ("● DRAFT".to_string(), bold(theme::WARN));
+    }
+    match item.state.as_str() {
+        "OPEN" => ("● OPEN".to_string(), bold(theme::OK)),
+        "MERGED" => ("● MERGED".to_string(), bold(theme::MAUVE)),
+        "CLOSED" => ("● CLOSED".to_string(), bold(theme::ALERT)),
+        other => (format!("● {other}"), bold(theme::SUBTEXT)),
+    }
+}
+
+/// One tone of field value to its colour: verdicts read as colours first.
+fn field_style(tone: Option<crate::model::FieldTone>) -> Style {
+    match tone {
+        None => theme::overlay_text(),
+        Some(crate::model::FieldTone::Good) => Style::default().fg(theme::OK),
+        Some(crate::model::FieldTone::Bad) => Style::default().fg(theme::ALERT),
+        Some(crate::model::FieldTone::Warn) => Style::default().fg(theme::WARN),
+        Some(crate::model::FieldTone::Accent) => Style::default().fg(theme::FOCUSED),
+    }
+}
+
+/// The detail pane: title with the kind-coloured number, a state pill, a
+/// meta table (muted labels, plain values, verdicts coloured), then a
+/// separate DESCRIPTION section with the body. Structured lines, not
+/// Markdown: the pane owns every span, so the table aligns and the
+/// description can never glue itself to the fields. The agent record card
+/// keeps the old whole-pane path — it replaces the detail, it is not a row
+/// of it.
+fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
     let focused = app.pane == Pane::Detail;
-    Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" detail ")
-                .border_style(if focused {
-                    theme::border_focused()
-                } else {
-                    theme::border()
-                })
-                .title_style(theme::title(focused)),
-        )
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" detail ")
+        .border_style(if focused {
+            theme::border_focused()
+        } else {
+            theme::border()
+        })
+        .title_style(theme::title(focused));
+    // A finished record's card is the whole pane, like before.
+    if app.visible_record().is_some() {
+        return Paragraph::new(md_lines(&view.detail, width))
+            .block(block)
+            .scroll((app.detail_scroll, 0));
+    }
+    let Some(item) = app.effective_item() else {
+        return Paragraph::new(Vec::<Line<'static>>::new()).block(block);
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut fields: Vec<crate::model::DetailField> = Vec::new();
+    for row in item.detail_rows(now) {
+        if let crate::model::DetailRow::Field(field) = row {
+            fields.push(field);
+        }
+    }
+    let label_width = fields.iter().map(|f| f.label.len()).max().unwrap_or(0);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Title: the number in the kind colour, everything bold.
+    let kind = Some(item.kind);
+    let icon = match kind {
+        Some(crate::model::ItemKind::Pr) => icons::kind_pr(),
+        Some(crate::model::ItemKind::Issue) => icons::kind_issue(),
+        None => "",
+    };
+    let number_style = kind_style(kind).add_modifier(Modifier::BOLD);
+    lines.push(Line::from(vec![
+        Span::styled(icon, number_style),
+        Span::styled(
+            format!("#{} {}", item.number, item.title),
+            theme::overlay_text().add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    let (pill, pill_style) = state_pill(item);
+    lines.push(Line::from(Span::styled(pill, pill_style)));
+    for field in &fields {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:label_width$} : ", field.label),
+                Style::default().fg(theme::SUBTEXT),
+            ),
+            Span::styled(field.value.clone(), field_style(field.tone)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "DESCRIPTION",
+        Style::default()
+            .fg(theme::FOCUSED)
+            .add_modifier(Modifier::BOLD),
+    )));
+    if !view.detail.trim().is_empty() {
+        lines.extend(md_lines(&view.detail, width));
+    } else {
+        let key = (item.repo.clone(), item.number);
+        let hint = if app.detail_requested.as_ref() == Some(&key) {
+            "loading the body…"
+        } else {
+            "Enter — body"
+        };
+        lines.push(Line::from(Span::styled(
+            hint,
+            Style::default().fg(theme::SUBTEXT),
+        )));
+    }
+    Paragraph::new(lines)
+        .block(block)
         .scroll((app.detail_scroll, 0))
+        .wrap(ratatui::widgets::Wrap { trim: true })
 }
 
 /// Right column, bottom: the live agent terminal while it runs, otherwise

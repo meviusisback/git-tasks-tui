@@ -169,64 +169,81 @@ impl Item {
         field.as_deref().filter(|s| !s.is_empty())
     }
 
-    /// Structured detail rows, one per present field. Empty fields are
-    /// *omitted*, never blank: a blank line would claim "none".
-    pub fn detail_fields(&self, now_unix: u64) -> Vec<String> {
-        // Sections read as sections: the title, then who/when, then where it
-        // merges, then CI, then links — blank lines between, field names in
-        // bold, values plain. The `**` markers are Markdown the detail pane
-        // renders; on screen only the names are bold.
-        let title = vec![format!("**#{} {}**", self.number, self.title)];
-        let mut meta = Vec::new();
-        let mut refs = Vec::new();
-        let mut ci = Vec::new();
-        let mut links = Vec::new();
-        let mut state = format!("**state:** {}", self.state);
-        if self.is_draft == Some(true) {
-            state.push_str(" (draft)");
+    /// Structured detail rows, one per present field, in the order the
+    /// plugin shows them: context first, CI verdicts after, links last.
+    /// Empty fields are *omitted*, never blank: a blank line would claim
+    /// "none". The title is a `Title` marker (the pane reads the number,
+    /// title and kind off the item itself); the `DESCRIPTION` heading and
+    /// the body live in the pane, not here.
+    pub fn detail_rows(&self, now_unix: u64) -> Vec<DetailRow> {
+        let mut rows = vec![DetailRow::Title];
+        let mut field = |label: &'static str, value: String, tone: Option<FieldTone>| {
+            rows.push(DetailRow::Field(DetailField { label, value, tone }));
+        };
+        if !self.repo.is_empty() {
+            field("repository", self.repo.clone(), None);
         }
-        meta.push(state);
+        field(
+            "type",
+            match self.kind {
+                ItemKind::Pr => "Pull request".to_string(),
+                ItemKind::Issue => "Issue".to_string(),
+            },
+            None,
+        );
         if let Some(author) = &self.author {
-            meta.push(format!("**author:** {}", author.login));
+            field("author", author.login.clone(), None);
         }
-        if !self.labels.is_empty() {
-            meta.push(format!(
-                "**labels:** {}",
-                self.labels
-                    .iter()
-                    .map(|label| label.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if !self.assignees.is_empty() {
-            meta.push(format!(
-                "**assignees:** {}",
-                self.assignees
-                    .iter()
-                    .map(|a| a.login.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        let mut when = Vec::new();
         if let Some(ago) = relative_time(now_unix, &self.created_at) {
-            when.push(format!("created {ago}"));
+            field("created", ago, None);
         }
         if let Some(ago) = relative_time(now_unix, &self.updated_at) {
-            when.push(format!("updated {ago}"));
-        }
-        if !when.is_empty() {
-            meta.push(when.join(" · "));
+            field("updated", ago, None);
         }
         match (
             Self::present(&self.head_ref_name),
             Self::present(&self.base_ref_name),
         ) {
-            (Some(head), Some(base)) => refs.push(format!("{head} → {base}")),
-            (Some(head), None) => refs.push(format!("**head:** {head}")),
-            (None, Some(base)) => refs.push(format!("**base:** {base}")),
+            (Some(head), Some(base)) => field(
+                "branch",
+                format!("{head} → {base}"),
+                Some(FieldTone::Accent),
+            ),
+            (Some(head), None) => field("branch", head.to_string(), Some(FieldTone::Accent)),
+            (None, Some(base)) => field("branch", base.to_string(), Some(FieldTone::Accent)),
             (None, None) => {}
+        }
+        if !self.labels.is_empty() {
+            field(
+                "labels",
+                self.labels
+                    .iter()
+                    .map(|label| label.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                None,
+            );
+        }
+        if !self.assignees.is_empty() {
+            field(
+                "assignees",
+                self.assignees
+                    .iter()
+                    .map(|a| a.login.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                None,
+            );
+        }
+        if let Some(review) = Self::present(&self.review_decision) {
+            let tone = if review.eq_ignore_ascii_case("approved") {
+                Some(FieldTone::Good)
+            } else if review.eq_ignore_ascii_case("changes_requested") {
+                Some(FieldTone::Bad)
+            } else {
+                Some(FieldTone::Warn)
+            };
+            field("review", review.to_string(), tone);
         }
         // `checks: none` and `checks: never asked` are different sentences.
         // The batch query always asks for the rollup on PRs, so an empty one
@@ -247,12 +264,8 @@ impl Item {
                     pending += 1;
                 }
             }
-            let mut line = format!("**checks:** {passed} passed");
+            let mut line = format!("{passed} passed");
             if !failed.is_empty() {
-                // Count by name: three red jobs of one workflow mean "that
-                // workflow is red", not the same name three times. Past two
-                // distinct names the line caps at `+N`: the row must stay
-                // readable in a ~36-cell pane at 80 columns.
                 let mut counts: Vec<(&str, usize)> = Vec::new();
                 for name in &failed {
                     if let Some(entry) = counts.iter_mut().find(|(n, _)| *n == name) {
@@ -280,13 +293,24 @@ impl Item {
             if pending > 0 {
                 line.push_str(&format!(", {pending} pending"));
             }
-            ci.push(line);
+            let tone = if !failed.is_empty() {
+                Some(FieldTone::Bad)
+            } else if pending > 0 {
+                Some(FieldTone::Warn)
+            } else {
+                Some(FieldTone::Good)
+            };
+            field("checks", line, tone);
         }
         if let Some(mergeable) = Self::present(&self.mergeable) {
-            ci.push(format!("**mergeable:** {mergeable}"));
-        }
-        if let Some(review) = Self::present(&self.review_decision) {
-            ci.push(format!("**review:** {review}"));
+            let tone = if mergeable.eq_ignore_ascii_case("mergeable") {
+                Some(FieldTone::Good)
+            } else if mergeable.eq_ignore_ascii_case("conflicting") {
+                Some(FieldTone::Bad)
+            } else {
+                None
+            };
+            field("mergeable", mergeable.to_string(), tone);
         }
         let linked: Vec<String> = self
             .closing_issues_references
@@ -299,25 +323,41 @@ impl Item {
             })
             .collect();
         if !linked.is_empty() {
-            links.push(format!("**linked:** {}", linked.join(", ")));
+            field("linked", linked.join(", "), None);
         }
         if !self.url.is_empty() {
-            links.push(format!("**url:** {}", self.url));
-        }
-        if !self.repo.is_empty() {
-            links.push(format!("**repo:** {}", self.repo));
-        }
-        // Sections joined with a blank line between non-empty ones, so the
-        // detail reads as blocks instead of a wall of rows.
-        let mut rows = title;
-        for group in [meta, refs, ci, links] {
-            if !group.is_empty() {
-                rows.push(String::new());
-                rows.extend(group);
-            }
+            field("url", self.url.clone(), None);
         }
         rows
     }
+}
+
+/// One labelled value of the detail table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailField {
+    pub label: &'static str,
+    pub value: String,
+    pub tone: Option<FieldTone>,
+}
+
+/// How the detail pane paints a field value. `None` (on the row) means
+/// plain text; a tone means the value carries a verdict (pass/fail,
+/// approved, conflicting) that the colour says before the words are read.
+/// The palette lives in `theme`; this enum only names the intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldTone {
+    Good,
+    Bad,
+    Warn,
+    Accent,
+}
+
+/// One row of the detail table. The title is a marker (the pane reads the
+/// number, title and kind off the item itself); everything else is data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailRow {
+    Title,
+    Field(DetailField),
 }
 
 /// Case-insensitive substring match over number, title, author and labels.

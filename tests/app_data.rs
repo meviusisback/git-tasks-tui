@@ -118,12 +118,30 @@ fn the_view_shows_the_selected_item_detail() {
     assert_eq!(view.repos, vec!["acme/one", "acme/two"]);
     assert_eq!(view.items.len(), 3);
     assert!(view.items[0].starts_with("#2 Second thing"));
-    assert!(
-        view.detail.contains("#9 Other repo item"),
-        "detail: {}",
-        view.detail
-    );
-    assert!(view.detail.contains("acme/two"));
+    // No body was ever fetched: the body travels alone, so the selected
+    // item's title and repo show in the rendered table, not in view.detail.
+    assert!(view.detail.is_empty(), "no body, no leak: {}", view.detail);
+    let screen = render_200x30(&app, &view);
+    assert!(screen.contains("#9 Other repo item"), "detail: {screen}");
+    assert!(screen.contains("acme/two"));
+}
+
+fn render_200x30(app: &App, view: &gtasks::ui::ViewModel) -> String {
+    use gtasks::ui::draw;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let backend = TestBackend::new(200, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, app, view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..30 {
+        for x in 0..200 {
+            out.push_str(buffer[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    out
 }
 
 #[test]
