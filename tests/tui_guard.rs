@@ -209,3 +209,49 @@ fn a_resume_that_fails_undoes_its_own_first_step() {
         "the failed resume left the guard not-live, so dropping it restores nothing"
     );
 }
+
+/// The free functions the agent handoff uses, because it cannot thread a `&Tui` through the
+/// planning code. Same fact, second door — so it must behave like the first one.
+#[test]
+fn suspend_active_hands_over_and_resume_active_takes_back() {
+    let (calls, restore) = counter();
+    let tui = Tui::enter_with(|| Ok(()), || Ok(()), restore).expect("enter");
+
+    assert!(
+        gtasks::tui::suspend_active(),
+        "with a guard alive, the handover must happen"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    gtasks::tui::resume_active().expect("resume through the active guard");
+    drop(tui);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "two windows, two restores: the handover and the exit"
+    );
+}
+
+/// The honest answer when there is no terminal to hand over: `false`, and nothing restored.
+#[test]
+fn suspend_active_says_so_when_no_guard_owns_the_terminal() {
+    let (calls, restore) = counter();
+    {
+        let tui = Tui::enter_with(|| Ok(()), || Ok(()), restore).expect("enter");
+        drop(tui);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    assert!(
+        !gtasks::tui::suspend_active(),
+        "no guard is alive: the caller must be told, not silently served"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "and nothing was restored a second time"
+    );
+    assert!(
+        gtasks::tui::resume_active().is_err(),
+        "resuming without an owner is an error, not a no-op"
+    );
+}

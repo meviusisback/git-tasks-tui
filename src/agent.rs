@@ -303,22 +303,23 @@ pub fn run_agent_handoff(
     seed: SeedFile,
     seed_lines: usize,
 ) -> anyhow::Result<(AgentStatus, usize)> {
-    use ratatui::crossterm::{cursor, execute, terminal};
-    use std::io::stdout;
-
     use anyhow::Context;
+
     let start = Instant::now();
-    // Suspend: the terminal belongs to the agent from here on.
-    terminal::disable_raw_mode().context("cannot suspend the TUI")?;
-    execute!(stdout(), terminal::LeaveAlternateScreen, cursor::Show)
-        .context("cannot suspend the TUI")?;
+    // Suspend through the guard, not by hand. `suspend_active` restores once and stops claiming
+    // the terminal, so the guard's `Drop` will not restore it a second time if the resume below
+    // fails. Doing this inline (raw mode off here, alternate screen off there) left two
+    // mechanisms for one fact, and the failure path restored the terminal twice.
+    let suspended = crate::tui::suspend_active();
     let (status, lines) = run_agent_inner(argv, seed, start, seed_lines);
-    // Restore before returning: the loop draws right after, and a failed
-    // restore is fatal — the record cannot be shown on a dead screen, so it
-    // is not written either. `TuiGuard` still repairs the terminal.
-    terminal::enable_raw_mode().context("cannot re-enable raw mode after the agent")?;
-    execute!(stdout(), terminal::EnterAlternateScreen, cursor::Hide)
-        .context("cannot re-enter the alternate screen after the agent")?;
+
+    // Restore before returning: the loop draws right after, and a failed restore is fatal —
+    // the record cannot be shown on a dead screen, so it is not written either. `resume_active`
+    // keeps the half-entry rule: if the second step fails it undoes the first, and the guard
+    // stays not-live so `Drop` adds nothing.
+    if suspended {
+        crate::tui::resume_active().context("cannot take the terminal back after the agent")?;
+    }
     Ok((status, lines))
 }
 
