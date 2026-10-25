@@ -111,6 +111,31 @@ fn legend_while_running_names_typing_not_app_keys() {
 }
 
 #[test]
+fn shift_arrows_move_between_boxes_spatially() {
+    use Pane::*;
+    // Right column from the left, same row; edges stay put.
+    for (from, key, to) in [
+        (Repos, Key::ShiftRight, Detail),
+        (List, Key::ShiftRight, Agent),
+        (Detail, Key::ShiftLeft, Repos),
+        (Agent, Key::ShiftLeft, List),
+        (List, Key::ShiftUp, Repos),
+        (Agent, Key::ShiftUp, Detail),
+        (Repos, Key::ShiftDown, List),
+        (Detail, Key::ShiftDown, Agent),
+        (Detail, Key::ShiftRight, Detail),
+        (Repos, Key::ShiftLeft, Repos),
+    ] {
+        let mut app = App {
+            pane: from,
+            ..App::default()
+        };
+        press(&mut app, key);
+        assert_eq!(app.pane, to, "{from:?} + {key:?}");
+    }
+}
+
+#[test]
 fn typing_builds_and_erases_the_query() {
     let mut app = App::default();
     press(&mut app, Key::Char('/')); // enter search

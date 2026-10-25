@@ -627,11 +627,20 @@ fn run_tui() -> anyhow::Result<()> {
                 Event::Key(key) => {
                     // Focused on a running agent, every key but Esc/Tab is
                     // agent input — including Ctrl-C, which interrupts it.
-                    // Esc unfocuses, Tab cycles panes, both through the app.
-                    // Anywhere else, keys are app keys (where Ctrl-C quits).
+                    // Esc unfocuses, Tab cycles panes, Shift+arrows move
+                    // between boxes: all through the app. Anywhere else,
+                    // keys are app keys (where Ctrl-C quits).
                     let to_app = matches!(
                         map_key(key),
-                        Some(Msg::Key(Key::Esc | Key::Tab | Key::BackTab))
+                        Some(Msg::Key(
+                            Key::Esc
+                                | Key::Tab
+                                | Key::BackTab
+                                | Key::ShiftUp
+                                | Key::ShiftDown
+                                | Key::ShiftLeft
+                                | Key::ShiftRight
+                        ))
                     );
                     let to_agent = embedded.is_some()
                         && app.agent_running

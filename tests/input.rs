@@ -64,6 +64,32 @@ fn ctrl_c_is_a_quit_signal_whatever_else_is_held() {
 }
 
 #[test]
+fn shift_arrows_move_between_boxes_not_inside_them() {
+    use Key::{ShiftDown, ShiftLeft, ShiftRight, ShiftUp};
+    let shift = KeyModifiers::SHIFT;
+    assert_eq!(
+        map_key_code(KeyCode::Left, shift),
+        Some(Msg::Key(ShiftLeft))
+    );
+    assert_eq!(
+        map_key_code(KeyCode::Right, shift),
+        Some(Msg::Key(ShiftRight))
+    );
+    assert_eq!(map_key_code(KeyCode::Up, shift), Some(Msg::Key(ShiftUp)));
+    assert_eq!(
+        map_key_code(KeyCode::Down, shift),
+        Some(Msg::Key(ShiftDown))
+    );
+    // Shift+letter stays a letter: `T` (previous tab) must keep working
+    // however the terminal reports the modifier.
+    assert_eq!(
+        map_key_code(KeyCode::Char('T'), shift),
+        Some(Msg::Key(Key::Char('T'))),
+        "shift+T is still the T key"
+    );
+}
+
+#[test]
 fn other_control_chords_and_unknown_keys_are_ignored() {
     assert_eq!(
         map_key_code(KeyCode::Char('a'), KeyModifiers::CONTROL),

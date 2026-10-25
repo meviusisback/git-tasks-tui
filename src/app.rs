@@ -80,6 +80,8 @@ pub fn plural(count: usize, one: &str, many: &str) -> String {
 }
 
 /// The keys the app cares about, independent of the terminal backend.
+/// `Shift*` move focus between the four boxes following the screen layout —
+/// independent of `Tab`, which cycles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Char(char),
@@ -92,6 +94,10 @@ pub enum Key {
     Tab,
     BackTab,
     Backspace,
+    ShiftUp,
+    ShiftDown,
+    ShiftLeft,
+    ShiftRight,
     /// Ctrl-C always quits, whatever mode we are in.
     CtrlC,
 }
@@ -1359,6 +1365,10 @@ impl App {
                 | Key::BackTab
                 | Key::Left
                 | Key::Right
+                | Key::ShiftUp
+                | Key::ShiftDown
+                | Key::ShiftLeft
+                | Key::ShiftRight
                 | Key::CtrlC => {}
             }
             return;
@@ -1470,6 +1480,30 @@ impl App {
                     self.pane = Pane::List;
                 }
             }
+            // Shift+arrows move between boxes following the screen layout:
+            // left column is repos over list, right column detail over agent.
+            // At an edge nothing moves — a wrap would land somewhere the
+            // arrow did not point.
+            Key::ShiftRight => match self.pane {
+                Pane::Repos => self.pane = Pane::Detail,
+                Pane::List => self.pane = Pane::Agent,
+                Pane::Detail | Pane::Agent => {}
+            },
+            Key::ShiftLeft => match self.pane {
+                Pane::Detail => self.pane = Pane::Repos,
+                Pane::Agent => self.pane = Pane::List,
+                Pane::Repos | Pane::List => {}
+            },
+            Key::ShiftUp => match self.pane {
+                Pane::List => self.pane = Pane::Repos,
+                Pane::Agent => self.pane = Pane::Detail,
+                Pane::Repos | Pane::Detail => {}
+            },
+            Key::ShiftDown => match self.pane {
+                Pane::Repos => self.pane = Pane::List,
+                Pane::Detail => self.pane = Pane::Agent,
+                Pane::List | Pane::Agent => {}
+            },
             Key::Right => {
                 // Right column top is the detail; from anywhere on the left,
                 // go to the detail.

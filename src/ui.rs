@@ -56,6 +56,7 @@ fn pane_title(name: &str, icon: &str) -> String {
 /// The keys that work today. Also the source of the `?` overlay.
 const HELP_NOW: &[&str] = &[
     "← / →      move between the columns · wheel scrolls the agent box",
+    "Shift + ←/↑/↓/→  move between the four boxes",
     "↑ / ↓      move the selection, or scroll detail/agent",
     "Enter      open a tab + open the detail box",
     "t / T      next / previous tab",

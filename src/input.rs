@@ -19,10 +19,18 @@ pub fn map_key_code(code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
         };
     }
 
+    // Shift+arrows move between boxes; plain arrows move inside them. Only
+    // the arrows get the shift treatment: Shift+letter stays a letter, so
+    // `T` (previous tab) keeps working however the terminal reports it.
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
     let key = match code {
         KeyCode::Char(c) => Key::Char(c),
         KeyCode::Enter => Key::Enter,
         KeyCode::Esc => Key::Esc,
+        KeyCode::Up if shift => Key::ShiftUp,
+        KeyCode::Down if shift => Key::ShiftDown,
+        KeyCode::Left if shift => Key::ShiftLeft,
+        KeyCode::Right if shift => Key::ShiftRight,
         KeyCode::Up => Key::Up,
         KeyCode::Down => Key::Down,
         KeyCode::Left => Key::Left,
