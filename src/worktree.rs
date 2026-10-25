@@ -178,3 +178,32 @@ pub fn confirm_branch(
     );
     Ok(())
 }
+
+/// A worktree that exists on disk, registered with git, on the branch we asked for.
+#[derive(Debug, Clone)]
+pub struct CreatedWorktree {
+    pub path: std::path::PathBuf,
+    pub branch: BranchName,
+}
+
+/// Create a worktree for `branch` under `root`, or refuse without touching
+/// anything outside it.
+///
+/// The recipe (docs/ux-redesign.md): canonicalise the **parent**, require it to be
+/// inside `root`, create the last component ourselves with `create_dir` (it fails
+/// on an existing symlink instead of following it), run `git worktree add` on the
+/// now-existing empty directory, then re-canonicalise and undo if anything moved.
+/// `--force` is never passed, and the git call carries the S16 hook hardening.
+///
+/// STUB: the tests in `tests/worktree_create.rs` are red against this and are the
+/// definition of done for task/15.
+pub fn create(
+    root: &Path,
+    clone: &Path,
+    slug: &RepoSlug,
+    branch: &BranchName,
+    binaries: &crate::binaries::Binaries,
+) -> anyhow::Result<CreatedWorktree> {
+    let _ = (root, clone, slug, branch, binaries);
+    anyhow::bail!("worktree creation is not implemented yet (task/15)")
+}
