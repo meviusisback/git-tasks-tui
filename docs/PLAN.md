@@ -154,7 +154,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 ### Task 4 — Config + state — DONE (`fe8689a`)
 **Delivered:** `src/config.rs` (+ `write_private`/`read_private`: `0600`, atomic temp+rename, symlink refusal) and `src/state.rs`; validators for repo slugs and profiles; `from_plugin_json` imports **only** `selectedRepos`. Missing file → defaults; a present but invalid file is an error (no silent fallback). Ten tests: round-trips, modes, symlink refusal, out-of-range values, traversal, bad profiles.
 **Files:** `src/config.rs`, `src/state.rs`, `tests/config_roundtrip.rs`.
-**Work:** `Config { repos, clone_roots, worktree_root, parallel, timeout_s, write_timeout_s, refresh_s, default_profile, limit, trust_worktree_rules }`; `0600`/`0700`; `--import-from-plugin`.
+**Work:** `Config { repos, clone_root, worktree_root, parallel, timeout_s, write_timeout_s, refresh_s, agent_profile, limit, trust_worktree_rules }`; `0600`/`0700`; `--import-from-plugin`.
 **Tests:** round-trip; defaults; invalid → error, no overwrite; `state_and_config_are_0600`; import maps `selectedRepos` only.
 **Verify:** `cargo test config_roundtrip`.
 
@@ -206,7 +206,7 @@ All reproduced by the coordinator with the real binary before assignment; all cl
 
 ### Task 10a — Worktree discovery + repo trust (read-only)
 **Files:** `src/worktree.rs`, `tests/worktree_discover.rs`, `tests/repo_trust.rs`.
-**Work:** scan `clone_roots`; `remoteToRepo`; **S16** identity check (`--absolute-git-dir` vs `<dir>/.git`, `.git` file redirect rejected) and git flags; **`git worktree list --porcelain`** as the only truth (S6); adopt plugin worktrees only when registered and canonical inside a clone root.
+**Work:** scan the local clones under `clone_root`; `remoteToRepo`; **S16** identity check (`--absolute-git-dir` vs `<dir>/.git`, `.git` file redirect rejected) and git flags; **`git worktree list --porcelain`** as the only truth (S6); adopt plugin worktrees only when registered and canonical inside a clone root.
 **Tests:** remote parsing; non-git dirs ignored; symlinked root refused; `repo_hook_does_not_run_on_worktree_add` (+ control without `-c`), `dot_git_file_redirect_is_rejected`.
 **Verify:** `cargo test worktree_discover repo_trust`.
 
