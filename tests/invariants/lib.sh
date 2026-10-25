@@ -67,6 +67,66 @@ spawn_sites_found() { # spawn_sites_found <root> → files containing Command::n
   grep -rl 'Command::new' "$1/src" --include='*.rs' 2>/dev/null | sed "s|^$1/||" | sort -u
 }
 
+# Every place that turns tokens into a `CheckedArgv` — i.e. every door into the
+# transport. `from_checked` is `pub(crate)`, so any module can call it; the point of this
+# list is that adding a third door is a decision, not an edit.
+#
+# Declared as `file|count|reason`. A count is used instead of line numbers so an edit
+# above a call site does not fail the invariant, while a **new** call in an existing file
+# still does: two doors in one file are two doors.
+ARGV_SITES_ALLOWED='src/actions.rs|1|an action becomes an argv here, through the allowlist
+src/fetch.rs|1|the batch read is a query the builder vouches for'
+
+argv_sites_found() { # argv_sites_found <root> → "file:count" per file, sorted
+  local root=$1
+  grep -rn 'from_checked(' "$root/src" 2>/dev/null \
+    | grep -v 'fn from_checked' \
+    | grep -v '^\s*//' \
+    | grep -v '///' \
+    | awk -F: '{print $1}' \
+    | sed "s|^${root%/}/||; s|^\./||" \
+    | sort | uniq -c | awk '{print $2 ":" $1}' | sort
+}
+
+check_argv_sites() { # check_argv_sites <root> → 0 ok, 1 undeclared/stale
+  local root=$1 rc=0 pair file count declared_f declared_c reason
+  local found
+  found=$(argv_sites_found "$root")
+  # A detector that finds nothing is a broken pattern, not a clean repo: the rename of
+  # `from_checked` would make every direction below pass in silence.
+  if [ -z "$found" ]; then
+    printf 'the detector found no from_checked( anywhere in %s/src — the pattern is wrong, not the repo\n' "$root" >&2
+    return 1
+  fi
+  # direction 1: a found site that is not declared, or whose count disagrees
+  while IFS= read -r pair; do
+    [ -n "$pair" ] || continue
+    file=${pair%:*}; count=${pair##*:}
+    declared_c=$(printf '%s\n' "$ARGV_SITES_ALLOWED" | grep -F "$file|" | cut -d'|' -f2)
+    if [ -z "$declared_c" ]; then
+      printf 'undeclared CheckedArgv construction: %s — add it to ARGV_SITES_ALLOWED with its reason\n' "$file" >&2
+      rc=1
+    elif [ "$declared_c" != "$count" ]; then
+      printf '%s now builds %s argvs, declared %s — a second door in the same file is still a second door\n' \
+        "$file" "$count" "$declared_c" >&2
+      rc=1
+    fi
+  done <<EOF
+$(printf '%s\n' "$found")
+EOF
+  # direction 2: a declaration that no longer exists
+  while IFS='|' read -r file count reason; do
+    [ -n "${file:-}" ] || continue
+    if ! printf '%s\n' "$found" | grep -qF "$file:"; then
+      printf 'stale declaration: %s no longer builds any argv (reason given: %s)\n' "$file" "$reason" >&2
+      rc=1
+    fi
+  done <<EOF
+$(printf '%s\n' "$ARGV_SITES_ALLOWED")
+EOF
+  return $rc
+}
+
 check_spawn_sites() { # check_spawn_sites <root> → 0 ok, 1 undeclared or stale
   local root=$1 rc=0 f reason declared found
   found=$(spawn_sites_found "$root")
