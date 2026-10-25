@@ -20,18 +20,28 @@ cd "$(git rev-parse --show-toplevel)"
 # a check nobody can call cannot be proven to bite.
 check_hooks() {
     status=0
+    configured=$(git config --get core.hooksPath 2>/dev/null || true)
+    # A linked worktree shares the clone's config, so `core.hooksPath` is the
+    # MAIN clone's absolute path while the tracked `.githooks/` also exists
+    # here. Demanding `$(pwd)/.githooks` failed a configuration that works —
+    # found by running the gate in a scratch worktree. What matters is that git
+    # finds the hooks where the config points, so check that location.
+    case "$configured" in
+        '') hooks_dir='' ;;
+        /*) hooks_dir=$configured ;;
+        *)  hooks_dir="$(git rev-parse --show-toplevel)/$configured" ;;
+    esac
+    if [ -z "$hooks_dir" ]; then
+        echo "gate: core.hooksPath is unset — the guards are not installed here." >&2
+        echo "gate: run sh scripts/install-hooks.sh in this clone, then re-run." >&2
+        return 1
+    fi
     for hook in commit-msg pre-push; do
-        if [ ! -x ".githooks/$hook" ]; then
-            echo "gate: .githooks/$hook is not executable — git would skip it silently" >&2
+        if [ ! -x "$hooks_dir/$hook" ]; then
+            echo "gate: the guards are not installed here — $hooks_dir/$hook is missing, or not executable, and git would skip it silently" >&2
             status=1
         fi
     done
-    configured=$(git config --get core.hooksPath 2>/dev/null || true)
-    if [ "$configured" != "$(pwd)/.githooks" ] && [ "$configured" != ".githooks" ]; then
-        echo "gate: core.hooksPath is '${configured:-<unset>}' — the guards are not installed here." >&2
-        echo "gate: run sh scripts/install-hooks.sh in this clone, then re-run." >&2
-        status=1
-    fi
     return "$status"
 }
 
