@@ -35,9 +35,12 @@ jobs:
       - name: upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # --clobber: re-running the workflow for the same tag replaces files
-        # instead of failing; only the tag owner can push tags, so this is safe.
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See README.md for requirements." --clobber gtasks-linux-x86_64.tar.gz
+        # Old `gh` has no --clobber: create wins once, then replace assets so
+        # a re-run for the same tag converges instead of failing.
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See README.md for requirements." || true
+          gh release delete-asset "$GITHUB_REF_NAME" gtasks-linux-x86_64.tar.gz -y || true
+          gh release upload "$GITHUB_REF_NAME" gtasks-linux-x86_64.tar.gz
 
   macos:
     runs-on: macos-latest
@@ -74,4 +77,8 @@ jobs:
       - name: upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See README.md for requirements." --clobber gtasks-macos-universal.tar.gz gtasks-macos-universal.dmg
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See README.md for requirements." || true
+          gh release delete-asset "$GITHUB_REF_NAME" gtasks-macos-universal.tar.gz -y || true
+          gh release delete-asset "$GITHUB_REF_NAME" gtasks-macos-universal.dmg -y || true
+          gh release upload "$GITHUB_REF_NAME" gtasks-macos-universal.tar.gz gtasks-macos-universal.dmg

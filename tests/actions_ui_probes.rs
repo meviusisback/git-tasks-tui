@@ -10,9 +10,10 @@
 //!   P5 the sentence does not omit effects ....... RED    ("close PR #12" vs --reason/--comment)
 //!
 //! Nothing here needs a network: every probe hand-builds an argv whose program
-//! is `/bin/sh` or `/bin/true`, so the transport never reaches `gh`.
+//! is a tempdir stub or `/bin/sh`, so the transport never reaches `gh`.
 
 use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -127,7 +128,14 @@ fn the_sentence_does_not_omit_an_effect_of_the_argv() {
 /// builder — and that is exactly what `CheckedArgv` records.
 #[test]
 fn a_dash_word_value_is_accepted_on_the_typed_path_and_refused_hand_built() {
-    let binaries = Binaries::new(PathBuf::from("/bin/true"), PathBuf::from("/bin/true"));
+    // A stub that exits 0: `/bin/true` does not exist on macOS, and a test
+    // must not depend on system paths for the program it spawns.
+    let dir = tempfile::tempdir().unwrap();
+    let stub = dir.path().join("true-stub");
+    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let binaries = Binaries::new(stub.clone(), stub);
     let action = Action::Comment {
         repo: slug(),
         number: 3,

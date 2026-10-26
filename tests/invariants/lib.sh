@@ -61,6 +61,7 @@ require_python() { have python3 || { echo "python3 required for the symlink-crea
 SPAWN_SITES_ALLOWED='
 src/gh/mod.rs|run_pipe: the single pipe spawner (process group, PDEATHSIG, caps)
 src/actions.rs|open_in_browser: detached launcher, no pipe, no group (B-2 reap)
+src/config.rs|mono_fonts: fc-list query over a resolved binary, cleared env, killed after 5s (startup font list)
 '
 
 spawn_sites_found() { # spawn_sites_found <root> → files containing Command::new, sorted
@@ -75,8 +76,9 @@ spawn_sites_found() { # spawn_sites_found <root> → files containing Command::n
 # above a call site does not fail the invariant, while a **new** call in an existing file
 # still does: two doors in one file are two doors.
 ARGV_SITES_ALLOWED='src/actions.rs|1|an action becomes an argv here, through the allowlist
-src/agent.rs|1|the agent launch becomes an argv here: every part generated or validated, the prompt as a path
-src/fetch.rs|1|the batch read is a query the builder vouches for'
+src/agent.rs|2|the hermes handoff argv (agent_argv) and the shared spawned-CLI shape (file_argv): both generated or validated, prompt as a path
+src/fetch.rs|1|the batch read is a query the builder vouches for
+src/worktree.rs|1|worktree mutations run through run_mutation so --force survives the untrusted transport'
 
 argv_sites_found() { # argv_sites_found <root> → "file:count" per file, sorted
   local root=$1
