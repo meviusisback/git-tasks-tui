@@ -171,8 +171,9 @@ fn legend_names_the_menu_keys_while_open() {
 fn the_selection_survives_a_restart_on_disk() {
     // Save → load round trip, with the 0600 the brief demands: this is the
     // half the UI cannot see, so the test does the loop's job by hand.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.json");
+    let _guard = tempfile::tempdir().unwrap();
+    let dir = _guard.path().canonicalize().unwrap();
+    let path = dir.join("state.json");
     let state = gtasks::state::State {
         selected_repos: vec!["me/a".to_string(), "me/c".to_string()],
         ..gtasks::state::State::default()

@@ -203,8 +203,9 @@ fn the_session_roundtrip_keeps_tabs_filter_and_cursors() {
         ..gtasks::state::State::default()
     };
     app.capture_session(&mut state);
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.json");
+    let _guard = tempfile::tempdir().unwrap();
+    let dir = _guard.path().canonicalize().unwrap();
+    let path = dir.join("state.json");
     state.save(&path).unwrap();
     let back = gtasks::state::State::load(&path).unwrap();
 

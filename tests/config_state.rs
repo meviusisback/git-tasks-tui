@@ -31,8 +31,9 @@ fn defaults_are_sane() {
 
 #[test]
 fn config_roundtrip_is_private() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("gtasks/config.toml");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let path = root.join("gtasks/config.toml");
 
     let config = Config {
         repos: vec!["owner/repo".into()],
@@ -42,21 +43,23 @@ fn config_roundtrip_is_private() {
     config.save(&path).unwrap();
 
     assert_eq!(mode_of(&path), 0o600, "config must be 0600");
-    assert_eq!(mode_of(&root.path().join("gtasks")), 0o700, "dir 0700");
+    assert_eq!(mode_of(&root.join("gtasks")), 0o700, "dir 0700");
     assert_eq!(Config::load(&path).unwrap(), config);
 }
 
 #[test]
 fn missing_file_yields_defaults() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("nope/config.toml");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let path = root.join("nope/config.toml");
     assert_eq!(Config::load(&path).unwrap(), Config::default());
 }
 
 #[test]
 fn invalid_config_is_an_error_not_a_fallback() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("config.toml");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let path = root.join("config.toml");
 
     std::fs::write(&path, "parallel = 99\n").unwrap();
     assert!(Config::load(&path).is_err(), "out-of-range value must fail");
@@ -100,10 +103,11 @@ fn validation_rejects_out_of_range_values() {
 
 #[test]
 fn save_refuses_symlinked_target() {
-    let root = tempfile::tempdir().unwrap();
-    let victim = root.path().join("victim.toml");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let victim = root.join("victim.toml");
     std::fs::write(&victim, "ORIGINAL").unwrap();
-    let link = root.path().join("config.toml");
+    let link = root.join("config.toml");
     symlink(&victim, &link).unwrap();
 
     let err = Config::default()
@@ -115,8 +119,9 @@ fn save_refuses_symlinked_target() {
 
 #[test]
 fn state_roundtrip_and_privacy() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("gtasks/state.json");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let path = root.join("gtasks/state.json");
 
     let state = State {
         selected_repos: vec!["owner/repo".into()],
@@ -129,15 +134,16 @@ fn state_roundtrip_and_privacy() {
     assert_eq!(mode_of(&path), 0o600, "state must be 0600");
     assert_eq!(State::load(&path).unwrap(), state);
     assert_eq!(
-        State::load(&root.path().join("missing.json")).unwrap(),
+        State::load(&root.join("missing.json")).unwrap(),
         State::default()
     );
 }
 
 #[test]
 fn state_refuses_invalid_repo() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("state.json");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let path = root.join("state.json");
     let state = State {
         selected_repos: vec!["../etc".into()],
         ..State::default()

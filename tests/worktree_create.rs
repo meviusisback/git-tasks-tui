@@ -58,7 +58,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 fn fixture() -> Fixture {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let base = tmp.path();
+    let base = tmp.path().canonicalize().expect("canonical scratch");
 
     let clone = base.join("clone");
     std::fs::create_dir_all(&clone).expect("clone dir");

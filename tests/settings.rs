@@ -102,8 +102,9 @@ fn q_quits_through_the_menu() {
 
 #[test]
 fn the_toggle_roundtrips_through_toml() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
+    let _guard = tempfile::tempdir().unwrap();
+    let dir = _guard.path().canonicalize().unwrap();
+    let path = dir.join("config.toml");
     std::fs::write(&path, "repos = [\"o/r\"]\nsandbox_agents = true\n").unwrap();
     let mut config = gtasks::config::Config::load(&path).unwrap();
     assert!(config.sandbox_agents);
