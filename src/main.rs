@@ -635,7 +635,7 @@ fn run_tui() -> anyhow::Result<()> {
     }
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
-        all.clone(),
+        App::fetch_scope(&all, &state.selected_repos),
         limit,
         timeout,
         parallel,
@@ -989,7 +989,7 @@ fn run_tui() -> anyhow::Result<()> {
             app.refresh_requested = false;
             pending = Some(spawn_fetch(
                 binaries.clone(),
-                all.clone(),
+                App::fetch_scope(&all, &state.selected_repos),
                 limit,
                 timeout,
                 parallel,

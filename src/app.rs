@@ -878,10 +878,33 @@ impl App {
         }
     }
 
+    /// The repos a fetch reads: the saved selection, or everything when the
+    /// selection is empty. Invalid slugs are skipped, never trusted: the state
+    /// file is user-editable and a typo must not break the fetch.
+    pub fn fetch_scope(all: &[RepoSlug], selected: &[String]) -> Vec<RepoSlug> {
+        if selected.is_empty() {
+            return all.to_vec();
+        }
+        selected
+            .iter()
+            .filter_map(|s| match RepoSlug::parse(s) {
+                Ok(slug) => Some(slug),
+                Err(_) => {
+                    tracing::warn!(
+                        slug = s.as_str(),
+                        "state file holds an invalid slug, ignored"
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// `Enter` in the repo menu: the checked rows become the selection. An
     /// empty check means "everything", like an empty state file. The list
-    /// updates from the items already in memory; the loop saves the file.
-    fn apply_selection(&mut self, selected: Vec<RepoSlug>) {
+    /// drops the deselected repos at once, then re-reads from the server;
+    /// the loop saves the file.
+    pub fn apply_repo_selection(&mut self, selected: Vec<RepoSlug>) {
         // A new list resets the cursor (see `set_repos`), so no row survives
         // a reorder — that reset is why no `last_repo` identity is needed.
         let shown = if selected.is_empty() {
@@ -896,7 +919,15 @@ impl App {
                 .collect(),
         );
         self.modal = None;
-        self.set_repos(shown);
+        self.set_repos(shown.clone());
+        // The items in memory are from the previous selection: drop the
+        // deselected repos at once, so the list never shows what the user
+        // just unchecked. The refresh below re-reads from the server.
+        self.items
+            .retain(|i| shown.iter().any(|s| s.as_str() == i.repo));
+        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.loading = true;
+        self.refresh_requested = true;
     }
 
     /// The item under the cursor, if any.
@@ -2136,7 +2167,7 @@ impl App {
                                 .iter()
                                 .filter_map(|i| menu.rows.get(*i).cloned())
                                 .collect();
-                            self.apply_selection(selected);
+                            self.apply_repo_selection(selected);
                         }
                     }
                     _ => {}
