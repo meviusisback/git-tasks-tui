@@ -363,6 +363,35 @@ pub fn remove_tree(
     Ok(())
 }
 
+/// Clone `repo` into `path` (`gh repo clone owner/name path`): the typed
+/// path, like every other mutation. The caller confirmed first — a clone
+/// fetches code and can take minutes, so the loop runs this in a thread and
+/// continues the W flow when it lands.
+pub fn clone_repo(
+    binaries: &crate::binaries::Binaries,
+    path: &Path,
+    repo: &RepoSlug,
+) -> anyhow::Result<crate::gh::Output> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let argv = crate::gh::gh(
+        binaries,
+        &cwd,
+        vec![
+            "repo".into(),
+            "clone".into(),
+            repo.as_str().into(),
+            path.as_os_str().into(),
+        ],
+    );
+    let out = run_mutation(&argv, std::time::Duration::from_secs(300))?;
+    anyhow::ensure!(
+        out.status.success(),
+        "cannot clone {repo}: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(out)
+}
+
 /// Run a worktree-mutating `git` argv (create/rename/move/remove): the typed
 /// path, so `--force` on `worktree remove` survives the untrusted
 /// transport's refusal instead of failing every delete closed. Only fixed

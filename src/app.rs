@@ -129,6 +129,17 @@ pub enum Pending {
     Agent(AgentPlan, std::path::PathBuf),
     /// `d` on a worktree row, confirmed with `y`: the loop deletes it.
     Delete(crate::worktree::WorktreeDelete),
+    /// No local clone for the repo, confirmed with `y`: the loop clones it
+    /// into the agreed directory, then grows the tree the user asked for.
+    Clone {
+        repo: String,
+        path: std::path::PathBuf,
+    },
+    /// `Enter` on a repo with no issues or PRs, confirmed with `y`: open the
+    /// new-branch flow for that repo instead of an empty list.
+    NewBranch {
+        repo: String,
+    },
 }
 
 /// Everything that can change the state.
@@ -465,6 +476,10 @@ pub struct App {
     pub rename_go: Option<crate::worktree::WorktreeRename>,
     /// Set by `y` on the delete question, consumed by the loop.
     pub delete_go: Option<crate::worktree::WorktreeDelete>,
+    /// Set by `y` on the clone question, consumed by the loop: the repo plus
+    /// the directory the user agreed to clone it into. The loop clones in a
+    /// thread (network can take minutes) and continues the W flow when done.
+    pub clone_go: Option<(String, std::path::PathBuf)>,
     /// Where worktrees live (configured root, or the default). The list
     /// icons and the worktree picker read it; `None` (unresolvable home)
     /// means no icons, and the picker explains instead of guessing.
@@ -534,6 +549,7 @@ impl Default for App {
             agent_place: None,
             rename_go: None,
             delete_go: None,
+            clone_go: None,
             worktree_root: None,
             agent_running: false,
             agent_screen: Vec::new(),
@@ -1831,11 +1847,48 @@ impl App {
             self.status = "pick one repo first — All is not a place".to_string();
             return;
         };
+        self.open_repo_worktree_for(slug.as_str());
+    }
+
+    /// The same flow for a named repo: used by the cursor above, by `W` on
+    /// an empty list filtered to one repo, and by the empty-repo suggestion.
+    /// Without a local clone there is nothing to branch from, so instead of
+    /// erroring the app offers to clone first — `gh repo clone` into the
+    /// first clone root — and continues the flow when the clone lands.
+    pub fn open_repo_worktree_for(&mut self, repo: &str) {
+        let slug = match RepoSlug::parse(repo) {
+            Ok(slug) => slug,
+            Err(_) => {
+                self.status = format!("cannot grow a tree: invalid repo {repo}");
+                return;
+            }
+        };
         let repo = slug.as_str();
         let clone = match crate::agent::find_clone(&self.clone_roots, repo) {
             Ok(clone) => clone,
-            Err(reason) => {
-                self.status = reason;
+            Err(_) => {
+                let Some(root) = self.clone_roots.first().cloned() else {
+                    self.status =
+                        "no local clone and no clone_roots configured — set one first".to_string();
+                    return;
+                };
+                let name = repo.split('/').next_back().unwrap_or(repo);
+                let path = root.join(name);
+                if path.exists() {
+                    self.status = format!(
+                        "no local clone for {repo} ({} exists but has no .git) — clone it by hand, then press W again",
+                        path.display()
+                    );
+                    return;
+                }
+                self.modal = Some(Modal::Confirm(format!(
+                    "no local clone for {repo} — clone it into {}?",
+                    path.display()
+                )));
+                self.pending = Some(Pending::Clone {
+                    repo: repo.to_string(),
+                    path,
+                });
                 return;
             }
         };
@@ -1865,7 +1918,24 @@ impl App {
         // No agent_running refusal: managing trees is not launching one.
         // Launching a second agent stays refused, and the loop owns that.
         let Some(item) = self.effective_item().cloned() else {
-            self.status = "nothing selected".to_string();
+            // Empty list, `W` with nowhere to point: when the filter names
+            // one repo, grow a tree for it — same as `W` on that repo.
+            // On "all repos" there is no single repo to grow: say so.
+            // (Cloned first: the flow borrows mutably.)
+            let filtered = match &self.repo_filter {
+                RepoFilter::One(slug) => Some(slug.as_str().to_string()),
+                RepoFilter::All => None,
+            };
+            match filtered {
+                Some(repo) => {
+                    self.open_repo_worktree_for(&repo);
+                }
+                None => {
+                    self.status =
+                        "empty list — filter to one repo first (Enter on it), then W grows a tree"
+                            .to_string();
+                }
+            }
             return;
         };
         let hermes = self.default_hermes();
@@ -2321,6 +2391,18 @@ impl App {
                         Some(Pending::Delete(order)) => {
                             self.delete_go = Some(order);
                         }
+                        // A clone is a write too (network, minutes): `y`
+                        // moves the agreed repo+directory there; the loop
+                        // clones in a thread and continues the W flow.
+                        Some(Pending::Clone { repo, path }) => {
+                            self.clone_go = Some((repo, path));
+                        }
+                        // A fresh branch for an empty repo: no write yet, so
+                        // `y` opens the flow directly — the creation question
+                        // still asks before anything touches the disk.
+                        Some(Pending::NewBranch { repo }) => {
+                            self.open_repo_worktree_for(&repo);
+                        }
                         // Nothing was asked: never claim success for it.
                         None => self.status = "nothing to run".into(),
                     }
@@ -2524,9 +2606,20 @@ impl App {
             Key::Char(_) => {}
             // In the repos pane Enter drills in: the filter is already live
             // (it follows the cursor), so reaching the list shows the repo's
-            // items.
+            // items. A repo with no issues or PRs shows an empty list — that
+            // is a starting point, not a dead end: offer a fresh branch.
             Key::Enter if self.pane == Pane::Repos => {
                 self.pane = Pane::List;
+                if self.query.trim().is_empty()
+                    && let RepoFilter::One(slug) = &self.repo_filter
+                    && self.visible_items().is_empty()
+                {
+                    let repo = slug.as_str().to_string();
+                    self.modal = Some(Modal::Confirm(format!(
+                        "{repo} has no open issues or PRs — start a new branch?"
+                    )));
+                    self.pending = Some(Pending::NewBranch { repo });
+                }
             }
             // In the list Enter opens a tab for the row; the detail follows
             // the active tab from then on.

@@ -542,7 +542,7 @@ fn w_on_all_or_without_a_clone_refuses_with_the_reason() {
     press(&mut app, Key::Char('W'));
     assert!(app.modal.is_none(), "no clone, no prompt");
     assert!(
-        app.status.contains("no clone_root configured"),
+        app.status.contains("no clone_roots configured"),
         "names the missing piece: {}",
         app.status
     );

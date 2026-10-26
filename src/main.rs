@@ -646,6 +646,8 @@ fn run_tui() -> anyhow::Result<()> {
     let mut last_auto_refresh = std::time::Instant::now();
     let mut pending_detail: Option<PendingDetail> = None;
     let mut pending_diff: Option<PendingDiff> = None;
+    // A repo clone in flight, if the user agreed to one: repo plus result.
+    let mut pending_clone: Option<Receiver<(String, anyhow::Result<std::path::PathBuf>)>> = None;
     // The embedded agent, if one is running inside the box. Owned here, not
     // in App: the loop polls it, routes keys to it and kills it on quit.
     let mut embedded: Option<EmbeddedSession> = None;
@@ -1032,6 +1034,44 @@ fn run_tui() -> anyhow::Result<()> {
         }
         if let Some(order) = app.delete_go.take() {
             delete_worktree(&mut app, &binaries, order, &embedded);
+        }
+        // A clone runs in a thread — network can take minutes, and the UI
+        // must stay alive meanwhile. When it lands, the W flow continues
+        // where it asked: the clone is there now, so the name prompt opens.
+        if let Some((repo, path)) = app.clone_go.take() {
+            let (tx, rx) = mpsc::channel();
+            let binaries = binaries.clone();
+            std::thread::spawn(move || {
+                let slug = match gtasks::actions::RepoSlug::parse(&repo) {
+                    Ok(slug) => slug,
+                    Err(_) => {
+                        let _ = tx.send((repo, Err(anyhow::anyhow!("invalid repo slug"))));
+                        return;
+                    }
+                };
+                let done = gtasks::worktree::clone_repo(&binaries, &path, &slug).map(|_| path);
+                let _ = tx.send((repo, done));
+            });
+            pending_clone = Some(rx);
+        }
+        // Take a finished clone, if any.
+        if let Some(rx) = &pending_clone {
+            match rx.try_recv() {
+                Ok((repo, Ok(path))) => {
+                    pending_clone = None;
+                    app.status = format!("cloned into {} — growing the tree", path.display());
+                    app.open_repo_worktree_for(&repo);
+                }
+                Ok((repo, Err(err))) => {
+                    pending_clone = None;
+                    app.status = format!("cannot clone {repo}: {err:#}");
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    pending_clone = None;
+                    app.status = "clone thread died — try again".to_string();
+                }
+            }
         }
 
         // The embedded agent, if any: keep the pty sized to its box, feed
