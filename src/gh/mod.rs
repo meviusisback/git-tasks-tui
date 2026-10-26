@@ -58,21 +58,34 @@ impl Argv {
         // S11/T2-6: if gtasks dies (even with SIGKILL) the child must not
         // outlive it. `pre_exec` runs in the child between fork and exec, so
         // only async-signal-safe calls belong here.
-        unsafe {
-            cmd.pre_exec(|| {
-                // If the parent dies before this child, the kernel kills the
-                // child. `prctl` can fail (seccomp, old kernels): surface it as
-                // a spawn error instead of silently running without the
-                // death-signal — a missing one is only noticed in an incident.
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        set_death_signal(&mut cmd);
         cmd
     }
 }
+
+/// Linux: the child dies with the parent (no orphan on TUI crash). Other
+/// Unix has no equivalent — macOS included — so there the group-kill on
+/// timeout and the explicit kill on quit are the whole story, and a child
+/// orphaned by a SIGKILLed parent outlives it. Same guarantee everywhere
+/// else; documented, not silent.
+#[cfg(target_os = "linux")]
+fn set_death_signal(cmd: &mut std::process::Command) {
+    unsafe {
+        cmd.pre_exec(|| {
+            // If the parent dies before this child, the kernel kills the
+            // child. `prctl` can fail (seccomp, old kernels): surface it as
+            // a spawn error instead of silently running without the
+            // death-signal — a missing one is only noticed in an incident.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_death_signal(_cmd: &mut std::process::Command) {}
 
 /// Flags that must never be produced by the builders (S9). Exact element
 /// match only: `--force-with-lease` and friends stay legal.
@@ -377,14 +390,7 @@ pub fn interactive_command(
     }
     cmd.process_group(0);
     // S11, same as pipe children: no orphan agent if gtasks dies.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    set_death_signal(&mut cmd);
     cmd
 }
 

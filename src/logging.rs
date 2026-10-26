@@ -36,7 +36,8 @@ pub fn log_file_path() -> anyhow::Result<PathBuf> {
 }
 
 fn fchmod(fd: std::os::unix::io::RawFd, mode: u32, what: &str) -> anyhow::Result<()> {
-    if unsafe { libc::fchmod(fd, mode) } != 0 {
+    // `mode_t` is u16 on macOS, u32 on Linux: go through the alias.
+    if unsafe { libc::fchmod(fd, mode as libc::mode_t) } != 0 {
         return Err(io::Error::last_os_error())
             .with_context(|| format!("cannot chmod {mode:o} {what}"));
     }

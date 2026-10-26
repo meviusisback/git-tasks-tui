@@ -20,7 +20,8 @@ pub struct Binaries {
     /// Optional until the agent integration lands.
     pub hermes: Option<PathBuf>,
     /// Browser launcher; absent on a headless machine, which is why it is optional.
-    pub xdg_open: Option<PathBuf>,
+    /// `xdg-open` on Linux, `open` on macOS.
+    pub opener: Option<PathBuf>,
 }
 
 impl Binaries {
@@ -30,7 +31,10 @@ impl Binaries {
             gh: resolve("gh")?,
             git: resolve("git")?,
             hermes: resolve("hermes").ok(),
-            xdg_open: resolve("xdg-open").ok(),
+            #[cfg(target_os = "macos")]
+            opener: resolve("open").ok(),
+            #[cfg(not(target_os = "macos"))]
+            opener: resolve("xdg-open").ok(),
         })
     }
 
@@ -40,7 +44,7 @@ impl Binaries {
             gh,
             git,
             hermes: None,
-            xdg_open: None,
+            opener: None,
         }
     }
 }

@@ -38,8 +38,10 @@ A shareable overview lives in [`docs/assets/promo-poster.png`](docs/assets/promo
 
 ## Requirements
 
-- Linux
+- Linux or macOS (Intel and Apple Silicon)
 - [`gh`](https://cli.github.com/) installed and authenticated (`gh auth login`)
+- A 256-colour terminal. The font settings (`s`) rewrite Foot's `font=` line,
+  so they only take effect on Linux under Foot (restart the terminal).
 - [Hermes Agent](https://hermes-agent.nousresearch.com/) (`hermes`) for agentic work;
   `pi`, `omp`, `opencode`, `agy` are picked up when installed
 - Rust toolchain (`rustup default stable`)

@@ -875,12 +875,12 @@ fn run_tui() -> anyhow::Result<()> {
 
         // `o`: the key handler already validated the URL.
         if let Some(url) = app.open_requested.take() {
-            match &binaries.xdg_open {
+            match &binaries.opener {
                 Some(program) => match actions::open_in_browser(program, &url) {
                     Ok(pid) => app.status = format!("opened in the browser (pid {pid})"),
                     Err(err) => app.status = format!("cannot open: {err:#}"),
                 },
-                None => app.status = "no browser launcher (xdg-open) found".to_string(),
+                None => app.status = "no browser launcher found".to_string(),
             }
         }
 

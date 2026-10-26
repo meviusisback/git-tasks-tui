@@ -41,3 +41,24 @@ jobs:
       - name: audit-invariants
         # S7/S14 assertions against the freshly built binary.
         run: bash tests/invariants/run_all.sh --suite invariants --bin target/debug/gtasks
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-apple-darwin
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: check-intel
+        # Apple Silicon runners cross-check the Intel slice (check only).
+        run: cargo check --locked --target x86_64-apple-darwin
+      - name: test
+        run: cargo test --locked

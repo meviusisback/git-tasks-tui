@@ -1,9 +1,10 @@
 //! Task 9: actions. This module starts with the safest one — open an item in
 //! the browser — because it is the only action that changes nothing locally.
 //!
-//! S10: `xdg-open` is only ever handed an `https://` URL on `github.com` or
-//! `www.github.com`. The URL in the payload is attacker-influenced, so it is
-//! validated here, never passed through.
+//! S10: the browser launcher (`xdg-open` on Linux, `open` on macOS) is only
+//! ever handed an `https://` URL on `github.com` or `www.github.com`. The URL
+//! in the payload is attacker-influenced, so it is validated here, never
+//! passed through.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -52,7 +53,7 @@ pub fn validate_url(url: &str) -> anyhow::Result<&str> {
     Ok(url)
 }
 
-/// The argv for `xdg-open`: one element, never a shell string.
+/// The launcher argv: one element, never a shell string.
 pub fn open_args(url: &str) -> anyhow::Result<Vec<OsString>> {
     let url = validate_url(url)?;
     Ok(vec![OsString::from(url)])
@@ -98,7 +99,7 @@ pub fn open_in_browser(program: &Path, url: &str) -> anyhow::Result<u32> {
     // a test that writes a launcher and runs it immediately hits it.
     let mut child = crate::gh::spawn_retry(&mut cmd, program)?;
     let pid = child.id();
-    // Reap it. `xdg-open` exits immediately and nothing else waits for it, so
+    // Reap it. The launcher exits immediately and nothing else waits for it, so
     // without this thread every `o` would leave a zombie until the app exits.
     // Not `SIGCHLD = SIG_IGN`: that is process-wide and would break `try_wait`
     // in `run_pipe`.

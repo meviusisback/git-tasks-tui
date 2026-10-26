@@ -106,7 +106,7 @@ fn a_public_builder_cannot_panic_on_a_forbidden_flag() {
         gh: PathBuf::from("/bin/echo"),
         git: PathBuf::from("/bin/true"),
         hermes: None,
-        xdg_open: None,
+        opener: None,
     };
     let cwd = std::env::current_dir().unwrap();
 
