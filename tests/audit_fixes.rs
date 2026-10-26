@@ -222,13 +222,14 @@ fn a_huge_year_is_none_not_a_panic() {
 fn pane_cache_rejects_traversal_repos() {
     use gtasks::cache::{load_detail, save_detail};
     let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
     for evil in ["../../evil", "/tmp/evil", ""] {
-        let err = save_detail(tmp.path(), evil, 1, "t", "x")
+        let err = save_detail(&root, evil, 1, "t", "x")
             .unwrap_err()
             .to_string();
         assert!(err.contains("invalid repo"), "save refuses {evil:?}: {err}");
         assert!(
-            load_detail(tmp.path(), evil, 1).is_none(),
+            load_detail(&root, evil, 1).is_none(),
             "load refuses {evil:?}"
         );
     }

@@ -41,6 +41,9 @@ fn seed_in(dir: &Path) -> gtasks::agent::SeedFile {
 }
 
 fn spawn(program: &Path, seed_dir: &Path, worktree: &Path) -> EmbeddedSession {
+    // Canonicalise: macOS $TMPDIR lives under symlinked /var (see common).
+    let seed_dir: std::path::PathBuf = seed_dir.canonicalize().unwrap();
+    let seed_dir: &Path = seed_dir.as_path();
     // The argv seed only needs to exist as a path: the fake hermes never
     // reads it. The session owns a real SeedFile, unlinked on exit.
     let argv_seed = seed_dir.join("argv-seed");
@@ -178,7 +181,7 @@ fn the_seed_file_is_unlinked_on_exit() {
         tmp.path(),
     );
     // The session owns its own seed: create it through the constructor path.
-    let seed = seed_in(tmp.path());
+    let seed = seed_in(&tmp.path().canonicalize().unwrap());
     let seed_file = seed.path().to_path_buf();
     let mut sess = EmbeddedSession::spawn(
         &argv,

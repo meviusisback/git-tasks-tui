@@ -23,13 +23,14 @@ fn mode_of(path: &std::path::Path) -> u32 {
 /// mode and gains no log file.
 #[test]
 fn state_dir_symlink_is_not_followed() {
-    let root = tempfile::tempdir().unwrap();
-    let victim = root.path().join("victim");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let victim = root.join("victim");
     std::fs::create_dir(&victim).unwrap();
     std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(victim.join("keep.txt"), "untouched").unwrap();
 
-    let link = root.path().join("gtasks");
+    let link = root.join("gtasks");
     symlink(&victim, &link).unwrap();
 
     let err = ensure_state_dir(&link).expect_err("symlinked state dir must be refused");
@@ -53,12 +54,13 @@ fn state_dir_symlink_is_not_followed() {
 /// F-1 (nested): a symlink in an intermediate component is refused too.
 #[test]
 fn state_dir_nested_symlink_is_not_followed() {
-    let root = tempfile::tempdir().unwrap();
-    let victim = root.path().join("victim");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let victim = root.join("victim");
     std::fs::create_dir(&victim).unwrap();
     std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let link = root.path().join("link");
+    let link = root.join("link");
     symlink(&victim, &link).unwrap();
 
     let err = ensure_state_dir(&link.join("sub"))
@@ -79,12 +81,13 @@ fn state_dir_nested_symlink_is_not_followed() {
 /// mode and its bytes.
 #[test]
 fn log_file_symlink_is_not_followed() {
-    let root = tempfile::tempdir().unwrap();
-    let victim = root.path().join("victim.log");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let victim = root.join("victim.log");
     std::fs::write(&victim, "log-victim-bytes").unwrap();
     std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-    let link = root.path().join("gtasks.log");
+    let link = root.join("gtasks.log");
     symlink(&victim, &link).unwrap();
 
     let err = open_log_file(&link).expect_err("symlinked log file must be refused");
@@ -111,15 +114,16 @@ fn log_file_symlink_is_not_followed() {
 /// its mode. A tiny threshold keeps the test fast (never 5 MiB).
 #[test]
 fn log_rotation_keeps_one_backup() {
-    let root = tempfile::tempdir().unwrap();
-    let log = root.path().join("gtasks.log");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let log = root.join("gtasks.log");
     let old = b"old-log-bytes".to_vec();
     std::fs::write(&log, &old).unwrap();
     std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
 
     rotate_log(&log, old.len() as u64).unwrap();
 
-    let backup = root.path().join("gtasks.log.1");
+    let backup = root.join("gtasks.log.1");
     assert_eq!(
         std::fs::read(&backup).unwrap(),
         old,
@@ -146,12 +150,13 @@ fn log_rotation_keeps_one_backup() {
 /// F-5 (L1): a symlinked log path is refused before any rename.
 #[test]
 fn rotation_refuses_symlinked_log() {
-    let root = tempfile::tempdir().unwrap();
-    let victim = root.path().join("victim.log");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let victim = root.join("victim.log");
     let bytes = b"victim-log-bytes".to_vec();
     std::fs::write(&victim, &bytes).unwrap();
     std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let link = root.path().join("gtasks.log");
+    let link = root.join("gtasks.log");
     symlink(&victim, &link).unwrap();
 
     let err = rotate_log(&link, 1).expect_err("symlinked log must not rotate");
@@ -165,7 +170,7 @@ fn rotation_refuses_symlinked_log() {
         "the victim keeps its bytes"
     );
     assert!(
-        !root.path().join("gtasks.log.1").exists(),
+        !root.join("gtasks.log.1").exists(),
         "no backup may be created through a symlink"
     );
 }
@@ -173,11 +178,12 @@ fn rotation_refuses_symlinked_log() {
 /// F-5 (L1): exactly one generation — a previous `.1` is replaced, never appended.
 #[test]
 fn rotation_replaces_previous_backup() {
-    let root = tempfile::tempdir().unwrap();
-    let log = root.path().join("gtasks.log");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let log = root.join("gtasks.log");
     let fresh = b"new-log-bytes".to_vec();
     std::fs::write(&log, &fresh).unwrap();
-    let backup = root.path().join("gtasks.log.1");
+    let backup = root.join("gtasks.log.1");
     std::fs::write(&backup, "stale-backup").unwrap();
 
     rotate_log(&log, fresh.len() as u64).unwrap();
@@ -196,9 +202,10 @@ fn rotation_replaces_previous_backup() {
 /// S14 (L3): `..` is refused in the middle of a path, and nothing is created.
 #[test]
 fn state_dir_rejects_parent_dir_component_in_the_middle() {
-    let root = tempfile::tempdir().unwrap();
-    let target = root.path().join("gtasks-should-not-exist");
-    let err = ensure_state_dir(&root.path().join("..").join("gtasks-should-not-exist"))
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let target = root.join("gtasks-should-not-exist");
+    let err = ensure_state_dir(&root.join("..").join("gtasks-should-not-exist"))
         .expect_err("a `..` component must be refused");
     assert!(
         format!("{err:#}").contains(".."),
@@ -214,8 +221,9 @@ fn state_dir_rejects_parent_dir_component_in_the_middle() {
 /// component that precedes it — no half-built tree.
 #[test]
 fn state_dir_rejects_trailing_parent_dir_without_side_effects() {
-    let root = tempfile::tempdir().unwrap();
-    let missing = root.path().join("missing");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let missing = root.join("missing");
     let err = ensure_state_dir(&missing.join(".."))
         .expect_err("a trailing `..` component must be refused");
     assert!(
@@ -231,12 +239,13 @@ fn state_dir_rejects_trailing_parent_dir_without_side_effects() {
 /// S14 happy path: real directories end up 0700, a fresh log is 0600.
 #[test]
 fn private_dir_and_log_modes_are_0700_and_0600() {
-    let root = tempfile::tempdir().unwrap();
-    let dir = root.path().join("nested/state");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let dir = root.join("nested/state");
     ensure_state_dir(&dir).unwrap();
     assert_eq!(mode_of(&dir), 0o700, "final dir must be 0700");
     assert_eq!(
-        mode_of(&root.path().join("nested")),
+        mode_of(&root.join("nested")),
         0o700,
         "intermediate dirs are created 0700 too"
     );
@@ -249,12 +258,13 @@ fn private_dir_and_log_modes_are_0700_and_0600() {
 /// S5/S14: the agent runtime dir follows the same rule as the state dir.
 #[test]
 fn runtime_dir_symlink_is_not_followed() {
-    let root = tempfile::tempdir().unwrap();
-    let victim = root.path().join("victim");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let victim = root.join("victim");
     std::fs::create_dir(&victim).unwrap();
     std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let link = root.path().join("gtasks");
+    let link = root.join("gtasks");
     symlink(&victim, &link).unwrap();
 
     let err = gtasks::agent::ensure_runtime_dir(&link)

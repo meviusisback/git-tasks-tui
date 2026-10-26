@@ -26,7 +26,7 @@ fn a_symlink_at_every_candidate_name_is_never_followed() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("gtasks");
+    let dir = tmp.path().canonicalize().unwrap().join("gtasks");
     ensure_runtime_dir(&dir).unwrap();
     assert_eq!(
         std::fs::symlink_metadata(&dir)
@@ -92,7 +92,7 @@ fn agent_seed_file_0600_and_unlinked() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("gtasks");
+    let dir = tmp.path().canonicalize().unwrap().join("gtasks");
     ensure_runtime_dir(&dir).unwrap();
 
     let dir_mode = std::fs::symlink_metadata(&dir)
@@ -144,7 +144,7 @@ fn agent_stays_interactive_after_first_turn() {
     let workdir = tmp.path().join("work");
     std::fs::create_dir(&workdir).unwrap();
     let seed = SeedFile::create_in(
-        tmp.path(),
+        &tmp.path().canonicalize().unwrap(),
         "Reply with exactly: LIVE-SCRIPT-OK and nothing else. (gtasks Task 1 live TTY test; no tools needed.)",
     )
     .unwrap();

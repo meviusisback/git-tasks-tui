@@ -9,8 +9,9 @@ use gtasks::logging::{MAX_LOG_BYTES, init_file_logging_at};
 
 #[test]
 fn failed_second_init_does_not_rotate() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("state/gtasks.log");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let path = root.join("state/gtasks.log");
 
     // First init succeeds and installs the global subscriber.
     init_file_logging_at(&path).expect("first init must succeed");
@@ -38,7 +39,7 @@ fn failed_second_init_does_not_rotate() {
         "the live log must not be rotated away"
     );
     assert!(
-        !root.path().join("state/gtasks.log.1").exists(),
+        !root.join("state/gtasks.log.1").exists(),
         "a refused init must not create a backup"
     );
 }

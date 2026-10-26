@@ -245,13 +245,17 @@ fn the_prompt_travels_as_a_path_never_as_argv() {
 #[test]
 fn a_launch_that_never_starts_still_unlinks_the_seed() {
     let tmp = tempfile::tempdir().unwrap();
-    let seed = SeedFile::create_in(tmp.path(), "prompt body").unwrap();
+    // Canonicalise: macOS $TMPDIR lives under /var, which is a symlink to
+    // /private/var, and the state dir refuses symlinked ancestors. Production
+    // seed dirs live under the data dir, never TMPDIR — this is test-only.
+    let dir = tmp.path().canonicalize().unwrap();
+    let seed = SeedFile::create_in(&dir, "prompt body").unwrap();
     let path = seed.path().to_path_buf();
     let argv = agent_argv(
         PathBuf::from("/nonexistent/hermes").as_path(),
         "default",
         &path,
-        tmp.path(),
+        &dir,
     );
     let (status, lines) = run_agent_inner(&argv, seed, std::time::Instant::now(), 1);
     assert_eq!(lines, 1);

@@ -3,6 +3,9 @@
 //! The cache is only speed — the fetch stays the source of truth — so a
 //! broken file is `None` (ignored), never an error the user sees.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use gtasks::model::{Item, ItemKind};
 
 fn item(repo: &str, number: u64) -> Item {
@@ -30,8 +33,8 @@ fn item(repo: &str, number: u64) -> Item {
 
 #[test]
 fn save_and_load_roundtrip() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("items-cache.json");
+    let (_tmp, dir) = common::scratch();
+    let path = dir.join("items-cache.json");
     let items = vec![item("me/a", 1), item("me/b", 2)];
     gtasks::cache::save(&path, &items).unwrap();
     assert_eq!(gtasks::cache::load(&path), Some(items));
@@ -39,11 +42,11 @@ fn save_and_load_roundtrip() {
 
 #[test]
 fn a_broken_cache_is_ignored_not_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("items-cache.json");
+    let (_tmp, dir) = common::scratch();
+    let path = dir.join("items-cache.json");
     std::fs::write(&path, "{not json").unwrap();
     assert_eq!(gtasks::cache::load(&path), None);
-    assert_eq!(gtasks::cache::load(&dir.path().join("missing.json")), None);
+    assert_eq!(gtasks::cache::load(&dir.join("missing.json")), None);
 }
 
 #[test]
@@ -57,8 +60,8 @@ fn freshness_is_exact_equality() {
 #[test]
 fn bodies_roundtrip_per_item_and_kind() {
     use gtasks::cache::Resolve;
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    let (_tmp, dir) = common::scratch();
+    let root = dir.as_path();
     gtasks::cache::save_detail(root, "o/r", 7, "2026-10-20T10:00:00Z", "the body").unwrap();
     gtasks::cache::save_diff(root, "o/r", 7, "2026-10-20T10:00:00Z", "the diff").unwrap();
     // Body and diff share the item but never the file.

@@ -7,8 +7,9 @@ use gtasks::logging::init_file_logging_at;
 
 #[test]
 fn second_logging_init_does_not_panic() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("state/gtasks.log");
+    let _guard = tempfile::tempdir().unwrap();
+    let root = _guard.path().canonicalize().unwrap();
+    let path = root.join("state/gtasks.log");
 
     init_file_logging_at(&path).expect("first init must succeed");
 
