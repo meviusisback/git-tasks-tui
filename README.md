@@ -13,6 +13,18 @@ The keymap is in [`docs/keys.md`](docs/keys.md); the agent contract in
 A shareable overview lives in [`docs/assets/promo-poster.png`](docs/assets/promo-poster.png)
 (editable source: [`docs/assets/promo.html`](docs/assets/promo.html)).
 
+## Install (no build needed)
+
+Download the latest release for your machine from
+[Releases](https://github.com/meviusisback/git-tasks-tui/releases):
+
+- **Linux**: `gtasks-linux-x86_64.tar.gz`
+- **Mac** (Intel and Apple Silicon, one binary): `gtasks-macos-universal.dmg` —
+  open it, copy `gtasks` somewhere on your `PATH`.
+
+The DMG is unsigned (no paid Apple certificate): on first run macOS asks once —
+right-click the binary, choose Open, confirm. Afterwards it starts normally.
+
 ## What it does
 
 - Follow repositories (`R` menu, saved to `state.json`); one list across repos with search.

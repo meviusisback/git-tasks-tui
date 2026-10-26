@@ -1,0 +1,77 @@
+name: release
+
+# Release binaries: push a tag like `v0.1.0` and this builds everything.
+# macOS gets a universal binary (Intel + Apple Silicon) plus a DMG;
+# Linux gets a tarball. All attached to the GitHub Release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          components: rustfmt, clippy
+      - name: build
+        run: cargo build --release --locked
+      - name: package
+        run: |
+          mkdir -p dist/gtasks
+          cp target/release/gtasks dist/gtasks/
+          cp README.md LICENSE dist/gtasks/
+          tar -czf gtasks-linux-x86_64.tar.gz -C dist gtasks
+      - name: upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # --clobber: re-running the workflow for the same tag replaces files
+        # instead of failing; only the tag owner can push tags, so this is safe.
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See README.md for requirements." --clobber gtasks-linux-x86_64.tar.gz
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-apple-darwin
+      - name: build
+        run: |
+          cargo build --release --locked
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: package
+        run: |
+          mkdir -p dist/gtasks
+          # One binary for both Macs: merge the two slices.
+          lipo -create \
+            target/release/gtasks \
+            target/x86_64-apple-darwin/release/gtasks \
+            -output dist/gtasks/gtasks
+          cp README.md LICENSE dist/gtasks/
+          tar -czf gtasks-macos-universal.tar.gz -C dist gtasks
+          # DMG with the same folder inside. Unsigned: on first run macOS
+          # asks once (right-click > Open), no paid certificate involved.
+          hdiutil create -volname gtasks \
+            -srcfolder dist/gtasks -ov -format UDZO \
+            gtasks-macos-universal.dmg
+      - name: upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See README.md for requirements." --clobber gtasks-macos-universal.tar.gz gtasks-macos-universal.dmg
