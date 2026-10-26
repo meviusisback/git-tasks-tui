@@ -21,7 +21,7 @@ disagree, the handler is right and this file is a bug.
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
 | `d` | diff of the selected PR in an overlay (`↑`/`↓` scroll, wheel scrolls, `Enter`/`Esc` closes): fetched once, then cached; first 200 lines with the total named when truncated |
 | `o` | open the selected item in the browser |
-| `r` | refresh — it works in every pane, including inside a drilled-in repo |
+| `r` | refresh — it works in every pane, including inside a drilled-in repo. The list also re-reads itself every `refresh_s` seconds while idle (default 300, `0` turns it off) |
 | `a` | ask to act on the selected PR: opens a confirmation showing the exact command |
 | `y` | in the confirmation: run the command |
 | `n` / `Esc` | in the confirmation: cancel — nothing runs |

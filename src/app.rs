@@ -480,6 +480,19 @@ pub struct App {
     pub pending: Option<Pending>,
 }
 
+/// Periodic-refresh door: true when `refresh_s` seconds passed since `last`
+/// and nothing else wants the fetch lane. `refresh_s == 0` means off.
+/// The loop evaluates this every tick; the single-flight spawn stays the only
+/// place a fetch starts, so auto and manual refresh share the same door.
+pub fn auto_refresh_due(
+    last: std::time::Instant,
+    now: std::time::Instant,
+    refresh_s: u64,
+    busy: bool,
+) -> bool {
+    refresh_s > 0 && !busy && now.duration_since(last).as_secs() >= refresh_s
+}
+
 impl Default for App {
     fn default() -> Self {
         Self {

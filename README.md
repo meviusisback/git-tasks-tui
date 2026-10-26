@@ -67,6 +67,7 @@ font_family = "monospace"    # whole-terminal typeface (Foot restart applies)
 parallel = 4
 timeout_s = 30
 limit = 30
+refresh_s = 300          # re-read the list every N seconds while idle (0 = off, min 10)
 ```
 
 ## Design rules

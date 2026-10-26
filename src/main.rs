@@ -640,6 +640,10 @@ fn run_tui() -> anyhow::Result<()> {
         timeout,
         parallel,
     ));
+    // Last completed-or-started refresh: the auto-refresh door below measures
+    // `refresh_s` from here, so the first automatic re-read lands one full
+    // interval after startup, never on top of the initial fetch.
+    let mut last_auto_refresh = std::time::Instant::now();
     let mut pending_detail: Option<PendingDetail> = None;
     let mut pending_diff: Option<PendingDiff> = None;
     // The embedded agent, if one is running inside the box. Owned here, not
@@ -967,6 +971,20 @@ fn run_tui() -> anyhow::Result<()> {
         }
 
         // One refresh in flight at a time (single-flight).
+        // Periodic refresh: the list re-reads itself every `refresh_s`
+        // seconds (`0` = off). Same door as `r`, quieter rules: never overlap
+        // an in-flight fetch, never move the list under an open dialog.
+        if gtasks::app::auto_refresh_due(
+            last_auto_refresh,
+            std::time::Instant::now(),
+            config.refresh_s,
+            app.loading || app.modal.is_some() || pending.is_some() || app.refresh_requested,
+        ) {
+            last_auto_refresh = std::time::Instant::now();
+            app.loading = true;
+            app.refresh_requested = true;
+            app.status = "refreshing…".to_string();
+        }
         if app.refresh_requested && pending.is_none() {
             app.refresh_requested = false;
             pending = Some(spawn_fetch(
