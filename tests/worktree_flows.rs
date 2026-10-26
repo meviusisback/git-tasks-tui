@@ -67,6 +67,50 @@ fn enter_on_an_empty_repo_suggests_a_fresh_branch() {
     );
 }
 
+fn render_screen(app: &gtasks::app::App, view: &gtasks::ui::ViewModel) -> String {
+    use gtasks::ui::draw;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let backend = TestBackend::new(200, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, app, view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..40 {
+        for x in 0..200 {
+            out.push_str(buffer[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[test]
+fn the_branch_question_is_a_box_in_the_middle() {
+    use gtasks::ui::view_for;
+    let (mut app, _guard) = one_repo_app();
+    app.pane = gtasks::app::Pane::Repos;
+    app.update(Msg::Key(Key::Enter));
+
+    let view = view_for(&app);
+    let screen = render_screen(&app, &view);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(rows.len() >= 40);
+    // The question is asked in the middle of the screen, not in the
+    // bottom legend: the last three rows carry only the keys.
+    let body = rows[..rows.len() - 3].join("\n");
+    assert!(
+        body.contains("start a new branch?"),
+        "question must sit in the box: {screen}"
+    );
+    assert!(body.contains("y confirm"), "keys sit under the words");
+    let tail = rows[rows.len() - 3..].join("\n");
+    assert!(
+        !tail.contains("start a new branch?"),
+        "question must not leak into the legend: {screen}"
+    );
+}
+
 #[test]
 fn missing_clone_offers_to_clone_first() {
     let tmp = tempfile::tempdir().unwrap();

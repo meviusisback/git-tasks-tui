@@ -719,8 +719,10 @@ impl App {
     /// (that lives behind `?`). Untrusted text (query, status) is sanitised.
     pub fn legend(&self) -> String {
         match &self.modal {
-            Some(Modal::Confirm(question)) => {
-                return format!("{}  —  y confirm · n/Esc cancel", sanitize(question));
+            Some(Modal::Confirm(_)) => {
+                // The question lives in its own box now; the legend keeps
+                // only the keys, so the two never disagree about the words.
+                return String::from("y confirm · n/Esc cancel");
             }
             Some(Modal::RepoMenu(menu)) => {
                 return format!(

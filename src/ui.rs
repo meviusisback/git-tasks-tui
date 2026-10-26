@@ -228,6 +228,9 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
         draw_help(frame, frame.area());
     }
 
+    if let Some(crate::app::Modal::Confirm(question)) = &app.modal {
+        draw_confirm(frame, frame.area(), question);
+    }
     if let Some(crate::app::Modal::RepoMenu(menu)) = &app.modal {
         draw_repo_menu(frame, frame.area(), menu);
     }
@@ -908,10 +911,38 @@ fn draw_action_menu(frame: &mut Frame, area: Rect, menu: &crate::app::ActionMenu
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// A startup blocker: the config on disk cannot be used and the app runs on
-/// the demo fallback. A centered box, not just the legend row — at 80 columns
-/// a long path would push the remedy ("Esc dismiss") off the edge, which is
-/// exactly the silence this notice replaces.
+/// A yes/no question in the middle of the screen — delete a worktree, clone
+/// a repo, start a branch. It used to print in the bottom legend, where a
+/// long path pushed the keys off the edge and a short one was easy to
+/// answer without reading. The box wraps the question and pins `y`/`n` to
+/// its own bottom row, so the choice is always under the words.
+fn draw_confirm(frame: &mut Frame, area: Rect, question: &str) {
+    let area = centered_rect(70, 40, area);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" confirm ")
+        .border_style(theme::border_focused())
+        .title_style(theme::border_focused())
+        .style(theme::overlay_text());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let message = Paragraph::new(ratatui::text::Line::from(sanitize(question)))
+        .style(theme::overlay_text())
+        .wrap(ratatui::widgets::Wrap { trim: true });
+    frame.render_widget(message, rows[0]);
+    let remedy = Paragraph::new(ratatui::text::Line::from(sanitize(
+        "y confirm · n/Esc cancel",
+    )))
+    .style(theme::overlay_text());
+    frame.render_widget(remedy, rows[1]);
+}
+
 fn draw_notice(frame: &mut Frame, area: Rect, notice: &str) {
     let area = centered_rect(70, 80, area);
     frame.render_widget(Clear, area);
