@@ -207,15 +207,23 @@ fn the_seed_file_is_unlinked_on_exit() {
 fn keys_become_terminal_bytes_except_pane_keys() {
     assert_eq!(key_to_pty(&Key::Enter), Some(b"\r".to_vec()));
     assert_eq!(key_to_pty(&Key::Backspace), Some(vec![0x7f]));
-    assert_eq!(key_to_pty(&Key::Tab), None, "Tab cycles panes");
-    assert_eq!(key_to_pty(&Key::BackTab), None, "BackTab cycles panes");
     assert_eq!(key_to_pty(&Key::Char('a')), Some(b"a".to_vec()));
     assert_eq!(key_to_pty(&Key::Up), Some(b"\x1b[A".to_vec()));
     assert_eq!(key_to_pty(&Key::CtrlC), Some(vec![0x03]));
     assert_eq!(
+        key_to_pty(&Key::Tab),
+        Some(vec![0x09]),
+        "Tab goes to the agent; Shift+arrows leave the box"
+    );
+    assert_eq!(
+        key_to_pty(&Key::BackTab),
+        Some(b"\x1b[Z".to_vec()),
+        "BackTab goes to the agent too"
+    );
+    assert_eq!(
         key_to_pty(&Key::Esc),
         Some(vec![0x1b]),
-        "Esc goes to the agent; Tab leaves the box"
+        "Esc goes to the agent; Shift+arrows leave the box"
     );
 }
 

@@ -432,6 +432,15 @@ pub struct App {
     /// on the row under the list cursor.
     pub tabs: Vec<Tab>,
     pub active_tab: Option<usize>,
+    /// Column/row split of the cross, in percent (left width, top height).
+    /// Dragged with the mouse on the dividers, saved to `state.json`:
+    /// a restart keeps the user's geometry. Only the two dividers move —
+    /// never a single box.
+    pub col_pct: u16,
+    pub row_pct: u16,
+    /// A divider drag in progress: which line the mouse holds. Transient —
+    /// never persisted, never drawn.
+    pub drag: Option<DragLine>,
     /// One tab's agent side, keyed by `(repo, number)`: everything the loop
     /// reads or writes for the box in that tab. The session itself lives in
     /// the loop (it owns threads); this is the state the screen renders.
@@ -497,6 +506,14 @@ pub struct App {
     pub worktree_root: Option<std::path::PathBuf>,
     /// What `y` runs: an action or an agent launch, never both.
     pub pending: Option<Pending>,
+}
+
+/// Which divider of the cross the mouse holds: the vertical line between
+/// the columns or the horizontal line between the top and bottom boxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragLine {
+    Cols,
+    Rows,
 }
 
 /// One tab's agent side: the screen the box renders, whether its session
@@ -583,6 +600,9 @@ impl Default for App {
             show_help: false,
             tabs: Vec::new(),
             active_tab: None,
+            col_pct: 30,
+            row_pct: 38,
+            drag: None,
             session_dirty: false,
         }
     }
@@ -790,7 +810,9 @@ impl App {
             // including Ctrl-C, which interrupts it. The legend must not
             // promise keys that type instead.
             if self.active_agent().is_some_and(|a| a.running) {
-                String::from("Tab panes · Ctrl-C interrupts · wheel scrolls · type to agent")
+                String::from(
+                    "Shift+arrows move · Ctrl-C interrupts · wheel scrolls · type to agent",
+                )
             } else {
                 String::from(
                     "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
@@ -1244,6 +1266,8 @@ impl App {
             })
             .collect();
         state.active_tab = self.active_tab;
+        state.col_pct = self.col_pct;
+        state.row_pct = self.row_pct;
     }
 
     /// Restore pane, cursors, filter, query and tabs from a saved session.
@@ -1280,6 +1304,10 @@ impl App {
             self.repos_cursor = state.repos_cursor.min(self.repos.len().saturating_sub(1));
         }
         self.list_cursor = state.list_cursor;
+        // The cross geometry comes back too, clamped like a fresh drag:
+        // a shrunken terminal must not restore an unusable split.
+        self.col_pct = state.col_pct.clamp(15, 85);
+        self.row_pct = state.row_pct.clamp(15, 85);
         self.tabs = state
             .tabs
             .iter()

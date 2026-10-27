@@ -386,7 +386,7 @@ fn clicking_a_tab_opens_it_clicking_between_does_not() {
     assert_eq!(app.tabs.len(), 2);
 
     let area = ratatui::layout::Rect::new(0, 0, 200, 30);
-    let row = tabs_row(area);
+    let row = tabs_row(area, app.col_pct);
     // Scan the strip instead of hand-computing widths: kind icons depend on
     // the host's fonts, so the test must not assume them.
     let mut seen_none = false;

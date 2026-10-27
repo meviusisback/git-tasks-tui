@@ -117,8 +117,8 @@ fn legend_while_running_names_typing_not_app_keys() {
     app.active_tab = Some(0);
     let legend = app.legend();
     assert!(
-        legend.contains("Tab panes"),
-        "focused + running: Tab leaves the box too: {legend}"
+        legend.contains("Shift+arrows move"),
+        "focused + running: Shift+arrows leave the box: {legend}"
     );
     assert!(
         legend.contains("wheel scrolls"),

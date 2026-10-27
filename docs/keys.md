@@ -7,9 +7,9 @@ disagree, the handler is right and this file is a bug.
 |---|---|
 | `q` | quit |
 | `Ctrl-C` | quit — the escape hatch, always live, except with the agent focused, where it interrupts the agent |
-| `Esc` | back **one level**: overlay → confirmation → search → detail → list → repos. It **never quits** and **never steals agent keys**: with the agent focused `Esc` goes to the agent (`Tab` leaves the box). At the outermost level it says `Esc — nothing to close` in the status line |
+| `Esc` | back **one level**: overlay → confirmation → search → detail → list → repos. It **never quits** and **never steals agent keys**: with the agent focused `Esc` goes to the agent (like `Tab`; `Shift`+arrows leave the box). At the outermost level it says `Esc — nothing to close` in the status line |
 | `?` | the overlay of keys (it says which work today and which are promised) |
-| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, skipping the empty agent box. The mouse wheel scrolls the agent box history |
+| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, skipping the empty agent box. The mouse wheel scrolls the agent box history; dragging the dividers with the mouse resizes the cross (saved across restarts) |
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while an agent runs (for people who expect it) |
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
@@ -41,9 +41,9 @@ Before anything runs, `g` asks two things: which agent (hermes, pi, omp,
 opencode, agy) and on which worktree. A worktree marker (`◉` without a Nerd Font)
 in front of a list row means a worktree directory already exists for that
 branch — `g` then works on it instead of creating one. While the box has
-focus every key but `Tab` and `Shift`+arrows is agent input — typing,
-arrows, `Esc` (vim mode, popups), `Ctrl-C` (interrupt). `Tab` cycles panes,
-`Shift`+arrows move between boxes, the agent keeps running either way. The
+focus every key but `Shift`+arrows is agent input — typing,
+arrows, `Tab` (completion), `Esc` (vim mode, popups), `Ctrl-C` (interrupt).
+`Shift`+arrows move between boxes and out of the agent box, the agent keeps running either way. The
 mouse wheel scrolls the box back through history (fullscreen agents like Pi
 draw on the box's main screen — their alternate screen is folded away, so
 the history is there for every agent); typing jumps back to the live tail.

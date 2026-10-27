@@ -362,6 +362,17 @@ fn delete_worktree(
     }
 }
 
+/// The tree the plan wants, from repo + branch: used when the picked tree
+/// turned out to be on the wrong branch, to offer building the right one.
+/// `None` when the names do not parse — the plan itself came from validated
+/// names, so this only fires on state that changed under our feet.
+fn correct_tree_path(app: &App, plan: &AgentPlan) -> Option<PathBuf> {
+    let root = app.worktree_root.clone()?;
+    let slug = RepoSlug::parse(&plan.repo).ok()?;
+    let branch = gtasks::worktree::BranchName::parse(&plan.branch).ok()?;
+    gtasks::worktree::resolve_in(&root, &plan.clone, &slug, &branch).ok()
+}
+
 /// Run the handoff the user validated: seed file plus an agent spawned
 /// embedded in the agent box. The TUI never suspends; the child lives in a
 /// pty sized to the box, and the loop polls it every tick.
@@ -381,17 +392,30 @@ fn launch_agent(
     let key = App::tab_key(&plan.repo, plan.number);
     // The tree may have drifted onto another branch since it was made
     // (renamed outside, checked out by hand): starting the agent there
-    // works on the wrong code. Refuse a known mismatch with both names
-    // instead — delete the tree and relaunch to rebuild it, or fix the
-    // branch by hand. Unknown stays launchable: a git hiccup must not
-    // brick the box.
+    // works on the wrong code. Offer the fix instead of starting
+    // silently: build the tree the plan wants and launch there. `n` in
+    // the menu does the same; this catches an Enter on the wrong row.
     match gtasks::worktree::current_branch(binaries, path, timeout) {
         Some(have) if have != plan.branch => {
-            app.status = format!(
-                "tree {} is on branch {have}, not {} — fix the branch or delete the tree and relaunch",
-                path.display(),
-                plan.branch
-            );
+            match correct_tree_path(app, plan) {
+                Some(target) => {
+                    let question = format!(
+                        "tree {} is on branch {have}, not {} — create {} and launch there?",
+                        path.display(),
+                        plan.branch,
+                        target.display()
+                    );
+                    app.modal = Some(Modal::Confirm(question));
+                    app.pending = Some(Pending::Agent(plan.clone(), target));
+                }
+                None => {
+                    app.status = format!(
+                        "tree {} is on branch {have}, not {} — fix the branch or delete the tree and relaunch",
+                        path.display(),
+                        plan.branch
+                    );
+                }
+            }
             return;
         }
         _ => {}
@@ -448,7 +472,11 @@ fn launch_agent(
     };
     // The box the pty is sized to: the same geometry the draw uses, so the
     // terminal and its box never disagree by a row.
-    let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
+    let outer = ui::agent_box(
+        Rect::new(0, 0, term_size.0, term_size.1),
+        app.col_pct,
+        app.row_pct,
+    );
     let cols = outer.width.saturating_sub(2);
     let rows = outer.height.saturating_sub(2);
     let parent: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -1184,7 +1212,11 @@ fn run_tui() -> anyhow::Result<()> {
         // while another is on screen. Only the active tab's box is sized
         // to the pty — a hidden box has no geometry to match.
         let active_key = app.active_key();
-        let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
+        let outer = ui::agent_box(
+            Rect::new(0, 0, term_size.0, term_size.1),
+            app.col_pct,
+            app.row_pct,
+        );
         let mut exited: Vec<((String, u64), String)> = Vec::new();
         for (key, sess) in sessions.iter_mut() {
             if Some(key) == active_key.as_ref() {
@@ -1292,28 +1324,28 @@ fn run_tui() -> anyhow::Result<()> {
             needs_draw = true;
             match event::read()? {
                 Event::Key(key) => {
-                    // Focused on a running agent, every key but Tab is
-                    // agent input — including Esc and Ctrl-C, which
-                    // interrupts it. Tab cycles panes, Shift+arrows move
-                    // between boxes: all through the app. Anywhere else,
-                    // keys are app keys (where Ctrl-C quits).
+                    // Focused on a running agent, every key but Shift+arrows
+                    // is agent input — including Tab, Esc and Ctrl-C, which
+                    // interrupts it. Shift+arrows move between boxes (the
+                    // guaranteed way out): all through the app. Anywhere
+                    // else, keys are app keys (where Ctrl-C quits).
+                    //
+                    // Dialogs, search and help still own Esc/Tab while open;
+                    // outside the agent box every key stays app input.
+                    let app_owns_key = app.modal.is_some() || app.searching || app.show_help;
                     let to_app = matches!(
                         map_key(key),
                         Some(Msg::Key(
-                            Key::Tab
-                                | Key::BackTab
-                                | Key::ShiftUp
-                                | Key::ShiftDown
-                                | Key::ShiftLeft
-                                | Key::ShiftRight
+                            Key::ShiftUp | Key::ShiftDown | Key::ShiftLeft | Key::ShiftRight
                         ))
-                    ) || (matches!(map_key(key), Some(Msg::Key(Key::Esc)))
-                        && (app.modal.is_some() || app.searching || app.show_help));
-                    // Note what is missing: Esc. While the box has focus and
-                    // no dialog, search or help is open, Esc belongs to the
-                    // agent (vim mode, closing popups, cancelling) — Tab
-                    // leaves the box. Dialogs still close with Esc through
-                    // the condition above.
+                    ) || (matches!(
+                        map_key(key),
+                        Some(Msg::Key(Key::Esc | Key::Tab | Key::BackTab))
+                    ) && (app_owns_key || app.pane != gtasks::app::Pane::Agent));
+                    // Note what is missing: Tab and Esc. While the box has
+                    // focus and no dialog, search or help is open, they
+                    // belong to the agent (completion, vim mode, popups) —
+                    // Shift+arrows leave the box.
                     let active_key = app.active_key();
                     let session_live = active_key.as_ref().is_some_and(|key| {
                         sessions.contains_key(key)
@@ -1355,11 +1387,55 @@ fn run_tui() -> anyhow::Result<()> {
                             _ => {}
                         }
                     } else if app.modal.is_none() {
-                        if let MouseEventKind::Down(MouseButton::Left) = me.kind {
-                            let area = Rect::new(0, 0, term_size.0, term_size.1);
-                            if let Some(idx) = ui::tab_at(&app, area, me.column, me.row) {
-                                app.activate_tab(idx);
+                        let area = Rect::new(0, 0, term_size.0, term_size.1);
+                        let g = ui::grid(area, app.col_pct, app.row_pct);
+                        match me.kind {
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                // Divider grabs win over tab clicks: two
+                                // border cells per line, the cross only.
+                                if (me.column == g.div_x.saturating_sub(1) || me.column == g.div_x)
+                                    && me.row >= g.body.y
+                                    && me.row < g.body.y.saturating_add(g.body.height)
+                                {
+                                    app.drag = Some(gtasks::app::DragLine::Cols);
+                                } else if (me.row == g.div_y.saturating_sub(1) || me.row == g.div_y)
+                                    && me.column >= g.body.x
+                                    && me.column < g.body.x.saturating_add(g.body.width)
+                                {
+                                    app.drag = Some(gtasks::app::DragLine::Rows);
+                                } else if let Some(idx) = ui::tab_at(&app, area, me.column, me.row)
+                                {
+                                    app.activate_tab(idx);
+                                }
                             }
+                            MouseEventKind::Drag(MouseButton::Left) => {
+                                // Move the divider the drag holds; single
+                                // boxes are never sized directly. Pixel
+                                // floors keep every box usable, percents
+                                // persist through `state.json` on autosave.
+                                // (crossterm reports the drag button only;
+                                // the position rides on the event itself.)
+                                let (x, y) = (me.column, me.row);
+                                match app.drag {
+                                    Some(gtasks::app::DragLine::Cols) => {
+                                        if let Some(pct) = ui::col_pct_for(g.body, x) {
+                                            app.col_pct = pct;
+                                            app.session_dirty = true;
+                                        }
+                                    }
+                                    Some(gtasks::app::DragLine::Rows) => {
+                                        if let Some(pct) = ui::row_pct_for(g.body, y) {
+                                            app.row_pct = pct;
+                                            app.session_dirty = true;
+                                        }
+                                    }
+                                    None => {}
+                                }
+                            }
+                            MouseEventKind::Up(_) => {
+                                app.drag = None;
+                            }
+                            _ => {}
                         }
                     }
                     if !matches!(app.modal, Some(Modal::Diff)) {

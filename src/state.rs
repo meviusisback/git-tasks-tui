@@ -33,6 +33,10 @@ pub struct State {
     /// Open tabs, in order, and the active one.
     pub tabs: Vec<TabState>,
     pub active_tab: Option<usize>,
+    /// The cross geometry, in percent (left width, top height): dragged
+    /// with the mouse, restored on start.
+    pub col_pct: u16,
+    pub row_pct: u16,
 }
 
 impl Default for State {
@@ -50,6 +54,8 @@ impl Default for State {
             repo_filter: None,
             tabs: Vec::new(),
             active_tab: None,
+            col_pct: 30,
+            row_pct: 38,
         }
     }
 }

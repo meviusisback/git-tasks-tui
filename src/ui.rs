@@ -101,45 +101,130 @@ const HELP_NOW: &[&str] = &[
 /// instead of dangling.
 pub const PLANNED: &[(char, &str)] = &[];
 
-/// The right column (detail + agent) from the full frame area: outer
-/// border, status row and the left 30% removed. Draw and mouse clicks share
-/// it, so a click can never target a row the boxes are not on.
-pub fn right_column(area: Rect) -> Rect {
+/// Left width for a vertical-divider drag at `x`, in percent — `None`
+/// when the body is too small or the cursor would leave a sliver box.
+/// Only the cross divider moves; single boxes are never sized directly.
+pub fn col_pct_for(body: Rect, x: u16) -> Option<u16> {
+    let left = x.saturating_sub(body.x);
+    if body.width > 30 && left >= 12 && left <= body.width.saturating_sub(20) {
+        Some((left as u32 * 100 / body.width as u32) as u16)
+    } else {
+        None
+    }
+}
+
+/// Top height for a horizontal-divider drag at `y`, in percent — same
+/// contract as [`col_pct_for`].
+pub fn row_pct_for(body: Rect, y: u16) -> Option<u16> {
+    let top = y.saturating_sub(body.y);
+    if body.height > 11 && top >= 5 && top <= body.height.saturating_sub(6) {
+        Some((top as u32 * 100 / body.height as u32) as u16)
+    } else {
+        None
+    }
+}
+
+/// The cross: every box from one pair of splits, so draw, pty sizing and
+/// mouse dragging can never disagree. Only the two dividers move (percent
+/// of the body); single boxes are sized, never dragged.
+pub struct Grid {
+    pub repos: Rect,
+    pub list: Rect,
+    pub tabs: Rect,
+    pub detail: Rect,
+    pub detail_full: Rect,
+    pub agent: Rect,
+    pub status: Rect,
+    /// x of the right column's left edge: the vertical divider grabs the
+    /// two border cells ending here.
+    pub div_x: u16,
+    /// y of the bottom boxes' top edge: the horizontal divider grabs the
+    /// two border rows ending here.
+    pub div_y: u16,
+    /// Body rows (everything above the status line): drags clamp to these,
+    /// never onto the status line.
+    pub body: Rect,
+}
+
+/// Clamp a split percent to the usable range: no sliver boxes, no
+/// off-screen dividers. Out-of-range values (a hand-edited state file)
+/// land back inside instead of breaking the layout.
+fn clamp_pct(pct: u16) -> u16 {
+    pct.clamp(15, 85)
+}
+
+pub fn grid(area: Rect, col_pct: u16, row_pct: u16) -> Grid {
     let inner = Rect::new(
         area.x.saturating_add(1),
         area.y.saturating_add(1),
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(rows[0]);
-    columns[1]
+    let status_h = 1.min(inner.height);
+    let body_h = inner.height.saturating_sub(status_h);
+    let body = Rect::new(inner.x, inner.y, inner.width, body_h);
+    let status = Rect::new(
+        inner.x,
+        inner.y.saturating_add(body_h),
+        inner.width,
+        status_h,
+    );
+    // Pixel floors keep every box usable on small screens: the percents
+    // only divide what is left after the minimums.
+    let max_left = body.width.saturating_sub(10);
+    let left_w = if max_left <= 10 || body.width == 0 {
+        body.width / 2
+    } else {
+        let want = body.width as u32 * clamp_pct(col_pct) as u32 / 100;
+        (want as u16).clamp(10, max_left)
+    };
+    let max_top = body_h.saturating_sub(4);
+    let top_h = if max_top <= 3 || body_h == 0 {
+        body_h / 2
+    } else {
+        let want = body_h as u32 * clamp_pct(row_pct) as u32 / 100;
+        (want as u16).clamp(3, max_top)
+    };
+    let div_x = body.x.saturating_add(left_w);
+    let div_y = body.y.saturating_add(top_h);
+    let right_w = body.width.saturating_sub(left_w);
+    let bottom_h = body_h.saturating_sub(top_h);
+    Grid {
+        repos: Rect::new(body.x, body.y, left_w, top_h),
+        list: Rect::new(body.x, div_y, left_w, bottom_h),
+        tabs: Rect::new(div_x, body.y, right_w, 1.min(body_h)),
+        detail: Rect::new(
+            div_x,
+            body.y.saturating_add(1),
+            right_w,
+            top_h.saturating_sub(1),
+        ),
+        detail_full: Rect::new(
+            div_x,
+            body.y.saturating_add(1),
+            right_w,
+            body_h.saturating_sub(1),
+        ),
+        agent: Rect::new(div_x, div_y, right_w, bottom_h),
+        status,
+        div_x,
+        div_y,
+        body,
+    }
 }
 
 /// The one-line tabs strip: the top row of the right column. Draw renders
 /// the strip here and mouse clicks are mapped here — one function, so the
 /// two can never disagree by a row.
-pub fn tabs_row(area: Rect) -> Rect {
-    let right = right_column(area);
-    Rect::new(right.x, right.y, right.width, 1)
+pub fn tabs_row(area: Rect, col_pct: u16) -> Rect {
+    grid(area, col_pct, 38).tabs
 }
 
 /// The outer agent box when shown, from the full frame area. Main uses the
 /// same function to size the pty before drawing, so the terminal and its
 /// box never disagree by a row.
-pub fn agent_box(area: Rect) -> Rect {
-    let right = right_column(area);
-    let right_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(right);
-    right_rows[1]
+pub fn agent_box(area: Rect, col_pct: u16, row_pct: u16) -> Rect {
+    grid(area, col_pct, row_pct).agent
 }
 
 pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
@@ -147,66 +232,32 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
         .borders(Borders::ALL)
         .title(" gtasks ")
         .border_style(theme::border());
-    let inner = outer.inner(frame.area());
     frame.render_widget(outer, frame.area());
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner);
-
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(rows[0]);
+    // One cross for every box: the same grid feeds draw, pty sizing and
+    // the mouse, so a divider grab and a box edge can never disagree.
+    let g = grid(frame.area(), app.col_pct, app.row_pct);
 
     // Left column: repos on top, issues/PRs below. The filter follows the
     // repos cursor, so moving above re-lists below live.
-    let left_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(columns[0]);
     let (repos_widget, mut repos_state) = repos_list(app, view);
-    frame.render_stateful_widget(repos_widget, left_rows[0], &mut repos_state);
+    frame.render_stateful_widget(repos_widget, g.repos, &mut repos_state);
     let (issues_widget, mut issues_state) = issues_list(app, view);
-    frame.render_stateful_widget(issues_widget, left_rows[1], &mut issues_state);
+    frame.render_stateful_widget(issues_widget, g.list, &mut issues_state);
 
     // Right column: tabs + detail on top, agent/worktree at the bottom —
     // but only while an agent is being arranged or is running, or while the
     // pane has focus (so `w`/`Tab` still reach the instructions when idle).
     // Idle and unfocused screens give the whole column to the detail.
-    // Geometry comes from `right_column`/`tabs_row`, the same functions the
-    // mouse click mapping uses.
-    let right = right_column(frame.area());
-    let tabs = tabs_row(frame.area());
-    let detail_below_tabs = Rect::new(
-        right.x,
-        tabs.y.saturating_add(1),
-        right.width,
-        right.height.saturating_sub(1),
-    );
     if app.agent_active() || app.pane == Pane::Agent {
-        let right_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-            .split(right);
         // The tabs are one line, not a box: at 80x12 every row counts, and a
         // bordered strip would eat the detail it labels.
-        frame.render_widget(tabs_bar(app, view), tabs);
-        let detail_area = Rect::new(
-            right.x,
-            tabs.y.saturating_add(1),
-            right.width,
-            right_rows[0].height.saturating_sub(1),
-        );
-        frame.render_widget(detail(app, view, detail_area.width), detail_area);
-        frame.render_widget(agent_panel(app, view, right_rows[1].width), right_rows[1]);
+        frame.render_widget(tabs_bar(app, view), g.tabs);
+        frame.render_widget(detail(app, view, g.detail.width), g.detail);
+        frame.render_widget(agent_panel(app, view, g.agent.width), g.agent);
     } else {
-        frame.render_widget(tabs_bar(app, view), tabs);
-        frame.render_widget(
-            detail(app, view, detail_below_tabs.width),
-            detail_below_tabs,
-        );
+        frame.render_widget(tabs_bar(app, view), g.tabs);
+        frame.render_widget(detail(app, view, g.detail_full.width), g.detail_full);
     }
 
     // Two panels, so the status cannot be pushed off the right edge by the
@@ -217,11 +268,11 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
             let bottom = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-                .split(rows[1]);
+                .split(g.status);
             frame.render_widget(legend(app), bottom[0]);
             frame.render_widget(status_line(&status), bottom[1]);
         }
-        None => frame.render_widget(legend(app), rows[1]),
+        None => frame.render_widget(legend(app), g.status),
     }
 
     if app.show_help {
@@ -559,7 +610,7 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
 /// strip map to `None` — a click between tabs switches nothing.
 pub fn tab_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
     use unicode_width::UnicodeWidthStr;
-    let row = tabs_row(area);
+    let row = grid(area, app.col_pct, app.row_pct).tabs;
     if y != row.y || x < row.x {
         return None;
     }
