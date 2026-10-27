@@ -14,6 +14,48 @@ use crate::binaries::Binaries;
 use crate::gh::{self, Argv, Caps, CheckedArgv, gh};
 use crate::model::{Item, ItemKind};
 
+/// The repos behind the `R` menu, re-read from GitHub when the menu opens:
+/// repos created outside the app become pickable without a restart. One
+/// `gh repo list`, parsed strictly — invalid slugs are skipped, never
+/// trusted. A capped (partial) payload is refused, like every other fetch.
+pub fn fetch_repo_list(binaries: &Binaries, timeout: Duration) -> Result<Vec<RepoSlug>, String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    let argv = gh(
+        binaries,
+        &cwd,
+        vec![
+            "repo".into(),
+            "list".into(),
+            "--limit".into(),
+            "100".into(),
+            "--json".into(),
+            "nameWithOwner".into(),
+        ],
+    );
+    let checked = CheckedArgv::from_checked(argv);
+    let output = gh::run_checked(&checked, timeout).map_err(|err| format!("gh failed: {err:#}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("{}: {}", output.status, stderr.trim()));
+    }
+    if output.truncated {
+        return Err("output capped, refusing partial".to_string());
+    }
+    Ok(parse_repo_list(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Parse `gh repo list --json nameWithOwner`: an array of
+/// `{"nameWithOwner": "owner/repo"}`. A wrong-typed entry is that entry's
+/// failure, not the list's: the rest still parses.
+fn parse_repo_list(text: &str) -> Vec<RepoSlug> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(text).unwrap_or_default();
+    entries
+        .iter()
+        .filter_map(|entry| entry.get("nameWithOwner")?.as_str())
+        .filter_map(|slug| RepoSlug::parse(slug).ok())
+        .collect()
+}
+
 /// How many items to ask per repo list: the gateway drops calls that run
 /// past ~10 s, and past 30 the limit buys timeouts instead of items.
 pub const DEFAULT_LIMIT: usize = 30;
@@ -371,4 +413,24 @@ where
         }
     }
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_repo_list;
+
+    #[test]
+    fn repo_list_parses_slugs_and_skips_garbage() {
+        let slugs = parse_repo_list(
+            r#"[{"nameWithOwner":"me/a"},{"nameWithOwner":"me/b"},{"nameWithOwner":"nope"},{"nope":1}]"#,
+        );
+        let names: Vec<&str> = slugs.iter().map(|slug| slug.as_str()).collect();
+        assert_eq!(names, vec!["me/a", "me/b"]);
+    }
+
+    #[test]
+    fn repo_list_refuses_non_arrays() {
+        assert!(parse_repo_list("{\"oops\": true}").is_empty());
+        assert!(parse_repo_list("not json").is_empty());
+    }
 }

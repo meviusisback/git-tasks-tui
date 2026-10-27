@@ -43,6 +43,65 @@ fn the_menu_opens_with_the_live_selection_marked() {
 }
 
 #[test]
+fn opening_the_menu_requests_a_repo_refresh() {
+    let mut app = app_with_three_repos();
+    open_menu(&mut app);
+    assert!(
+        app.repo_refresh_requested,
+        "R re-reads the repo list behind the menu"
+    );
+}
+
+fn slugs(names: &[&str]) -> Vec<gtasks::actions::RepoSlug> {
+    names
+        .iter()
+        .map(|s| gtasks::actions::RepoSlug::parse(s).expect("valid slug"))
+        .collect()
+}
+
+#[test]
+fn merging_a_fresh_list_appends_new_repos_in_order() {
+    let mut app = app_with_three_repos();
+    let fresh = app.merge_repo_list(slugs(&["me/b", "me/c", "me/d", "me/e"]));
+    assert_eq!(
+        fresh.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        vec!["me/d", "me/e"],
+        "known repos never reshuffle, new ones append in server order"
+    );
+    assert!(
+        app.repos_save_requested,
+        "new repos still need the config file"
+    );
+}
+
+#[test]
+fn merging_keeps_an_open_menu_on_its_marks() {
+    let mut app = app_with_three_repos();
+    open_menu(&mut app);
+    app.update(Msg::Key(Key::Char('n'))); // clear all
+    app.update(Msg::Key(Key::Char(' '))); // mark me/a only
+    assert_eq!(marked(&app), vec![0]);
+    app.merge_repo_list(slugs(&["me/a", "me/b", "me/c", "me/d"]));
+    assert_eq!(marked(&app), vec![0], "marks follow slugs, not rows");
+    match &app.modal {
+        Some(Modal::RepoMenu(menu)) => {
+            assert_eq!(menu.rows.len(), 4, "the new repo joins the rows");
+            assert_eq!(menu.rows[3].as_str(), "me/d");
+        }
+        _ => panic!("menu is still open"),
+    }
+}
+
+#[test]
+fn merging_without_news_says_so() {
+    let mut app = app_with_three_repos();
+    let fresh = app.merge_repo_list(slugs(&["me/a"]));
+    assert!(fresh.is_empty());
+    assert!(!app.repos_save_requested, "nothing to save");
+    assert_eq!(app.status, "the repo list is up to date");
+}
+
+#[test]
 fn space_toggles_and_the_cursor_moves() {
     let mut app = app_with_three_repos();
     open_menu(&mut app);

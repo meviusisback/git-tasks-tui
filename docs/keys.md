@@ -17,7 +17,7 @@ disagree, the handler is right and this file is a bug.
 | `t` / `T` | next / previous tab — the detail jumps to the tab's issue (even across a repo filter) and its agent comes back below; any scroll, filter or search hands the detail back to the list. Never touches the repo selection on the left |
 | `x` / `X` | close the active tab first, then the agent record |
 | `w` | focus the agent pane (worktree + agent instructions live there) |
-| `R` | repo selection menu: `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
+| `R` | repo selection menu (the rows re-read from GitHub on open, so new repos join without a restart): `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
 | `d` | diff of the selected PR in an overlay (`↑`/`↓` scroll, wheel scrolls, `Enter`/`Esc` closes): fetched once, then cached; first 200 lines with the total named when truncated |
 | `o` | open the selected item in the browser |

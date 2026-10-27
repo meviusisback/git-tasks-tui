@@ -424,6 +424,10 @@ pub struct App {
     pub failed: usize,
     /// Set by the key handler, consumed by the event loop that owns the thread.
     pub refresh_requested: bool,
+    /// `R` also re-reads the repo list from GitHub, behind the open menu.
+    pub repo_refresh_requested: bool,
+    /// A repo refresh found new repos: the config file still needs them.
+    pub repos_save_requested: bool,
     /// Resolved once at startup; `None` in tests that do not execute.
     pub binaries: Option<Binaries>,
     /// Limit for a write started from the UI.
@@ -616,6 +620,8 @@ impl Default for App {
             loading: false,
             failed: 0,
             refresh_requested: false,
+            repo_refresh_requested: false,
+            repos_save_requested: false,
             binaries: None,
             write_timeout: std::time::Duration::from_secs(30),
             pending: None,
@@ -931,12 +937,17 @@ impl App {
     }
 
     /// `R`: pick which repos the list shows. The menu starts from the live
-    /// list (everything, when the state file never picked a subset).
+    /// list (everything, when the state file never picked a subset) — and a
+    /// `gh repo list` runs behind it, so repos created outside the app join
+    /// the rows instead of needing a restart.
     pub fn open_repo_menu(&mut self) {
         if self.all_repos.is_empty() {
             self.status = "no repos configured".to_string();
             return;
         }
+        // The refresh runs behind the menu; the rows merge in on arrival.
+        self.repo_refresh_requested = true;
+        self.status = "updating the repo list…".to_string();
         // The live list, minus the "all repos" row, is the current pick.
         let live: Vec<&RepoSlug> = self
             .repos
@@ -1039,6 +1050,47 @@ impl App {
         self.set_lengths(self.repos.len(), self.visible_items().len());
         self.loading = true;
         self.refresh_requested = true;
+    }
+
+    /// Merge a fresh `gh repo list` into the menu rows: new slugs append in
+    /// server order, the configured order never reshuffles. An open repo
+    /// menu rebuilds around the same marked slugs (not rows), so a refresh
+    /// landing mid-pick never steals the cursor. Returns the new slugs —
+    /// the loop saves those to the config file.
+    pub fn merge_repo_list(&mut self, slugs: Vec<RepoSlug>) -> Vec<RepoSlug> {
+        let fresh: Vec<RepoSlug> = slugs
+            .into_iter()
+            .filter(|slug| !self.all_repos.contains(slug))
+            .collect();
+        if fresh.is_empty() {
+            self.status = "the repo list is up to date".to_string();
+            return fresh;
+        }
+        self.all_repos.extend(fresh.iter().cloned());
+        if let Some(Modal::RepoMenu(menu)) = self.modal.as_mut() {
+            let marked: Vec<RepoSlug> = menu
+                .marked
+                .iter()
+                .filter_map(|i| menu.rows.get(*i).cloned())
+                .collect();
+            menu.rows.clone_from(&self.all_repos);
+            menu.cursor = menu.cursor.min(menu.rows.len().saturating_sub(1));
+            menu.marked = self
+                .all_repos
+                .iter()
+                .enumerate()
+                .filter(|(_, slug)| marked.contains(slug))
+                .map(|(i, _)| i)
+                .collect();
+        }
+        self.repos_save_requested = true;
+        let n = fresh.len();
+        self.status = format!(
+            "{} new {} — pick it with Space",
+            n,
+            if n == 1 { "repo" } else { "repos" }
+        );
+        fresh
     }
 
     /// The item under the cursor, if any.

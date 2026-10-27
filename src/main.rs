@@ -700,6 +700,18 @@ fn spawn_fetch(
     rx
 }
 
+/// One `gh repo list` in the background, behind the open `R` menu.
+fn spawn_repo_list(
+    binaries: Binaries,
+    timeout: Duration,
+) -> Receiver<Result<Vec<RepoSlug>, String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(fetch::fetch_repo_list(&binaries, timeout));
+    });
+    rx
+}
+
 /// Start one body fetch in the background.
 fn spawn_detail(
     binaries: Binaries,
@@ -870,11 +882,12 @@ fn run_tui() -> anyhow::Result<()> {
     }
     let mut pending: Option<Receiver<FetchOutcome>> = Some(spawn_fetch(
         binaries.clone(),
-        App::fetch_scope(&all, &state.selected_repos),
+        App::fetch_scope(&app.all_repos, &state.selected_repos),
         limit,
         timeout,
         parallel,
     ));
+    let mut repo_pending: Option<Receiver<Result<Vec<RepoSlug>, String>>> = None;
     // Last completed-or-started refresh: the auto-refresh door below measures
     // `refresh_s` from here, so the first automatic re-read lands one full
     // interval after startup, never on top of the initial fetch.
@@ -1251,11 +1264,59 @@ fn run_tui() -> anyhow::Result<()> {
             app.refresh_requested = false;
             pending = Some(spawn_fetch(
                 binaries.clone(),
-                App::fetch_scope(&all, &state.selected_repos),
+                App::fetch_scope(&app.all_repos, &state.selected_repos),
                 limit,
                 timeout,
                 parallel,
             ));
+        }
+
+        // The `R` menu re-reads the repo list behind itself: never overlap
+        // the items fetch, never touch the rows before the merge below.
+        if app.repo_refresh_requested && repo_pending.is_none() && pending.is_none() {
+            app.repo_refresh_requested = false;
+            repo_pending = Some(spawn_repo_list(binaries.clone(), timeout));
+        }
+        if let Some(rx) = repo_pending.as_ref() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    repo_pending = None;
+                    match result {
+                        Ok(slugs) => {
+                            app.merge_repo_list(slugs);
+                            if app.repos_save_requested {
+                                app.repos_save_requested = false;
+                                if config_fallback {
+                                    app.status = "the config file is broken — new repos apply for this run only".to_string();
+                                } else if let Some(path) = config_path() {
+                                    config.repos = app
+                                        .all_repos
+                                        .iter()
+                                        .map(|slug| slug.as_str().to_string())
+                                        .collect();
+                                    match config.save(&path) {
+                                        Ok(()) => app.status.push_str(" · saved to the config"),
+                                        Err(err) => {
+                                            app.status =
+                                                format!("could not save the repo list: {err:#}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            app.status = format!("repo list not updated: {err}");
+                        }
+                    }
+                    needs_draw = true;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    repo_pending = None;
+                    app.status = "repo list not updated: the reader died".to_string();
+                    needs_draw = true;
+                }
+            }
         }
 
         // `g` (validated by the key handler) and `y` (agreed worktree
