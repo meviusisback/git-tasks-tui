@@ -35,6 +35,9 @@ pub struct ViewModel {
     /// Last parsed screen of the embedded agent, row by row. Empty while
     /// idle: the panel is hidden then, so there is nothing to show.
     pub agent_screen: crate::embedded::AgentScreen,
+    /// The open trees behind the shown issue/PR, if any: branch, path, who
+    /// ran there last, live now or not. Rendered as a WORKTREES section.
+    pub trees: Vec<crate::app::ItemTree>,
 }
 
 /// The number colour by kind: green PRs, yellow issues. Only the number —
@@ -375,12 +378,26 @@ pub fn view_for(app: &App) -> ViewModel {
         .iter()
         .map(|item| Some(item.kind))
         .collect();
+    // The open trees behind the shown issue/PR: its head branch, or the
+    // fresh branch issues grow (`issue-N`), so the work is visible where
+    // the issue is read.
+    let trees = app
+        .effective_item()
+        .map(|item| {
+            let branch = item
+                .head_ref_name
+                .clone()
+                .unwrap_or_else(|| format!("issue-{}", item.number));
+            app.item_trees(&item.repo, &branch)
+        })
+        .unwrap_or_default();
     ViewModel {
         repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
         item_worktrees,
         item_kinds,
         detail,
+        trees,
         tabs: app.tab_labels(),
         active_tab: app.active_tab,
         agent: app.agent_panel_text(),
@@ -844,6 +861,38 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         ]));
     }
     lines.push(Line::from(""));
+    if !view.trees.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "WORKTREES",
+            Style::default()
+                .fg(theme::FOCUSED)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for tree in &view.trees {
+            let mut head = vec![Span::styled(
+                tree.branch.clone(),
+                theme::overlay_text().add_modifier(Modifier::BOLD),
+            )];
+            match &tree.agent {
+                Some(agent) => {
+                    head.push(Span::styled(format!(" · {agent}"), theme::overlay_text()))
+                }
+                None => head.push(Span::styled(
+                    " · no agent yet",
+                    Style::default().fg(theme::SUBTEXT),
+                )),
+            }
+            if tree.live {
+                head.push(Span::styled(" · running", Style::default().fg(theme::OK)));
+            }
+            lines.push(Line::from(head));
+            lines.push(Line::from(Span::styled(
+                format!("  {}", tree.path.display()),
+                Style::default().fg(theme::SUBTEXT),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
     lines.push(Line::from(Span::styled(
         "DESCRIPTION",
         Style::default()

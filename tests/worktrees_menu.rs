@@ -462,6 +462,78 @@ fn an_unknown_recorded_agent_chooses_as_usual() {
 }
 
 #[test]
+fn the_detail_names_the_open_trees_and_who_ran_there() {
+    use gtasks::agent::{AgentChoice, AgentId, AgentPlan, AgentRecord, AgentStatus};
+    use gtasks::ui::{draw, view_for};
+    use ratatui::{Terminal, backend::TestBackend};
+    let (mut app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    let path = plant_worktree(&root, "fix-foo");
+    let plan = AgentPlan {
+        repo: "o/r".to_string(),
+        number: 7,
+        url: "https://github.com/o/r/pull/7".to_string(),
+        branch: "fix-foo".to_string(),
+        profile: "default".to_string(),
+        agent: AgentChoice {
+            id: AgentId::Hermes,
+            program: PathBuf::from("/bin/hermes"),
+        },
+        clone: tmp.path().join("r"),
+    };
+    app.remember_worktree_agent(&plan, &path);
+    let view = view_for(&app);
+    assert_eq!(view.trees.len(), 1, "the PR's tree is listed");
+    assert_eq!(view.trees[0].branch, "fix-foo");
+    assert_eq!(view.trees[0].agent.as_deref(), Some("hermes"));
+    assert!(!view.trees[0].live, "nothing runs yet");
+
+    let render = |app: &App, view: &gtasks::ui::ViewModel| -> String {
+        let backend = TestBackend::new(200, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, app, view)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut screen = String::new();
+        for y in 0..30 {
+            for x in 0..200 {
+                screen.push_str(buffer[(x, y)].symbol());
+            }
+            screen.push('\n');
+        }
+        screen
+    };
+    let screen = render(&app, &view);
+    assert!(screen.contains("WORKTREES"), "the section shows: {screen}");
+    assert!(screen.contains("fix-foo"), "the branch shows: {screen}");
+    assert!(screen.contains("hermes"), "who ran shows: {screen}");
+
+    // A live session in that tree marks it running.
+    app.tab_agents.insert(
+        ("o/r".to_string(), 7),
+        gtasks::app::TabAgent {
+            running: true,
+            record: Some(AgentRecord {
+                repo: "o/r".to_string(),
+                number: 7,
+                profile: "default".to_string(),
+                agent: "hermes".to_string(),
+                worktree: path.clone(),
+                seed_lines: 1,
+                status: AgentStatus::Running,
+            }),
+            ..Default::default()
+        },
+    );
+    let view = view_for(&app);
+    assert!(view.trees[0].live, "the running tree is marked");
+    let screen = render(&app, &view);
+    assert!(
+        screen.contains("running"),
+        "the live tree is marked: {screen}"
+    );
+}
+
+#[test]
 fn clicking_a_tab_opens_it_clicking_between_does_not() {
     use gtasks::ui::{tab_at, tabs_row};
     let (mut app, _tmp) = pr_app();

@@ -40,6 +40,7 @@ fn sample() -> (App, ViewModel) {
         item_kinds: vec![None, None],
         item_worktrees: vec![false, false],
         detail: "Body line one\nBody line two".into(),
+        trees: Vec::new(),
         tabs: Vec::new(),
         active_tab: None,
         agent: "g create worktree + launch agent".into(),

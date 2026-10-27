@@ -538,6 +538,16 @@ pub enum DragLine {
     Rows,
 }
 
+/// One open worktree behind an issue/PR, for the detail box: where the
+/// work lives, who ran an agent there last, and whether one is live now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemTree {
+    pub branch: String,
+    pub path: std::path::PathBuf,
+    pub agent: Option<String>,
+    pub live: bool,
+}
+
 /// One tab's agent side: the screen the box renders, whether its session
 /// is alive, the finished run (the card stays after the exit), what the
 /// agent works on (shown in the detail while nothing is selected), and
@@ -2302,6 +2312,47 @@ impl App {
             return false;
         };
         std::fs::symlink_metadata(target.join(".git")).is_ok()
+    }
+
+    /// The repo's open trees for one issue/PR: branch, path, who ran an
+    /// agent there last and whether one is live inside right now. For the
+    /// detail box, so the work behind an issue is visible where it is read.
+    pub fn item_trees(&self, repo: &str, branch: &str) -> Vec<ItemTree> {
+        let (Some(root), Ok(slug), Ok(want)) = (
+            self.worktree_root.as_deref(),
+            crate::actions::RepoSlug::parse(repo),
+            crate::worktree::BranchName::parse(branch),
+        ) else {
+            return Vec::new();
+        };
+        let mut out: Vec<ItemTree> = crate::worktree::list_worktrees(root, &slug)
+            .into_iter()
+            .filter_map(|path| {
+                let found = crate::worktree::worktree_branch(&path)?;
+                (found == want).then_some((found, path))
+            })
+            .map(|(found, path)| {
+                let agent = self
+                    .last_agents
+                    .get(&path.display().to_string())
+                    .map(|last| last.agent.clone());
+                let live = self.tab_agents.values().any(|tab| {
+                    tab.running
+                        && tab
+                            .record
+                            .as_ref()
+                            .is_some_and(|record| record.worktree == path)
+                });
+                ItemTree {
+                    branch: found.as_str().to_string(),
+                    path,
+                    agent,
+                    live,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.branch.cmp(&b.branch).then(a.path.cmp(&b.path)));
+        out
     }
 
     /// The record card shows for the active tab when it is that tab's record
