@@ -125,7 +125,7 @@ fn missing_clone_offers_to_clone_first() {
         app.modal
     );
     match &app.pending {
-        Some(Pending::Clone { repo, path }) => {
+        Some(Pending::Clone { repo, path, .. }) => {
             assert_eq!(repo, "o/r");
             assert_eq!(*path, tmp.path().join("r"));
         }
@@ -134,6 +134,62 @@ fn missing_clone_offers_to_clone_first() {
     // `y` hands the agreed clone to the loop; nothing runs synchronously.
     app.update(Msg::Key(Key::Char('y')));
     assert!(app.clone_go.is_some(), "the loop owns the clone now");
+}
+
+#[test]
+fn g_without_a_clone_offers_to_clone_then_continues() {
+    use gtasks::app::{Modal, Pending};
+    use gtasks::model::{Item, ItemKind};
+    // usage-stats has no local clone here: `g` asks to clone first,
+    // then continues into the agent menu instead of erroring.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = App {
+        clone_roots: vec![tmp.path().to_path_buf()],
+        ..App::default()
+    };
+    app.set_repos(vec![slug("me/usage")]);
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![Item {
+            number: 4,
+            title: "t".to_string(),
+            state: "OPEN".into(),
+            is_draft: None,
+            author: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            updated_at: "2026-10-20T10:00:00Z".into(),
+            created_at: String::new(),
+            url: "https://github.com/me/usage/issues/4".to_string(),
+            head_ref_name: None,
+            base_ref_name: None,
+            review_decision: None,
+            mergeable: None,
+            status_check_rollup: Vec::new(),
+            closing_issues_references: Vec::new(),
+            repo: "me/usage".to_string(),
+            kind: ItemKind::Issue,
+        }],
+        failures: Vec::new(),
+    });
+    app.update(Msg::Key(Key::Char('g')));
+    let Some(Modal::Confirm(question)) = app.modal.as_ref() else {
+        panic!("g offers the clone, got {:?}", app.modal);
+    };
+    assert!(
+        question.contains("clone it into"),
+        "not an error: {question}"
+    );
+    assert!(
+        matches!(
+            app.pending,
+            Some(Pending::Clone {
+                then: gtasks::app::CloneThen::AgentMenu,
+                ..
+            })
+        ),
+        "the loop continues into the agent menu: {:?}",
+        app.pending
+    );
 }
 
 #[test]

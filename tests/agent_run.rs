@@ -286,7 +286,7 @@ fn g_without_clone_root_names_the_missing_config() {
     );
     assert_eq!(
         app.status,
-        "no clone_root configured — agents need local clones"
+        "no local clone and no clone_roots configured — set one first"
     );
 }
 

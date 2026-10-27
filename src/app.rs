@@ -151,6 +151,9 @@ pub enum Pending {
     Clone {
         repo: String,
         path: std::path::PathBuf,
+        /// Where to continue when the clone lands: the repo tree flow, or
+        /// the agent menu the user asked for.
+        then: CloneThen,
     },
     /// `Enter` on a repo with no issues or PRs, confirmed with `y`: open the
     /// new-branch flow for that repo instead of an empty list.
@@ -287,6 +290,14 @@ pub struct WorktreeMenu {
     pub plan: AgentPlan,
     pub rows: Vec<crate::worktree::WorktreeRow>,
     pub cursor: usize,
+}
+
+/// Where a background clone continues when it lands: the repo tree flow
+/// (`W` grows `<repo>-dev`), or the agent menu the user asked for (`g`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloneThen {
+    GrowTree,
+    AgentMenu,
 }
 
 /// What the name being typed is for: a fresh worktree (agent + plan wait
@@ -519,9 +530,10 @@ pub struct App {
     /// merged PR's local trees plus its head branch.
     pub cleanup_go: Option<crate::worktree::CleanupOrder>,
     /// Set by `y` on the clone question, consumed by the loop: the repo plus
-    /// the directory the user agreed to clone it into. The loop clones in a
-    /// thread (network can take minutes) and continues the W flow when done.
-    pub clone_go: Option<(String, std::path::PathBuf)>,
+    /// the directory the user agreed to clone it into, plus where to
+    /// continue when it lands. The loop clones in a thread (network can
+    /// take minutes) and continues the flow that asked when done.
+    pub clone_go: Option<(String, std::path::PathBuf, CloneThen)>,
     /// Where worktrees live (configured root, or the default). The list
     /// icons and the worktree picker read it; `None` (unresolvable home)
     /// means no icons, and the picker explains instead of guessing.
@@ -1914,6 +1926,12 @@ impl App {
             self.status = "an agent is already running in this tab".to_string();
             return;
         }
+        // No local clone: offer to clone it, then continue here — the same
+        // question `W` asks, asked up front instead of erroring.
+        if crate::agent::find_clone(&self.clone_roots, &item.repo).is_err() {
+            self.offer_clone(&item.repo, CloneThen::AgentMenu);
+            return;
+        }
         let hermes = self.default_hermes();
         match plan_agent(
             &item.repo,
@@ -2058,6 +2076,35 @@ impl App {
         self.open_repo_worktree_for(slug.as_str());
     }
 
+    /// No local clone: offer to clone it, then continue (`then`) — the repo
+    /// tree flow, or the agent menu the user asked for. One question, one
+    /// background clone, shared by both flows.
+    fn offer_clone(&mut self, repo: &str, then: CloneThen) {
+        let Some(root) = self.clone_roots.first().cloned() else {
+            self.status =
+                "no local clone and no clone_roots configured — set one first".to_string();
+            return;
+        };
+        let name = repo.split('/').next_back().unwrap_or(repo);
+        let path = root.join(name);
+        if path.exists() {
+            self.status = format!(
+                "no local clone for {repo} ({} exists but has no .git) — clone it by hand, then try again",
+                path.display()
+            );
+            return;
+        }
+        self.modal = Some(Modal::Confirm(format!(
+            "no local clone for {repo} — clone it into {}?",
+            path.display()
+        )));
+        self.pending = Some(Pending::Clone {
+            repo: repo.to_string(),
+            path,
+            then,
+        });
+    }
+
     /// The same flow for a named repo: used by the cursor above, by `W` on
     /// an empty list filtered to one repo, and by the empty-repo suggestion.
     /// Without a local clone there is nothing to branch from, so instead of
@@ -2075,28 +2122,7 @@ impl App {
         let clone = match crate::agent::find_clone(&self.clone_roots, repo) {
             Ok(clone) => clone,
             Err(_) => {
-                let Some(root) = self.clone_roots.first().cloned() else {
-                    self.status =
-                        "no local clone and no clone_roots configured — set one first".to_string();
-                    return;
-                };
-                let name = repo.split('/').next_back().unwrap_or(repo);
-                let path = root.join(name);
-                if path.exists() {
-                    self.status = format!(
-                        "no local clone for {repo} ({} exists but has no .git) — clone it by hand, then press W again",
-                        path.display()
-                    );
-                    return;
-                }
-                self.modal = Some(Modal::Confirm(format!(
-                    "no local clone for {repo} — clone it into {}?",
-                    path.display()
-                )));
-                self.pending = Some(Pending::Clone {
-                    repo: repo.to_string(),
-                    path,
-                });
+                self.offer_clone(repo, CloneThen::GrowTree);
                 return;
             }
         };
@@ -2811,9 +2837,10 @@ impl App {
                         }
                         // A clone is a write too (network, minutes): `y`
                         // moves the agreed repo+directory there; the loop
-                        // clones in a thread and continues the W flow.
-                        Some(Pending::Clone { repo, path }) => {
-                            self.clone_go = Some((repo, path));
+                        // clones in a thread and continues the flow that
+                        // asked (`then`) when it lands.
+                        Some(Pending::Clone { repo, path, then }) => {
+                            self.clone_go = Some((repo, path, then));
                         }
                         // A fresh branch for an empty repo: no write yet, so
                         // `y` opens the flow directly — the creation question

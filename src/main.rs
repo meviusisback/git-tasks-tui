@@ -882,7 +882,13 @@ fn run_tui() -> anyhow::Result<()> {
     let mut pending_detail: Option<PendingDetail> = None;
     let mut pending_diff: Option<PendingDiff> = None;
     // A repo clone in flight, if the user agreed to one: repo plus result.
-    let mut pending_clone: Option<Receiver<(String, anyhow::Result<std::path::PathBuf>)>> = None;
+    let mut pending_clone: Option<
+        Receiver<(
+            String,
+            anyhow::Result<std::path::PathBuf>,
+            gtasks::app::CloneThen,
+        )>,
+    > = None;
     // Live agent sessions, one per tab: the loop owns the children, the
     // App only carries what the screen needs. Switching tabs switches
     // boxes; background tabs keep running.
@@ -1322,34 +1328,42 @@ fn run_tui() -> anyhow::Result<()> {
             cleanup_after_merge(&mut app, &binaries, order, &sessions);
         }
         // A clone runs in a thread — network can take minutes, and the UI
-        // must stay alive meanwhile. When it lands, the W flow continues
-        // where it asked: the clone is there now, so the name prompt opens.
-        if let Some((repo, path)) = app.clone_go.take() {
+        // must stay alive meanwhile. When it lands, the flow that asked
+        // continues: the clone is there now, so the tree grows or the
+        // agent menu opens.
+        if let Some((repo, path, then)) = app.clone_go.take() {
             let (tx, rx) = mpsc::channel();
             let binaries = binaries.clone();
             std::thread::spawn(move || {
                 let slug = match gtasks::actions::RepoSlug::parse(&repo) {
                     Ok(slug) => slug,
                     Err(_) => {
-                        let _ = tx.send((repo, Err(anyhow::anyhow!("invalid repo slug"))));
+                        let _ = tx.send((repo, Err(anyhow::anyhow!("invalid repo slug")), then));
                         return;
                     }
                 };
                 let done = gtasks::worktree::clone_repo(&binaries, &path, &slug).map(|_| path);
-                let _ = tx.send((repo, done));
+                let _ = tx.send((repo, done, then));
             });
             pending_clone = Some(rx);
         }
         // Take a finished clone, if any.
         if let Some(rx) = &pending_clone {
             match rx.try_recv() {
-                Ok((repo, Ok(path))) => {
+                Ok((repo, Ok(path), then)) => {
                     pending_clone = None;
                     needs_draw = true;
-                    app.status = format!("cloned into {} — growing the tree", path.display());
-                    app.open_repo_worktree_for(&repo);
+                    app.status = format!("cloned into {} — continuing", path.display());
+                    match then {
+                        gtasks::app::CloneThen::GrowTree => {
+                            app.open_repo_worktree_for(&repo);
+                        }
+                        gtasks::app::CloneThen::AgentMenu => {
+                            app.request_agent();
+                        }
+                    }
                 }
-                Ok((repo, Err(err))) => {
+                Ok((repo, Err(err), _)) => {
                     pending_clone = None;
                     needs_draw = true;
                     app.status = format!("cannot clone {repo}: {err:#}");
