@@ -1,7 +1,8 @@
 //! The detail pane while an agent works a tree with no issue/PR under the
-//! cursor: repo, branch and path instead of a blank pane.
+//! cursor: repo, branch and path instead of a blank pane. The context lives
+//! on the active tab's agent side.
 
-use gtasks::app::{AgentContext, App};
+use gtasks::app::{AgentContext, App, Tab, TabAgent};
 use gtasks::ui::view_for;
 
 fn render(app: &App, view: &gtasks::ui::ViewModel) -> String {
@@ -24,18 +25,32 @@ fn render(app: &App, view: &gtasks::ui::ViewModel) -> String {
 
 #[test]
 fn detail_shows_the_agent_tree_when_no_item_is_selected() {
-    let app = App {
+    let mut app = App {
         items: Vec::new(),
-        agent_running: true,
-        agent_context: Some(AgentContext {
-            repo: "meviusisback/omarchy-ente-auth-dropdown".to_string(),
-            branch: "omarchy-ente-auth-dropdown-dev".to_string(),
-            path: std::path::PathBuf::from(
-                "/home/user/worktrees/meviusisback/omarchy-ente-auth-dropdown/omarchy--ente-auth-dropdown--dev",
-            ),
-        }),
         ..App::default()
     };
+    app.tabs.push(Tab {
+        repo: "meviusisback/omarchy-ente-auth-dropdown".to_string(),
+        number: 0,
+    });
+    app.active_tab = Some(0);
+    app.tab_agents.insert(
+        (
+            "meviusisback/omarchy-ente-auth-dropdown".to_string(),
+            0,
+        ),
+        TabAgent {
+            running: true,
+            context: Some(AgentContext {
+                repo: "meviusisback/omarchy-ente-auth-dropdown".to_string(),
+                branch: "omarchy-ente-auth-dropdown-dev".to_string(),
+                path: std::path::PathBuf::from(
+                    "/home/user/worktrees/meviusisback/omarchy-ente-auth-dropdown/omarchy--ente-auth-dropdown--dev",
+                ),
+            }),
+            ..Default::default()
+        },
+    );
     let view = view_for(&app);
     let screen = render(&app, &view);
     assert!(

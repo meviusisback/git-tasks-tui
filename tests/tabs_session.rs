@@ -5,7 +5,9 @@
 //! The session (`state.json`) keeps pane, cursors, filter, query and tabs so
 //! a temporary exit resumes where the user left off.
 
-use gtasks::app::{App, Key, Msg, Pane, Tab};
+use std::collections::HashMap;
+
+use gtasks::app::{App, Key, Msg, Pane, Tab, TabAgent};
 use gtasks::model::{Item, ItemKind};
 
 fn item(repo: &str, number: u64, title: &str) -> Item {
@@ -129,25 +131,33 @@ fn x_closes_the_tab_first_then_the_record() {
     press(&mut app, Key::Char('x'));
     assert!(app.tabs.is_empty(), "x closes the tab first");
     assert_eq!(app.active_tab, None);
-    // Without tabs, x forgets the agent record exactly as before.
-    app.agent_record = Some(AgentRecord {
-        repo: "me/a".to_string(),
-        number: 1,
-        profile: "default".to_string(),
-        agent: "hermes".to_string(),
-        worktree: std::path::PathBuf::from("/tmp/wt"),
-        seed_lines: 1,
-        status: AgentStatus::Finished {
-            outcome: AgentOutcome::Exit(0),
-            secs: 1,
+    // A record filed under the open tab shows, then x closes the tab
+    // (not the record) first.
+    press(&mut app, Key::Enter);
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            record: Some(AgentRecord {
+                repo: "me/a".to_string(),
+                number: 1,
+                profile: "default".to_string(),
+                agent: "hermes".to_string(),
+                worktree: std::path::PathBuf::from("/tmp/wt"),
+                seed_lines: 1,
+                status: AgentStatus::Finished {
+                    outcome: AgentOutcome::Exit(0),
+                    secs: 1,
+                },
+            }),
+            ..Default::default()
         },
-    });
+    );
     assert!(app.visible_record().is_some());
     press(&mut app, Key::Char('x'));
-    assert!(
-        app.agent_record.is_none(),
-        "x closes the record when no tab"
-    );
+    assert!(app.tabs.is_empty(), "x closes the tab first");
+    assert!(app.visible_record().is_none(), "the tab took its card");
+    press(&mut app, Key::Char('x'));
+    assert_eq!(app.status, "no agent record to close");
 }
 
 #[test]
@@ -297,28 +307,41 @@ fn the_agent_pane_shows_only_for_work_in_progress() {
     use gtasks::agent::{AgentOutcome, AgentRecord, AgentStatus};
     let mut app = app_with_items();
     assert!(!app.agent_active(), "idle: no pane");
-    app.agent_record = Some(AgentRecord {
-        repo: "me/a".to_string(),
-        number: 1,
-        profile: "default".to_string(),
-        agent: "hermes".to_string(),
-        worktree: std::path::PathBuf::from("/tmp/wt"),
-        seed_lines: 1,
-        status: AgentStatus::Running,
-    });
-    assert!(app.agent_active(), "running: pane shows");
-    app.agent_record = Some(AgentRecord {
-        repo: "me/a".to_string(),
-        number: 1,
-        profile: "default".to_string(),
-        agent: "hermes".to_string(),
-        worktree: std::path::PathBuf::from("/tmp/wt"),
-        seed_lines: 1,
-        status: AgentStatus::Finished {
-            outcome: AgentOutcome::Exit(0),
-            secs: 3,
+    app.tab_agents = HashMap::from([(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            record: Some(AgentRecord {
+                repo: "me/a".to_string(),
+                number: 1,
+                profile: "default".to_string(),
+                agent: "hermes".to_string(),
+                worktree: std::path::PathBuf::from("/tmp/wt"),
+                seed_lines: 1,
+                status: AgentStatus::Running,
+            }),
+            ..Default::default()
         },
-    });
+    )]);
+    assert!(app.agent_active(), "running: pane shows");
+    app.tab_agents = HashMap::from([(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            record: Some(AgentRecord {
+                repo: "me/a".to_string(),
+                number: 1,
+                profile: "default".to_string(),
+                agent: "hermes".to_string(),
+                worktree: std::path::PathBuf::from("/tmp/wt"),
+                seed_lines: 1,
+                status: AgentStatus::Finished {
+                    outcome: AgentOutcome::Exit(0),
+                    secs: 3,
+                },
+            }),
+            ..Default::default()
+        },
+    )]);
     assert!(
         !app.agent_active(),
         "finished: the card stays in the detail, the pane hides"
@@ -398,24 +421,31 @@ fn the_live_agent_screen_reaches_the_box() {
     use gtasks::ui::{draw, view_for};
     use ratatui::{Terminal, backend::TestBackend};
     let mut app = app_with_items();
+    press(&mut app, Key::Enter);
     app.pane = gtasks::app::Pane::Agent;
-    app.agent_running = true;
-    app.agent_screen = vec![vec![
-        AgentCell {
-            text: "$".to_string(),
-            fg: Palette::Default,
-            bg: Palette::Default,
-            bold: true,
-            inverse: false,
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            screen: vec![vec![
+                AgentCell {
+                    text: "$".to_string(),
+                    fg: Palette::Default,
+                    bg: Palette::Default,
+                    bold: true,
+                    inverse: false,
+                },
+                AgentCell {
+                    text: " hello-agent".to_string(),
+                    fg: Palette::Idx(2),
+                    bg: Palette::Default,
+                    bold: false,
+                    inverse: false,
+                },
+            ]],
+            ..Default::default()
         },
-        AgentCell {
-            text: " hello-agent".to_string(),
-            fg: Palette::Idx(2),
-            bg: Palette::Default,
-            bold: false,
-            inverse: false,
-        },
-    ]];
+    );
     let view = view_for(&app);
     let backend = TestBackend::new(200, 30);
     let mut terminal = Terminal::new(backend).unwrap();

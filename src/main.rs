@@ -6,6 +6,7 @@
 
 #![deny(clippy::print_stdout)]
 
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,12 +128,14 @@ fn start_agent(
     plan: AgentPlan,
     agreed: Option<PathBuf>,
     term_size: (u16, u16),
-    session: &mut Option<EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
 ) {
-    // One agent at a time: the box shows one session, so a second `g` while
-    // one runs is refused instead of orphaning the first.
-    if session.is_some() {
-        app.status = "an agent is already running".to_string();
+    // One agent per tab: the box shows one session, so a second launch on
+    // the same tab is refused instead of orphaning the first. Other tabs
+    // keep running untouched.
+    let key = App::tab_key(&plan.repo, plan.number);
+    if sessions.contains_key(&key) {
+        app.status = "an agent is already running in this tab".to_string();
         return;
     }
     let timeout = Duration::from_secs(config.timeout_s.max(1));
@@ -187,7 +190,7 @@ fn start_agent(
                     &plan,
                     &created.path,
                     term_size,
-                    session,
+                    sessions,
                     binaries,
                     timeout,
                 );
@@ -200,7 +203,7 @@ fn start_agent(
     }
     match agent::next_step(target) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, &plan, &path, term_size, session, binaries, timeout);
+            launch_agent(app, &plan, &path, term_size, sessions, binaries, timeout);
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -226,13 +229,14 @@ fn start_placed(
     plan: AgentPlan,
     path: PathBuf,
     term_size: (u16, u16),
-    session: &mut Option<EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
     binaries: &Binaries,
     timeout: Duration,
 ) {
-    // One agent at a time, same as every other launch.
-    if session.is_some() {
-        app.status = "an agent is already running".to_string();
+    // One agent per tab, same as every other launch.
+    let key = App::tab_key(&plan.repo, plan.number);
+    if sessions.contains_key(&key) {
+        app.status = "an agent is already running in this tab".to_string();
         return;
     }
     if !agent::placed_ok_in(&path, app.worktree_root.as_deref()) {
@@ -246,7 +250,7 @@ fn start_placed(
     }
     match agent::next_step(path) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, &plan, &path, term_size, session, binaries, timeout);
+            launch_agent(app, &plan, &path, term_size, sessions, binaries, timeout);
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -267,12 +271,9 @@ fn rename_worktree(
     app: &mut App,
     binaries: &Binaries,
     order: gtasks::worktree::WorktreeRename,
-    session: &Option<EmbeddedSession>,
+    sessions: &HashMap<(String, u64), EmbeddedSession>,
 ) {
-    if session
-        .as_ref()
-        .is_some_and(|s| s.worktree() == order.old_path)
-    {
+    if sessions.values().any(|s| s.worktree() == order.old_path) {
         app.status = "an agent is still running in that worktree".to_string();
         return;
     }
@@ -299,9 +300,11 @@ fn rename_worktree(
     let mv = gtasks::worktree::move_argv(binaries, &order.clone, &order.old_path, &order.new_path);
     match gtasks::worktree::run_mutation(&mv, std::time::Duration::from_secs(60)) {
         Ok(out) if out.status.success() => {
-            if let Some(record) = app.agent_record.as_mut() {
-                if record.worktree == order.old_path {
-                    record.worktree = order.new_path.clone();
+            for agent in app.tab_agents.values_mut() {
+                if let Some(record) = agent.record.as_mut() {
+                    if record.worktree == order.old_path {
+                        record.worktree = order.new_path.clone();
+                    }
                 }
             }
             app.status = format!("renamed {} to {}", order.old_branch, order.new_branch);
@@ -329,18 +332,22 @@ fn delete_worktree(
     app: &mut App,
     binaries: &Binaries,
     order: gtasks::worktree::WorktreeDelete,
-    session: &Option<EmbeddedSession>,
+    sessions: &HashMap<(String, u64), EmbeddedSession>,
 ) {
-    if session.as_ref().is_some_and(|s| s.worktree() == order.path) {
+    if sessions.values().any(|s| s.worktree() == order.path) {
         app.status = "an agent is still running in that worktree".to_string();
         return;
     }
     match gtasks::worktree::remove_tree(binaries, &order) {
         Ok(()) => {
-            if let Some(record) = app.agent_record.as_ref() {
-                if record.worktree == order.path {
-                    app.agent_record = None;
-                    app.agent_dismissed_for = None;
+            for agent in app.tab_agents.values_mut() {
+                if agent
+                    .record
+                    .as_ref()
+                    .is_some_and(|r| r.worktree == order.path)
+                {
+                    agent.record = None;
+                    agent.dismissed_for = None;
                 }
             }
             app.status = format!(
@@ -367,10 +374,11 @@ fn launch_agent(
     plan: &AgentPlan,
     path: &std::path::Path,
     term_size: (u16, u16),
-    session: &mut Option<EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
     binaries: &Binaries,
     timeout: Duration,
 ) {
+    let key = App::tab_key(&plan.repo, plan.number);
     // The tree may have drifted onto another branch since it was made
     // (renamed outside, checked out by hand): starting the agent there
     // works on the wrong code. Refuse a known mismatch with both names
@@ -458,9 +466,30 @@ fn launch_agent(
         &parent,
     ) {
         Ok(sess) => {
-            app.agent_running = true;
-            app.agent_screen = sess.snapshot();
-            app.agent_record = Some(gtasks::agent::AgentRecord {
+            // The agent lives in its item's tab: ensure the tab, show it,
+            // and file this session under it. Other tabs keep running.
+            if !app
+                .tabs
+                .iter()
+                .any(|tab| tab.repo == plan.repo && tab.number == plan.number)
+            {
+                app.tabs.push(gtasks::app::Tab {
+                    repo: plan.repo.clone(),
+                    number: plan.number,
+                });
+            }
+            if let Some(idx) = app
+                .tabs
+                .iter()
+                .position(|tab| tab.repo == plan.repo && tab.number == plan.number)
+            {
+                app.activate_tab(idx);
+            }
+            let screen = sess.snapshot();
+            let entry = app.tab_agents.entry(key.clone()).or_default();
+            entry.running = true;
+            entry.screen = screen;
+            entry.record = Some(gtasks::agent::AgentRecord {
                 repo: plan.repo.clone(),
                 number: plan.number,
                 profile: plan.profile.clone(),
@@ -469,12 +498,12 @@ fn launch_agent(
                 seed_lines: lines,
                 status: gtasks::agent::AgentStatus::Running,
             });
-            app.agent_dismissed_for = None;
+            entry.dismissed_for = None;
             app.pane = gtasks::app::Pane::Agent;
             // The detail pane shows where the agent works while no
             // issue/PR is selected; without it the right column above the
             // box goes blank on repos with no rows.
-            app.agent_context = Some(gtasks::app::AgentContext {
+            entry.context = Some(gtasks::app::AgentContext {
                 repo: plan.repo.clone(),
                 branch: plan.branch.clone(),
                 path: path.to_path_buf(),
@@ -482,9 +511,9 @@ fn launch_agent(
             // The prompt is typed, not sent: the agent opens ready, and
             // the user reviews the draft and presses Enter. The seed file
             // still travels to the record so the run is reproducible.
-            app.draft_text = Some(body);
+            entry.draft = Some(body);
             app.status = "agent ready — review the draft, edit it, Enter sends it".to_string();
-            *session = Some(sess);
+            sessions.insert(key, sess);
         }
         Err(err) => app.status = format!("cannot run the agent: {err:#}"),
     }
@@ -690,9 +719,10 @@ fn run_tui() -> anyhow::Result<()> {
     let mut pending_diff: Option<PendingDiff> = None;
     // A repo clone in flight, if the user agreed to one: repo plus result.
     let mut pending_clone: Option<Receiver<(String, anyhow::Result<std::path::PathBuf>)>> = None;
-    // The embedded agent, if one is running inside the box. Owned here, not
-    // in App: the loop polls it, routes keys to it and kills it on quit.
-    let mut embedded: Option<EmbeddedSession> = None;
+    // Live agent sessions, one per tab: the loop owns the children, the
+    // App only carries what the screen needs. Switching tabs switches
+    // boxes; background tabs keep running.
+    let mut sessions: HashMap<(String, u64), EmbeddedSession> = HashMap::new();
 
     while !app.quit && !TERMINATE.load(Ordering::SeqCst) {
         // Take a finished fetch, if any.
@@ -1057,7 +1087,7 @@ fn run_tui() -> anyhow::Result<()> {
                 plan,
                 None,
                 term_size,
-                &mut embedded,
+                &mut sessions,
             );
         }
         if let Some((plan, path)) = app.agent_go.take() {
@@ -1068,7 +1098,7 @@ fn run_tui() -> anyhow::Result<()> {
                 plan,
                 Some(path),
                 term_size,
-                &mut embedded,
+                &mut sessions,
             );
         }
         if let Some((plan, path)) = app.agent_place.take() {
@@ -1077,16 +1107,16 @@ fn run_tui() -> anyhow::Result<()> {
                 plan,
                 path,
                 term_size,
-                &mut embedded,
+                &mut sessions,
                 &binaries,
                 timeout,
             );
         }
         if let Some(order) = app.rename_go.take() {
-            rename_worktree(&mut app, &binaries, order, &embedded);
+            rename_worktree(&mut app, &binaries, order, &sessions);
         }
         if let Some(order) = app.delete_go.take() {
-            delete_worktree(&mut app, &binaries, order, &embedded);
+            delete_worktree(&mut app, &binaries, order, &sessions);
         }
         // A clone runs in a thread — network can take minutes, and the UI
         // must stay alive meanwhile. When it lands, the W flow continues
@@ -1127,55 +1157,100 @@ fn run_tui() -> anyhow::Result<()> {
             }
         }
 
-        // The embedded agent, if any: keep the pty sized to its box, feed
-        // fresh output into the screen, and finalize the record on exit.
-        if let Some(sess) = embedded.as_mut() {
-            let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
-            sess.resize(
-                outer.width.saturating_sub(2),
-                outer.height.saturating_sub(2),
-            );
+        // Every live session, every tick: background tabs keep streaming
+        // while another is on screen. Only the active tab's box is sized
+        // to the pty — a hidden box has no geometry to match.
+        let active_key = app.active_key();
+        let outer = ui::agent_box(Rect::new(0, 0, term_size.0, term_size.1));
+        let mut exited: Vec<((String, u64), String)> = Vec::new();
+        for (key, sess) in sessions.iter_mut() {
+            if Some(key) == active_key.as_ref() {
+                sess.resize(
+                    outer.width.saturating_sub(2),
+                    outer.height.saturating_sub(2),
+                );
+            }
             if sess.drain() {
-                app.agent_screen = sess.snapshot();
+                if let Some(agent) = app.tab_agents.get_mut(key) {
+                    agent.screen = sess.snapshot();
+                }
             }
             if let Some(record) = sess.poll_exit() {
-                let summary = record.status.summary();
-                let key = (record.repo.clone(), record.number);
-                app.agent_record = Some(record);
-                // The finish is announced in the status line; the detail
-                // returns at once instead of gluing the finished card to
-                // the item. A new run clears the dismissal at launch.
-                app.agent_dismissed_for = Some(key);
-                app.agent_running = false;
-                app.agent_screen = Vec::new();
-                app.agent_context = None;
+                exited.push((key.clone(), record.status.summary()));
+                if let Some(agent) = app.tab_agents.get_mut(key) {
+                    // The finish is announced in the status line; the detail
+                    // returns at once instead of gluing the finished card to
+                    // the item. A new run clears the dismissal at launch.
+                    agent.dismissed_for = Some((record.repo.clone(), record.number));
+                    agent.record = Some(record);
+                    agent.running = false;
+                    agent.screen = Vec::new();
+                    agent.context = None;
+                    agent.draft = None;
+                }
+            }
+        }
+        for (key, summary) in exited {
+            sessions.remove(&key);
+            if Some(&key) == active_key.as_ref() {
                 app.status = format!("agent finished: {summary}");
-                embedded = None;
+            }
+        }
+        // A tab closed under a live session: the agent dies with its box
+        // instead of working headless. The close message already said the
+        // tab is gone; nothing more needs announcing.
+        let live_keys: Vec<(String, u64)> = sessions.keys().cloned().collect();
+        for key in live_keys {
+            if !app
+                .tabs
+                .iter()
+                .any(|tab| (tab.repo.clone(), tab.number) == key)
+            {
+                if let Some(mut sess) = sessions.remove(&key) {
+                    sess.kill();
+                }
+                app.tab_agents.remove(&key);
             }
         }
 
-        // A fresh launch types its draft: 1KB per tick so a long seed never
-        // blocks the loop on a full pty. The agent boots while the first
-        // chunks queue up, then reads them as its input.
-        if let Some(mut text) = app.draft_text.take() {
-            if let Some(sess) = embedded.as_mut() {
-                // Byte chunks must end on a char boundary, or a multibyte
-                // character split across two ticks renders as mojibake.
-                let mut n = text.len().min(1024);
-                while !text.is_char_boundary(n) {
-                    n -= 1;
+        // Fresh launches type their drafts: 1KB per tick so a long seed
+        // never blocks the loop on a full pty. The agent boots while the
+        // first chunks queue up, then reads them as its input.
+        let draft_keys: Vec<(String, u64)> = app
+            .tab_agents
+            .iter()
+            .filter(|(_, agent)| agent.draft.is_some())
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in draft_keys {
+            let text = app
+                .tab_agents
+                .get_mut(&key)
+                .and_then(|agent| agent.draft.take());
+            if let Some(mut text) = text {
+                if let Some(sess) = sessions.get_mut(&key) {
+                    // Byte chunks must end on a char boundary, or a multibyte
+                    // character split across two ticks renders as mojibake.
+                    let mut n = text.len().min(1024);
+                    while !text.is_char_boundary(n) {
+                        n -= 1;
+                    }
+                    let rest = text.split_off(n);
+                    sess.write(text.as_bytes());
+                    if !rest.is_empty() {
+                        if let Some(agent) = app.tab_agents.get_mut(&key) {
+                            agent.draft = Some(rest);
+                        }
+                    }
+                } else {
+                    // No session to type into (a launch failed between setting
+                    // the draft and spawning): keep it. Dropping the user's
+                    // direction would be worse than retrying it on the next run,
+                    // which overwrites it anyway.
+                    if let Some(agent) = app.tab_agents.get_mut(&key) {
+                        agent.draft = Some(text);
+                    }
                 }
-                let rest = text.split_off(n);
-                sess.write(text.as_bytes());
-                if !rest.is_empty() {
-                    app.draft_text = Some(rest);
-                }
-            } else {
-                // No session to type into (a launch failed between setting
-                // the draft and spawning): keep it. Dropping the user's
-                // direction would be worse than retrying it on the next run,
-                // which overwrites it anyway.
-                app.draft_text = Some(text);
             }
         }
 
@@ -1186,7 +1261,7 @@ fn run_tui() -> anyhow::Result<()> {
         // choppy for streaming or repaint-style TUIs. While a session is
         // attached the loop wakes every 50ms instead; idle screens keep
         // the slow tick, so an open-but-quiet app does not spin.
-        let tick = if embedded.is_some() { 50 } else { 250 };
+        let tick = if sessions.is_empty() { 250 } else { 50 };
         if event::poll(Duration::from_millis(tick))? {
             match event::read()? {
                 Event::Key(key) => {
@@ -1207,15 +1282,19 @@ fn run_tui() -> anyhow::Result<()> {
                                 | Key::ShiftRight
                         ))
                     );
-                    let to_agent = embedded.is_some()
-                        && app.agent_running
-                        && app.pane == gtasks::app::Pane::Agent
-                        && !to_app;
+                    let active_key = app.active_key();
+                    let session_live = active_key.as_ref().is_some_and(|key| {
+                        sessions.contains_key(key)
+                            && app.tab_agents.get(key).is_some_and(|agent| agent.running)
+                    });
+                    let to_agent = session_live && app.pane == gtasks::app::Pane::Agent && !to_app;
                     if to_agent {
                         if let Some(Msg::Key(k)) = map_key(key) {
                             if let Some(bytes) = gtasks::embedded::key_to_pty(&k) {
-                                if let Some(sess) = embedded.as_mut() {
-                                    sess.write(&bytes);
+                                if let Some(skey) = active_key {
+                                    if let Some(sess) = sessions.get_mut(&skey) {
+                                        sess.write(&bytes);
+                                    }
                                 }
                             }
                         }
@@ -1255,19 +1334,29 @@ fn run_tui() -> anyhow::Result<()> {
                         let box_shown = app.agent_active() || app.pane == gtasks::app::Pane::Agent;
                         match me.kind {
                             MouseEventKind::ScrollUp if box_shown => {
-                                if let Some(sess) = embedded.as_mut() {
-                                    sess.scroll(3);
-                                    app.agent_screen = sess.snapshot();
-                                } else {
-                                    app.agent_scroll = app.agent_scroll.saturating_add(3);
+                                if let Some(key) = app.active_key() {
+                                    if let Some(sess) = sessions.get_mut(&key) {
+                                        sess.scroll(3);
+                                        let screen = sess.snapshot();
+                                        if let Some(agent) = app.tab_agents.get_mut(&key) {
+                                            agent.screen = screen;
+                                        }
+                                    } else if let Some(agent) = app.tab_agents.get_mut(&key) {
+                                        agent.scroll = agent.scroll.saturating_add(3);
+                                    }
                                 }
                             }
                             MouseEventKind::ScrollDown if box_shown => {
-                                if let Some(sess) = embedded.as_mut() {
-                                    sess.scroll(-3);
-                                    app.agent_screen = sess.snapshot();
-                                } else {
-                                    app.agent_scroll = app.agent_scroll.saturating_sub(3);
+                                if let Some(key) = app.active_key() {
+                                    if let Some(sess) = sessions.get_mut(&key) {
+                                        sess.scroll(-3);
+                                        let screen = sess.snapshot();
+                                        if let Some(agent) = app.tab_agents.get_mut(&key) {
+                                            agent.screen = screen;
+                                        }
+                                    } else if let Some(agent) = app.tab_agents.get_mut(&key) {
+                                        agent.scroll = agent.scroll.saturating_sub(3);
+                                    }
                                 }
                             }
                             _ => {}
@@ -1281,9 +1370,9 @@ fn run_tui() -> anyhow::Result<()> {
         }
     }
 
-    // Kill the embedded agent, if any: quitting must not leave an agent
-    // running without a box. The seed file is unlinked on drop either way.
-    if let Some(mut sess) = embedded.take() {
+    // Kill every live agent: quitting must not leave an agent running
+    // without a box. Seed files are unlinked on drop either way.
+    for (_, mut sess) in sessions {
         sess.kill();
     }
 

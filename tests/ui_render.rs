@@ -1,7 +1,7 @@
 //! Task 10 shell: two columns, legend line, `?` overlay. Assertions read the
 //! real `TestBackend` buffer; untrusted text is sanitised on the way in.
 
-use gtasks::app::{App, Key, Msg, Pane};
+use gtasks::app::{App, Key, Msg, Pane, Tab, TabAgent};
 use gtasks::theme;
 use gtasks::ui::{ViewModel, draw, view_for};
 use ratatui::Terminal;
@@ -453,6 +453,23 @@ fn the_action_menu_fits_at_80_columns() {
     }
 }
 
+/// A finished run filed under its tab: records live per tab, so the test
+/// plants the tab and the entry together.
+fn seed_tab_record(app: &mut App, record: gtasks::agent::AgentRecord) {
+    app.tabs.push(Tab {
+        repo: "o/r".to_string(),
+        number: 7,
+    });
+    app.active_tab = Some(0);
+    app.tab_agents.insert(
+        ("o/r".to_string(), 7),
+        TabAgent {
+            record: Some(record),
+            ..Default::default()
+        },
+    );
+}
+
 #[test]
 fn the_agent_record_shows_at_80_columns() {
     // The record card replaces the detail for its own item — finished and
@@ -486,18 +503,21 @@ fn the_agent_record_shows_at_80_columns() {
         repo: "o/r".to_string(),
         kind: ItemKind::Pr,
     }];
-    app.agent_record = Some(AgentRecord {
-        repo: "o/r".to_string(),
-        number: 7,
-        profile: "default".to_string(),
-        agent: "hermes".to_string(),
-        worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
-        seed_lines: 4,
-        status: AgentStatus::Finished {
-            outcome: AgentOutcome::Exit(0),
-            secs: 42,
+    seed_tab_record(
+        &mut app,
+        AgentRecord {
+            repo: "o/r".to_string(),
+            number: 7,
+            profile: "default".to_string(),
+            agent: "hermes".to_string(),
+            worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
+            seed_lines: 4,
+            status: AgentStatus::Finished {
+                outcome: AgentOutcome::Exit(0),
+                secs: 42,
+            },
         },
-    });
+    );
     let view = view_for(&app);
     let screen = render_sized(&app, &view, 80, 24);
     for line in [
@@ -508,15 +528,18 @@ fn the_agent_record_shows_at_80_columns() {
     ] {
         assert!(screen.contains(line), "80x24 shows {line}: {screen}");
     }
-    app.agent_record = Some(AgentRecord {
-        repo: "o/r".to_string(),
-        number: 7,
-        profile: "default".to_string(),
-        agent: "hermes".to_string(),
-        worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
-        seed_lines: 4,
-        status: AgentStatus::Running,
-    });
+    seed_tab_record(
+        &mut app,
+        AgentRecord {
+            repo: "o/r".to_string(),
+            number: 7,
+            profile: "default".to_string(),
+            agent: "hermes".to_string(),
+            worktree: std::path::PathBuf::from("/tmp/wt/o/r/fix-foo"),
+            seed_lines: 4,
+            status: AgentStatus::Running,
+        },
+    );
     let view = view_for(&app);
     let screen = render_sized(&app, &view, 80, 24);
     assert!(

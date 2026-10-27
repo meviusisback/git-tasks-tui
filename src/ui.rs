@@ -314,7 +314,10 @@ pub fn view_for(app: &App) -> ViewModel {
         tabs: app.tab_labels(),
         active_tab: app.active_tab,
         agent: app.agent_panel_text(),
-        agent_screen: app.agent_screen.clone(),
+        agent_screen: app
+            .active_agent()
+            .map(|agent| agent.screen.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -533,6 +536,20 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
                 tab: Some(i),
             });
         }
+        if info.has_agent {
+            // A live session in this tab: the mark says which tab keeps
+            // working while another is on screen.
+            chunks.push(TabChunk {
+                text: " ".to_string(),
+                style: Style::default(),
+                tab: Some(i),
+            });
+            chunks.push(TabChunk {
+                text: "◉".to_string(),
+                style: Style::default().fg(theme::FOCUSED),
+                tab: Some(i),
+            });
+        }
     }
     chunks
 }
@@ -661,7 +678,7 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         // tree: show where it works instead of a blank pane. Repos with
         // no rows (a fresh branch, a W-grown tree) would otherwise leave
         // the whole right column above the box empty.
-        if let Some(ctx) = &app.agent_context {
+        if let Some(ctx) = app.active_agent().and_then(|agent| agent.context.as_ref()) {
             let lines = vec![
                 Line::from(Span::styled(
                     "working on",
@@ -775,6 +792,7 @@ fn agent_panel(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
             .collect()
     };
     let focused = app.pane == Pane::Agent;
+    let scroll = app.active_agent().map(|agent| agent.scroll).unwrap_or(0);
     Paragraph::new(text)
         .block(
             Block::default()
@@ -787,7 +805,7 @@ fn agent_panel(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
                 })
                 .title_style(theme::title(focused)),
         )
-        .scroll((app.agent_scroll, 0))
+        .scroll((scroll, 0))
 }
 
 /// The idle agent box: the worktree + agent instructions, rendered from the

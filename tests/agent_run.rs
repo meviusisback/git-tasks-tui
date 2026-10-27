@@ -7,7 +7,7 @@ use gtasks::agent::{
     AgentChoice, AgentId, AgentNext, AgentOutcome, AgentRecord, AgentStatus, PlanInputs, SeedFile,
     agent_argv, agent_seed_body, next_step, plan_agent, run_agent_inner,
 };
-use gtasks::app::{App, Key, Modal, Msg, Pending};
+use gtasks::app::{App, Key, Modal, Msg, Pending, Tab, TabAgent};
 use gtasks::fetch::FetchOutcome;
 use gtasks::model::{Item, ItemKind};
 
@@ -342,6 +342,29 @@ fn y_on_an_agent_question_moves_the_agreed_plan_to_the_loop() {
     assert_eq!(moved_path, &path);
 }
 
+/// A finished run filed under its tab: records live per tab now, so the
+/// tests plant the tab and the entry together.
+fn seed_tab_record(app: &mut App, record: AgentRecord) {
+    app.tabs.push(Tab {
+        repo: "o/r".to_string(),
+        number: 7,
+    });
+    app.active_tab = Some(0);
+    app.tab_agents.insert(
+        ("o/r".to_string(), 7),
+        TabAgent {
+            record: Some(record),
+            ..Default::default()
+        },
+    );
+}
+
+fn tab_record(app: &App) -> Option<&AgentRecord> {
+    app.tab_agents
+        .get(&("o/r".to_string(), 7))
+        .and_then(|agent| agent.record.as_ref())
+}
+
 fn record() -> AgentRecord {
     AgentRecord {
         repo: "o/r".to_string(),
@@ -364,7 +387,7 @@ fn esc_hides_the_card_but_keeps_the_record() {
     for pane in [gtasks::app::Pane::Detail, gtasks::app::Pane::List] {
         let (mut app, _tmp) = pr_app();
         app.pane = pane;
-        app.agent_record = Some(record());
+        seed_tab_record(&mut app, record());
         app.update(Msg::Key(Key::Esc));
         if pane == gtasks::app::Pane::Detail {
             assert_eq!(
@@ -377,12 +400,11 @@ fn esc_hides_the_card_but_keeps_the_record() {
             app.visible_record().is_none(),
             "the card hides from {pane:?}"
         );
-        assert!(app.agent_record.is_some(), "the record stays");
+        assert!(tab_record(&app).is_some(), "the record stays");
     }
     // Reselecting the item shows the card again: leaving clears the dismissal.
     let (mut app, _tmp) = pr_app();
-    app.agent_record = Some(record());
-    app.agent_dismissed_for = None;
+    seed_tab_record(&mut app, record());
     assert!(
         app.visible_record().is_some(),
         "reselecting shows the card again"
@@ -395,17 +417,17 @@ fn moving_after_a_finished_run_returns_the_detail() {
     // Enter and tabs show the detail again. A still-running session keeps
     // its card — it is the news, not leftovers.
     let (mut app, _tmp) = pr_app();
-    app.agent_record = Some(record());
+    seed_tab_record(&mut app, record());
     assert!(app.visible_record().is_some());
     app.update(Msg::Key(Key::Down));
     assert!(
         app.visible_record().is_none(),
         "arrows dismiss a finished card"
     );
-    assert!(app.agent_record.is_some(), "the record itself stays");
+    assert!(tab_record(&app).is_some(), "the record itself stays");
 
     let (mut app, _tmp) = pr_app();
-    app.agent_record = Some(record());
+    seed_tab_record(&mut app, record());
     app.update(Msg::Key(Key::Enter));
     assert!(
         app.visible_record().is_none(),
@@ -415,30 +437,46 @@ fn moving_after_a_finished_run_returns_the_detail() {
     let (mut app, _tmp) = pr_app();
     let mut running = record();
     running.status = AgentStatus::Running;
-    app.agent_record = Some(running);
+    seed_tab_record(&mut app, running);
     app.update(Msg::Key(Key::Down));
     app.update(Msg::Key(Key::Enter));
     assert!(
         app.visible_record().is_some(),
         "a running session keeps its card while moving"
     );
+    assert!(tab_record(&app).is_some(), "the record itself stays");
 }
 
 #[test]
 fn x_forgets_the_record_and_says_so() {
+    // `x` closes the tab first — the record goes with it. A second `x`
+    // finds no tab and no record.
     let (mut app, _tmp) = pr_app();
-    app.agent_record = Some(record());
+    seed_tab_record(&mut app, record());
     app.update(Msg::Key(Key::Char('x')));
-    assert!(app.agent_record.is_none(), "x deletes the record");
+    assert!(app.tabs.is_empty(), "x closes the tab first");
+    assert!(tab_record(&app).is_none(), "the record goes with the tab");
+    app.update(Msg::Key(Key::Char('x')));
+    assert_eq!(app.status, "no agent record to close");
+}
+
+#[test]
+fn close_agent_record_forgets_the_card() {
+    // The record path itself: called with a tab open, it forgets the card
+    // and says what it closed.
+    let (mut app, _tmp) = pr_app();
+    seed_tab_record(&mut app, record());
+    app.close_agent_record();
+    assert!(tab_record(&app).is_none(), "x deletes the record");
     assert_eq!(app.status, "closed the agent record for o/r#7");
-    app.update(Msg::Key(Key::Char('x')));
+    app.close_agent_record();
     assert_eq!(app.status, "no agent record to close");
 }
 
 #[test]
 fn another_item_shows_detail_not_the_record() {
     let (mut app, _tmp) = pr_app();
-    app.agent_record = Some(record());
+    seed_tab_record(&mut app, record());
     app.apply_outcome(FetchOutcome {
         items: vec![item("o/r", 8, ItemKind::Pr, Some("other"))],
         failures: Vec::new(),

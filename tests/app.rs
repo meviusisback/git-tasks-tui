@@ -1,6 +1,8 @@
 //! Task 5: the pure state machine — no terminal, no I/O.
 
-use gtasks::app::{App, Key, Modal, Msg, Pane};
+use std::collections::HashMap;
+
+use gtasks::app::{App, Key, Modal, Msg, Pane, TabAgent};
 
 fn press(app: &mut App, key: Key) {
     app.update(Msg::Key(key));
@@ -29,7 +31,13 @@ fn tab_cycles_panes_both_ways() {
 #[test]
 fn tab_cycle_includes_the_agent_while_one_runs() {
     let mut app = App {
-        agent_running: true,
+        tab_agents: HashMap::from([(
+            ("o/r".to_string(), 7),
+            TabAgent {
+                running: true,
+                ..Default::default()
+            },
+        )]),
         ..App::default()
     };
     assert_eq!(app.pane, Pane::List);
@@ -90,11 +98,23 @@ fn detail_scroll_moves_only_in_the_detail_pane() {
 
 #[test]
 fn legend_while_running_names_typing_not_app_keys() {
-    let app = App {
+    use gtasks::app::Tab;
+    let mut app = App {
         pane: Pane::Agent,
-        agent_running: true,
+        tab_agents: HashMap::from([(
+            ("o/r".to_string(), 7),
+            TabAgent {
+                running: true,
+                ..Default::default()
+            },
+        )]),
         ..App::default()
     };
+    app.tabs.push(Tab {
+        repo: "o/r".to_string(),
+        number: 7,
+    });
+    app.active_tab = Some(0);
     let legend = app.legend();
     assert!(
         legend.contains("Esc/Tab panes"),
@@ -145,14 +165,26 @@ fn shift_arrows_reach_the_agent_box_only_from_the_detail() {
     // from the list is the detail, agent or not.
     let mut app = App {
         pane: List,
-        agent_running: true,
+        tab_agents: HashMap::from([(
+            ("o/r".to_string(), 7),
+            TabAgent {
+                running: true,
+                ..Default::default()
+            },
+        )]),
         ..App::default()
     };
     press(&mut app, Key::ShiftRight);
     assert_eq!(app.pane, Detail);
     let mut app = App {
         pane: Detail,
-        agent_running: true,
+        tab_agents: HashMap::from([(
+            ("o/r".to_string(), 7),
+            TabAgent {
+                running: true,
+                ..Default::default()
+            },
+        )]),
         ..App::default()
     };
     press(&mut app, Key::ShiftDown);

@@ -15,6 +15,7 @@ use crate::model::ItemKind;
 use crate::sanitize::sanitize;
 
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 
 /// Which pane has focus. Left column holds `Repos` (top) and `List`
 /// (bottom); right column holds `Detail` (top) and `Agent` (bottom).
@@ -44,6 +45,9 @@ pub struct TabInfo {
     pub kind: Option<crate::model::ItemKind>,
     pub active: bool,
     pub has_worktree: bool,
+    /// A live agent session runs in this tab: the strip marks it, so the
+    /// user sees which tab keeps working while another is on screen.
+    pub has_agent: bool,
 }
 
 /// The repo filter as a type, not a string: either everything or one valid
@@ -428,8 +432,11 @@ pub struct App {
     /// on the row under the list cursor.
     pub tabs: Vec<Tab>,
     pub active_tab: Option<usize>,
-    /// Scroll offset of the agent pane.
-    pub agent_scroll: u16,
+    /// One tab's agent side, keyed by `(repo, number)`: everything the loop
+    /// reads or writes for the box in that tab. The session itself lives in
+    /// the loop (it owns threads); this is the state the screen renders.
+    /// Sessions die with the app, so this map never touches `state.json`.
+    pub tab_agents: HashMap<(String, u64), TabAgent>,
     /// True when session fields changed since the last save: the loop
     /// persists `state.json` so a temporary exit keeps tabs, filter and
     /// cursor positions.
@@ -463,17 +470,6 @@ pub struct App {
     /// taken once must not become a thing forgotten: after `Esc` the list holds a repository the
     /// user never chose, and nothing else on screen remembers why.
     pub config_fallback: bool,
-    /// The last agent run, if any. It stays after the exit: `Esc` hides the
-    /// card, `x` deletes the record, a new run replaces it.
-    pub agent_record: Option<AgentRecord>,
-    /// What the running agent is working on (repo, branch, tree): the detail
-    /// pane shows this when no issue/PR is selected, so the right column
-    /// never goes blank while the agent has a tree but the list has no rows.
-    /// Set at launch, cleared when the session ends.
-    pub agent_context: Option<AgentContext>,
-    /// The item the record card was dismissed for: the card shows again when
-    /// that item is reselected, and stays hidden while it is selected.
-    pub agent_dismissed_for: Option<(String, u64)>,
     /// Set by `g`, consumed by the loop that owns the terminal: validate
     /// here, hand over there, like every other outbox.
     pub agent_requested: Option<AgentPlan>,
@@ -495,23 +491,28 @@ pub struct App {
     /// the directory the user agreed to clone it into. The loop clones in a
     /// thread (network can take minutes) and continues the W flow when done.
     pub clone_go: Option<(String, std::path::PathBuf)>,
-    /// Text the loop types into a freshly opened agent, a chunk per tick:
-    /// first launches open on a draft the user reviews and sends, instead
-    /// of starting to work before being directed.
-    pub draft_text: Option<String>,
     /// Where worktrees live (configured root, or the default). The list
     /// icons and the worktree picker read it; `None` (unresolvable home)
     /// means no icons, and the picker explains instead of guessing.
     pub worktree_root: Option<std::path::PathBuf>,
-    /// True while an embedded agent session is alive in the box. Set by the
-    /// loop on spawn, cleared on exit: the loop owns the child, `App` only
-    /// carries what the screen needs (flag + last parsed screen).
-    pub agent_running: bool,
-    /// Last parsed screen of the embedded session, row by row. Empty while
-    /// idle: the box is hidden then, not blank.
-    pub agent_screen: crate::embedded::AgentScreen,
     /// What `y` runs: an action or an agent launch, never both.
     pub pending: Option<Pending>,
+}
+
+/// One tab's agent side: the screen the box renders, whether its session
+/// is alive, the finished run (the card stays after the exit), what the
+/// agent works on (shown in the detail while nothing is selected), and
+/// the draft the loop is still typing. The session itself lives in the
+/// loop; this map entry is its shadow.
+#[derive(Debug, Clone, Default)]
+pub struct TabAgent {
+    pub running: bool,
+    pub screen: crate::embedded::AgentScreen,
+    pub scroll: u16,
+    pub record: Option<AgentRecord>,
+    pub dismissed_for: Option<(String, u64)>,
+    pub context: Option<AgentContext>,
+    pub draft: Option<String>,
 }
 
 /// Periodic-refresh door: true when `refresh_s` seconds passed since `last`
@@ -561,19 +562,14 @@ impl Default for App {
             fonts: Vec::new(),
             clone_roots: Vec::new(),
             config_fallback: false,
-            agent_record: None,
-            agent_context: None,
-            agent_dismissed_for: None,
+            tab_agents: HashMap::new(),
             agent_requested: None,
             agent_go: None,
             agent_place: None,
             rename_go: None,
             delete_go: None,
             clone_go: None,
-            draft_text: None,
             worktree_root: None,
-            agent_running: false,
-            agent_screen: Vec::new(),
             detail: String::new(),
             detail_for: None,
             detail_requested: None,
@@ -587,7 +583,6 @@ impl Default for App {
             show_help: false,
             tabs: Vec::new(),
             active_tab: None,
-            agent_scroll: 0,
             session_dirty: false,
         }
     }
@@ -794,7 +789,7 @@ impl App {
             // While the agent runs, every key but Esc is agent input —
             // including Ctrl-C, which interrupts it. The legend must not
             // promise keys that type instead.
-            if self.agent_running {
+            if self.active_agent().is_some_and(|a| a.running) {
                 String::from("Esc/Tab panes · Ctrl-C interrupts · wheel scrolls · type to agent")
             } else {
                 String::from(
@@ -1016,6 +1011,9 @@ impl App {
             });
             self.active_tab = Some(self.tabs.len() - 1);
         }
+        // The new tab may carry a finished card: selecting it shows the
+        // item again, like every other move.
+        self.dismiss_finished_card();
         self.session_dirty = true;
         // The left column is the user's: opening a tab never reshapes it.
         // Load the body for the newly active tab when missing. Opening a tab
@@ -1102,6 +1100,10 @@ impl App {
             return false;
         }
         let closed = self.tabs.remove(idx);
+        // The closed tab's agent side goes with it: the loop kills a
+        // session whose tab is gone, so no agent outlives its box.
+        self.tab_agents
+            .remove(&(closed.repo.clone(), closed.number));
         // A body belonging to the closed tab must not linger under the next
         // tab's fields.
         if self.detail_for.as_ref() == Some(&(closed.repo.clone(), closed.number)) {
@@ -1169,6 +1171,10 @@ impl App {
                     has_worktree: found.is_some_and(|item| {
                         self.has_worktree(&item.repo, item.head_ref_name.as_deref())
                     }),
+                    has_agent: self
+                        .tab_agents
+                        .get(&(tab.repo.clone(), tab.number))
+                        .is_some_and(|agent| agent.running),
                 }
             })
             .collect()
@@ -1180,11 +1186,38 @@ impl App {
     pub fn agent_active(&self) -> bool {
         self.agent_requested.is_some()
             || self.agent_go.is_some()
-            || self.agent_running
-            || matches!(
-                &self.agent_record,
-                Some(record) if record.status == AgentStatus::Running
-            )
+            || self.tab_agents.values().any(|a| {
+                a.running || matches!(&a.record, Some(r) if r.status == AgentStatus::Running)
+            })
+    }
+
+    /// The tab's key in `tab_agents`: agents live per tab, so switching
+    /// tabs switches boxes.
+    pub fn tab_key(repo: &str, number: u64) -> (String, u64) {
+        (repo.to_string(), number)
+    }
+
+    /// This tab's agent side, if the tab ever launched one.
+    pub fn tab_agent(&self, key: &(String, u64)) -> Option<&TabAgent> {
+        self.tab_agents.get(key)
+    }
+
+    /// The active tab's key, when a tab is open.
+    pub fn active_key(&self) -> Option<(String, u64)> {
+        self.active_tab
+            .and_then(|i| self.tabs.get(i))
+            .map(|tab| (tab.repo.clone(), tab.number))
+    }
+
+    /// The active tab's agent side, if it ever launched one.
+    pub fn active_agent(&self) -> Option<&TabAgent> {
+        self.active_key().and_then(|key| self.tab_agents.get(&key))
+    }
+
+    /// The active tab's agent side, mutably.
+    pub fn active_agent_mut(&mut self) -> Option<&mut TabAgent> {
+        let key = self.active_key()?;
+        self.tab_agents.get_mut(&key)
     }
 
     /// Copy the session fields into `state` so the loop can persist them.
@@ -1721,14 +1754,17 @@ impl App {
     /// menu, and the menu leads to the worktree choice.
     /// Follows the active tab when one is open.
     pub fn request_agent(&mut self) {
-        if self.agent_running {
-            self.status = "an agent is already running".to_string();
-            return;
-        }
         let Some(item) = self.effective_item().cloned() else {
             self.status = "nothing selected".to_string();
             return;
         };
+        // One agent per tab: a second `g` on the same tab refuses instead
+        // of orphaning the first. Other tabs keep running untouched.
+        let key = Self::tab_key(&item.repo, item.number);
+        if self.tab_agents.get(&key).is_some_and(|a| a.running) {
+            self.status = "an agent is already running in this tab".to_string();
+            return;
+        }
         let hermes = self.default_hermes();
         match plan_agent(
             &item.repo,
@@ -2057,18 +2093,23 @@ impl App {
         std::fs::symlink_metadata(target.join(".git")).is_ok()
     }
 
-    /// The record card shows for the selected item when it is that item's
-    /// record and the card was not dismissed for it. A record glued to a PR
-    /// that is not on screen would be a lie, so anything else shows detail.
-    /// Follows the active tab when one is open.
+    /// The record card shows for the active tab when it is that tab's record
+    /// and the card was not dismissed for it. A record glued to a tab that
+    /// is not on screen would be a lie, so anything else shows detail —
+    /// and so would a card for a row the list no longer shows.
     pub fn visible_record(&self) -> Option<&AgentRecord> {
-        let record = self.agent_record.as_ref()?;
+        let key = self.active_key()?;
+        let agent = self.tab_agents.get(&key)?;
+        let record = agent.record.as_ref()?;
+        if (record.repo.clone(), record.number) != key {
+            return None;
+        }
+        if agent.dismissed_for.as_ref() == Some(&key) {
+            return None;
+        }
         let item = self.effective_item()?;
-        if record.repo == item.repo && record.number == item.number {
-            let key = (item.repo.clone(), item.number);
-            if self.agent_dismissed_for.as_ref() != Some(&key) {
-                return Some(record);
-            }
+        if item.repo == record.repo && item.number == record.number {
+            return Some(record);
         }
         None
     }
@@ -2079,21 +2120,38 @@ impl App {
     /// the news. `x` deletes the record entirely, this only hides the card
     /// (reselecting after a new run shows the new one).
     fn dismiss_finished_card(&mut self) {
+        let Some(key) = self.active_key() else {
+            return;
+        };
+        let Some(agent) = self.tab_agents.get_mut(&key) else {
+            return;
+        };
         let finished = matches!(
-            self.agent_record.as_ref().map(|r| &r.status),
+            agent.record.as_ref().map(|r| &r.status),
             Some(AgentStatus::Finished { .. })
         );
         if finished {
-            if let Some(record) = self.agent_record.as_ref() {
-                self.agent_dismissed_for = Some((record.repo.clone(), record.number));
+            if let Some(record) = agent.record.as_ref() {
+                let key = (record.repo.clone(), record.number);
+                agent.dismissed_for = Some(key);
             }
         }
     }
-    /// `x` deletes the single record. After the exit there is nothing to
+    /// `x` deletes the active tab's record. After the exit there is nothing to
     /// stop, so closing only forgets — it never claims to kill anything.
     pub fn close_agent_record(&mut self) {
-        if let Some(record) = self.agent_record.take() {
-            self.agent_dismissed_for = None;
+        let Some(key) = self.active_key() else {
+            self.status = "no agent record to close".to_string();
+            return;
+        };
+        let take = self
+            .tab_agents
+            .get_mut(&key)
+            .and_then(|agent| agent.record.take());
+        if let Some(record) = take {
+            if let Some(agent) = self.tab_agents.get_mut(&key) {
+                agent.dismissed_for = None;
+            }
             self.status = format!(
                 "closed the agent record for {}#{}",
                 record.repo, record.number
@@ -2159,7 +2217,7 @@ impl App {
         if let Some(record) = self.visible_record() {
             out.push(String::new());
             out.push(record.card());
-        } else if let Some(record) = &self.agent_record {
+        } else if let Some(record) = self.active_agent().and_then(|a| a.record.as_ref()) {
             out.push(String::new());
             out.push(format!(
                 "last agent · {} · {}#{} · {}",
@@ -2566,7 +2624,9 @@ impl App {
                 // record itself stays (a new run replaces it, `x` deletes it).
                 // Reselecting the item shows the card again.
                 if let Some(item) = self.effective_item().cloned() {
-                    self.agent_dismissed_for = Some((item.repo.clone(), item.number));
+                    if let Some(agent) = self.active_agent_mut() {
+                        agent.dismissed_for = Some((item.repo, item.number));
+                    }
                 }
             }
             Key::Esc => match self.pane {
@@ -2687,8 +2747,10 @@ impl App {
                 self.detail_scroll = next.max(0) as u16;
             }
             Pane::Agent => {
-                let next = self.agent_scroll as i32 + delta;
-                self.agent_scroll = next.max(0) as u16;
+                if let Some(agent) = self.active_agent_mut() {
+                    let next = agent.scroll as i32 + delta;
+                    agent.scroll = next.max(0) as u16;
+                }
             }
         }
     }
