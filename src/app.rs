@@ -1543,6 +1543,10 @@ impl App {
             })
             .collect();
         self.active_tab = state.active_tab.filter(|idx| *idx < self.tabs.len());
+        // A restored active tab starts pinned, like a fresh switch: the
+        // detail opens on the bookmark, and the first scroll hands it back
+        // to the list. Otherwise the strip names a tab the detail ignores.
+        self.follow_tab = self.active_tab.is_some();
         self.last_agents = state.last_agents.clone();
         self.set_lengths(self.repos.len(), self.visible_items().len());
         self.refresh_status();

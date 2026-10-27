@@ -345,6 +345,8 @@ fn the_session_roundtrip_keeps_tabs_filter_and_cursors() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // tab #1
     press(&mut app, Key::Char('t')); // single tab: stays, but marks dirty
+    press(&mut app, Key::Esc); // back to the list
+    press(&mut app, Key::Down); // cursor #2: the detail unpins here
     // Simulate the loop: capture the session, save, load into a fresh app.
     let mut state = gtasks::state::State {
         selected_repos: Vec::new(),
