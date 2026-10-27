@@ -162,6 +162,51 @@ fn the_active_tab_carries_a_background() {
 }
 
 #[test]
+fn a_closed_tab_item_stays_in_the_detail() {
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter); // tab #1, pinned
+    let second = app.items[1].clone();
+    // The next refresh drops #1: closed elsewhere. The list loses it,
+    // the bookmarked detail keeps it.
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![second],
+        failures: Vec::new(),
+    });
+    assert!(
+        app.visible_items().iter().all(|i| i.number != 1),
+        "a closed issue leaves the list"
+    );
+    assert_eq!(
+        app.effective_item().map(|i| (i.repo.as_str(), i.number)),
+        Some(("me/a", 1)),
+        "but its tab keeps showing it"
+    );
+    // A repo that failed to fetch retains nothing: unknown is not closed.
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter);
+    let second = app.items[1].clone();
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![second],
+        failures: vec![("me/a".to_string(), "boom".to_string())],
+    });
+    assert!(app.retained.is_empty(), "a failed repo keeps no one");
+    // Reopened: back in the list, no copy kept aside.
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter);
+    let all = app.items.clone();
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![],
+        failures: Vec::new(),
+    });
+    assert_eq!(app.retained.len(), 1, "closed while tabbed: retained");
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: all,
+        failures: Vec::new(),
+    });
+    assert!(app.retained.is_empty(), "reopened: the list copy wins");
+}
+
+#[test]
 fn t_cycles_tabs_forward_and_back() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // #1

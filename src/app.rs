@@ -407,6 +407,10 @@ pub struct App {
     pub status: String,
     /// Data from the last successful refresh, in repo order.
     pub items: Vec<Item>,
+    /// Tabbed issues/PRs the OPEN-only fetch dropped (closed): the detail
+    /// keeps showing them while their tab lives. Never listed, never
+    /// counted — the list only ever shows what the fetch returned.
+    pub retained: Vec<Item>,
     /// The repos the user configured, plus a leading "all repos" entry, so a
     /// repo with no open items is still visible and selectable.
     pub repos: Vec<RepoRow>,
@@ -613,6 +617,7 @@ impl Default for App {
             quit: false,
             status: String::new(),
             items: Vec::new(),
+            retained: Vec::new(),
             repos: Vec::new(),
             all_repos: Vec::new(),
             repo_filter: RepoFilter::All,
@@ -683,6 +688,43 @@ impl App {
     /// no second copy to fall out of sync.
     pub fn apply_outcome(&mut self, outcome: FetchOutcome) {
         let FetchOutcome { items, failures } = outcome;
+        // Tabs outlive the open list. The fetch is OPEN-only, so a closed
+        // issue/PR vanishes from it — but its tab keeps showing it: the
+        // content, the body and the worktrees. Repos that failed to fetch
+        // retain nothing: unknown is not closed.
+        let mut retained: Vec<Item> = self
+            .retained
+            .iter()
+            .filter(|item| {
+                self.tabs
+                    .iter()
+                    .any(|t| t.repo == item.repo && t.number == item.number)
+                    && !items
+                        .iter()
+                        .any(|i| i.repo == item.repo && i.number == item.number)
+            })
+            .cloned()
+            .collect();
+        for tab in &self.tabs {
+            let gone = !items
+                .iter()
+                .any(|i| i.repo == tab.repo && i.number == tab.number);
+            let failed = failures.iter().any(|(repo, _)| *repo == tab.repo);
+            let kept = retained
+                .iter()
+                .any(|i| i.repo == tab.repo && i.number == tab.number);
+            if gone
+                && !failed
+                && !kept
+                && let Some(old) = self
+                    .items
+                    .iter()
+                    .find(|i| i.repo == tab.repo && i.number == tab.number)
+            {
+                retained.push(old.clone());
+            }
+        }
+        self.retained = retained;
         self.items = items;
         self.failed = failures.len();
         self.loading = false;
@@ -1103,16 +1145,27 @@ impl App {
     /// repo filter — while any browsing (list move, filter, search) unpins
     /// and the detail follows the cursor again. Enter pins the row's tab
     /// the same way, so scrolling never drags the detail off a tab until
-    /// the user moves.
+    /// the user moves. A closed issue/PR stays pinned too: the fetch is
+    /// OPEN-only, so a vanished tab item is read from the retained copy
+    /// until its tab closes.
     pub fn effective_item(&self) -> Option<&Item> {
         if self.follow_tab
             && let Some(tab) = self.active_tab.and_then(|idx| self.tabs.get(idx))
-            && let Some(found) = self
+        {
+            if let Some(found) = self
                 .items
                 .iter()
                 .find(|i| i.repo == tab.repo && i.number == tab.number)
-        {
-            return Some(found);
+            {
+                return Some(found);
+            }
+            if let Some(kept) = self
+                .retained
+                .iter()
+                .find(|i| i.repo == tab.repo && i.number == tab.number)
+            {
+                return Some(kept);
+            }
         }
         self.selected_item()
     }
