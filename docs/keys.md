@@ -13,7 +13,7 @@ disagree, the handler is right and this file is a bug.
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while an agent runs (for people who expect it) |
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
-| `Enter` | in the repos pane: drill into that repo's items; in the list: open a tab for the row (the detail follows the active tab); in the search box: leave the box |
+| `Enter` | in the repos pane: drill into that repo's items; in the list: open a tab for the row and move focus to the detail on the tab; in the search box: leave the box |
 | `t` / `T` | next / previous tab — navigation never touches the repo selection on the left |
 | `x` / `X` | close the active tab first, then the agent record |
 | `w` | focus the agent pane (worktree + agent instructions live there) |

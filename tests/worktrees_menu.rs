@@ -382,6 +382,7 @@ fn clicking_a_tab_opens_it_clicking_between_does_not() {
     });
     app.update(Msg::Key(Key::Enter));
     app.list_cursor = 1;
+    app.update(Msg::Key(Key::Esc)); // Enter focuses right: back to the list
     app.update(Msg::Key(Key::Enter));
     assert_eq!(app.tabs.len(), 2);
 

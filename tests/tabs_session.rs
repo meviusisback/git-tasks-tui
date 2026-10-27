@@ -78,7 +78,8 @@ fn t_cycles_tabs_forward_and_back() {
     press(&mut app, Key::Esc);
     press(&mut app, Key::Up);
     press(&mut app, Key::Enter);
-    press(&mut app, Key::Down);
+    press(&mut app, Key::Esc); // Enter focuses right: back to the list
+    press(&mut app, Key::Down); // me/b #2
     press(&mut app, Key::Enter); // #2
     assert_eq!(app.tabs.len(), 2);
     assert_eq!(app.active_tab, Some(1));
@@ -133,6 +134,7 @@ fn x_closes_the_tab_first_then_the_record() {
     assert_eq!(app.active_tab, None);
     // A record filed under the open tab shows, then x closes the tab
     // (not the record) first.
+    press(&mut app, Key::Esc); // closing keeps the pane: back to the list
     press(&mut app, Key::Enter);
     app.tab_agents.insert(
         ("me/a".to_string(), 1),
@@ -285,6 +287,7 @@ fn switching_tabs_leaves_the_left_column_alone() {
     press(&mut app, Key::Esc); // status only: Esc never leaves the list
     press(&mut app, Key::Up); // already row 0: stays
     press(&mut app, Key::Enter); // #1 already open and active: body no-op
+    press(&mut app, Key::Esc); // Enter focuses right: back to the list
     press(&mut app, Key::Down); // me/b #2
     press(&mut app, Key::Enter); // second tab
     assert_eq!(app.active_tab, Some(1));
@@ -385,6 +388,7 @@ fn the_screen_names_tab_and_repo_keys() {
     use ratatui::{Terminal, backend::TestBackend};
     let mut app = app_with_items();
     press(&mut app, Key::Enter);
+    press(&mut app, Key::Esc); // Enter focuses right: back to the list
     assert!(!app.agent_active(), "idle: the agent pane stays hidden");
     let view = view_for(&app);
     let backend = TestBackend::new(200, 30);

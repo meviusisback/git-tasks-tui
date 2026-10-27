@@ -1016,6 +1016,9 @@ impl App {
         let Some(item) = self.selected_item().cloned() else {
             return;
         };
+        // Enter on a row means "work on this": the tab opens and focus
+        // moves to the right column, on the tab.
+        self.pane = Pane::Detail;
         if let Some(idx) = self
             .tabs
             .iter()
