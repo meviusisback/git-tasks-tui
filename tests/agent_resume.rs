@@ -134,71 +134,92 @@ fn recorded(agent: &str) -> App {
 }
 
 #[test]
-fn the_offer_fires_only_for_the_same_agent() {
-    let app = recorded("omp");
-    assert!(
-        app.resume_offer(&plan(AgentId::Omp), &tree()).is_some(),
-        "same tree, same agent: offer"
-    );
-    assert!(
-        app.resume_offer(&plan(AgentId::Hermes), &tree()).is_none(),
-        "a different pick means a different intention: no offer"
-    );
-    let bare = App::default();
-    assert!(
-        bare.resume_offer(&plan(AgentId::Omp), &tree()).is_none(),
-        "no record: launch straight"
-    );
-    assert!(
-        app.resume_offer(&plan(AgentId::Omp), &PathBuf::from("/elsewhere"))
-            .is_none(),
-        "the record is per tree"
-    );
-}
-
-#[test]
-fn remember_forget_and_move_follow_the_tree() {
+fn the_record_is_per_tree_and_follows_it() {
     let mut app = App::default();
     app.remember_worktree_agent(&plan(AgentId::Hermes), &tree());
     assert!(
-        app.resume_offer(&plan(AgentId::Hermes), &tree()).is_some(),
+        app.last_agents.contains_key(&tree().display().to_string()),
         "a launch records its agent"
     );
     let moved = PathBuf::from("/home/user/worktrees/acme-widget-2");
     app.move_worktree(&tree(), &moved);
     assert!(
-        app.resume_offer(&plan(AgentId::Hermes), &tree()).is_none(),
+        !app.last_agents.contains_key(&tree().display().to_string()),
         "the entry follows the rename"
     );
     assert!(
-        app.resume_offer(&plan(AgentId::Hermes), &moved).is_some(),
+        app.last_agents.contains_key(&moved.display().to_string()),
         "and lands on the new path"
     );
     app.forget_worktree(&moved);
     assert!(
-        app.resume_offer(&plan(AgentId::Hermes), &moved).is_none(),
-        "deleting the tree drops the offer"
+        !app.last_agents.contains_key(&moved.display().to_string()),
+        "deleting the tree drops the entry"
     );
 }
 
 #[test]
-fn y_reopens_while_n_launches_fresh() {
-    let mut app = recorded("omp");
+fn y_reopens_while_n_goes_back_to_choosing() {
+    use gtasks::app::Modal;
+    let preset = AgentChoice {
+        id: AgentId::Omp,
+        program: prog(),
+    };
+    // The `g` flow already picked omp: `n` launches there, `y` resumes.
+    let mut app = recorded("hermes");
     let question = "reopen?".to_string();
     app.modal = Some(Modal::Confirm(question));
-    app.pending = Some(Pending::Resume(plan(AgentId::Omp), tree()));
+    app.pending = Some(Pending::Resume {
+        plan: plan(AgentId::Hermes),
+        path: tree(),
+        preset: Some(preset.clone()),
+    });
     app.update(Msg::Key(Key::Char('y')));
     assert!(app.modal.is_none(), "the question closes");
     assert!(app.agent_resume.is_some(), "y reopens the recorded session");
-    assert!(app.agent_fresh.is_none() && app.agent_go.is_none());
+    assert!(app.agent_place.is_none() && app.agent_go.is_none());
 
-    let mut app = recorded("omp");
+    let mut app = recorded("hermes");
     app.modal = Some(Modal::Confirm("reopen?".to_string()));
-    app.pending = Some(Pending::Resume(plan(AgentId::Omp), tree()));
+    app.pending = Some(Pending::Resume {
+        plan: plan(AgentId::Hermes),
+        path: tree(),
+        preset: Some(preset),
+    });
     app.update(Msg::Key(Key::Char('n')));
     assert!(app.modal.is_none(), "the question closes");
-    assert!(app.agent_fresh.is_some(), "n launches fresh");
+    let (chosen_plan, chosen_path) = app
+        .agent_place
+        .as_ref()
+        .expect("n launches with the preset");
+    assert_eq!(
+        chosen_plan.agent.id,
+        AgentId::Omp,
+        "the picked agent, not the recorded one"
+    );
+    assert_eq!(*chosen_path, tree());
     assert!(app.agent_resume.is_none() && app.agent_go.is_none());
+
+    // The `W` flow picked nothing yet: `n` opens the agent menu there.
+    let mut app = recorded("hermes");
+    app.modal = Some(Modal::Confirm("reopen?".to_string()));
+    app.pending = Some(Pending::Resume {
+        plan: plan(AgentId::Hermes),
+        path: tree(),
+        preset: None,
+    });
+    app.update(Msg::Key(Key::Char('n')));
+    match &app.modal {
+        Some(Modal::AgentMenu(menu)) => {
+            assert_eq!(
+                menu.place.as_ref(),
+                Some(&tree()),
+                "the menu already points at the tree"
+            );
+        }
+        other => panic!("n opens the agent menu, got {other:?}"),
+    }
+    assert!(app.agent_place.is_none() && app.agent_resume.is_none());
 }
 
 #[test]
@@ -209,7 +230,7 @@ fn n_on_any_other_question_just_closes() {
     app.update(Msg::Key(Key::Char('n')));
     assert!(app.modal.is_none());
     assert!(
-        app.agent_fresh.is_none() && app.agent_resume.is_none() && app.agent_go.is_none(),
+        app.agent_place.is_none() && app.agent_resume.is_none() && app.agent_go.is_none(),
         "no launch from a declined creation"
     );
     assert!(
@@ -232,9 +253,11 @@ fn the_record_survives_a_restart_but_old_files_still_parse() {
     app.capture_session(&mut state);
     let mut back = App::default();
     back.restore_session(&state);
-    assert!(
-        back.resume_offer(&plan(AgentId::OpenCode), &tree())
-            .is_some(),
-        "the offer survives a restart"
+    assert_eq!(
+        back.last_agents
+            .get(&tree().display().to_string())
+            .map(|l| l.agent.as_str()),
+        Some("opencode"),
+        "the record survives a restart"
     );
 }

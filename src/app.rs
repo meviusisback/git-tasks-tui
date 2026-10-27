@@ -132,10 +132,15 @@ pub struct PendingAction {
 pub enum Pending {
     Action(PendingAction),
     Agent(AgentPlan, std::path::PathBuf),
-    /// `Enter` on a tree with a recorded agent, confirmed with `y`: reopen
-    /// that agent's previous session there, sending nothing. `n` launches
-    /// fresh instead (see `agent_fresh`).
-    Resume(AgentPlan, std::path::PathBuf),
+    /// `Enter` on a worktree row, confirmed with `y`: reopen that agent's
+    /// previous session there, sending nothing. `n` goes back to choosing:
+    /// with the preset agent (the `g` flow) it launches there, without one
+    /// (the `W` flow) it opens the agent menu for that tree.
+    Resume {
+        plan: AgentPlan,
+        path: std::path::PathBuf,
+        preset: Option<crate::agent::AgentChoice>,
+    },
     /// `d` on a worktree row, confirmed with `y`: the loop deletes it.
     Delete(crate::worktree::WorktreeDelete),
     /// No local clone for the repo, confirmed with `y`: the loop clones it
@@ -493,10 +498,6 @@ pub struct App {
     /// Set by `y` on the create question, consumed by the loop: the plan
     /// plus the worktree the user agreed to create.
     pub agent_go: Option<(AgentPlan, std::path::PathBuf)>,
-    /// Set by `n` on the resume question, consumed by the loop: the user
-    /// declined the previous session, so this launches fresh — same plan,
-    /// same tree, no offer asked twice.
-    pub agent_fresh: Option<(AgentPlan, std::path::PathBuf)>,
     /// Set by `y` on the resume question, consumed by the loop: reopen the
     /// recorded agent's previous session in that tree, sending nothing.
     pub agent_resume: Option<(AgentPlan, std::path::PathBuf)>,
@@ -598,7 +599,6 @@ impl Default for App {
             last_agents: HashMap::new(),
             agent_requested: None,
             agent_go: None,
-            agent_fresh: None,
             agent_resume: None,
             agent_place: None,
             rename_go: None,
@@ -1229,7 +1229,6 @@ impl App {
     pub fn agent_active(&self) -> bool {
         self.agent_requested.is_some()
             || self.agent_go.is_some()
-            || self.agent_fresh.is_some()
             || self.agent_resume.is_some()
             || self.tab_agents.values().any(|a| {
                 a.running || matches!(&a.record, Some(r) if r.status == AgentStatus::Running)
@@ -1278,18 +1277,6 @@ impl App {
     pub fn active_agent_mut(&mut self) -> Option<&mut TabAgent> {
         let key = self.active_key()?;
         self.tab_agents.get_mut(&key)
-    }
-
-    /// The recorded agent for this tree, when the plan picks the same one:
-    /// reopening the tree offers its previous session instead of a fresh
-    /// start. A different pick means a different intention — no offer.
-    pub fn resume_offer(
-        &self,
-        plan: &AgentPlan,
-        path: &std::path::Path,
-    ) -> Option<crate::agent::LastAgent> {
-        let last = self.last_agents.get(&path.display().to_string())?;
-        (last.agent == plan.agent.id.name()).then(|| last.clone())
     }
 
     /// Remember the agent launched in this tree, so reopening it offers the
@@ -1490,6 +1477,38 @@ impl App {
                 self.modal = Some(Modal::Worktrees(menu));
                 return;
             };
+            // The tree remembers its agent: offer the previous session
+            // back before any agent question — `y` reopens it with
+            // nothing sent, `n` goes back to choosing. A missing binary
+            // skips the offer silently and chooses as usual.
+            if let Some(last) = self
+                .last_agents
+                .get(&row.path.display().to_string())
+                .cloned()
+            {
+                if let Some(choice) = self
+                    .agent_choices()
+                    .into_iter()
+                    .find(|c| c.id.name() == last.agent)
+                {
+                    let mut plan = menu.plan;
+                    plan.branch = row.branch.as_str().to_string();
+                    plan.agent = choice;
+                    plan.profile = last.profile.clone();
+                    let question = format!(
+                        "reopen the last {} session here ({})? (y = resume, nothing sent · n = choose agent)",
+                        last.agent,
+                        row.path.display()
+                    );
+                    self.modal = Some(Modal::Confirm(question));
+                    self.pending = Some(Pending::Resume {
+                        plan,
+                        path: row.path,
+                        preset: menu.agent,
+                    });
+                    return;
+                }
+            }
             match menu.agent {
                 Some(agent) => {
                     let mut plan = menu.plan;
@@ -2573,14 +2592,37 @@ impl App {
                 Key::Esc => self.modal = None,
                 Key::Char('n') => {
                     self.modal = None;
-                    // Declining the resume offer launches fresh — same plan,
-                    // same tree, no offer asked twice. Any other question's
-                    // `n` just closes, as before.
+                    // Declining the resume offer goes back to choosing —
+                    // with the preset agent (the `g` flow) it launches
+                    // there, without one (the `W` flow) it opens the agent
+                    // menu for that tree. Any other question's `n` just
+                    // closes, as before.
                     if let Some(pending) = self.pending.take() {
                         match pending {
-                            Pending::Resume(plan, path) => {
-                                self.agent_fresh = Some((plan, path));
-                            }
+                            Pending::Resume {
+                                mut plan,
+                                path,
+                                preset,
+                            } => match preset {
+                                Some(agent) => {
+                                    plan.agent = agent;
+                                    self.agent_place = Some((plan, path));
+                                }
+                                None => {
+                                    let rows = self.agent_choices();
+                                    if rows.is_empty() {
+                                        self.status = "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
+                                    } else {
+                                        plan.profile = self.agent_profile.clone();
+                                        self.modal = Some(Modal::AgentMenu(AgentMenu {
+                                            rows,
+                                            cursor: 0,
+                                            plan,
+                                            place: Some(path),
+                                        }));
+                                    }
+                                }
+                            },
                             other => self.pending = Some(other),
                         }
                     }
@@ -2610,7 +2652,7 @@ impl App {
                         }
                         // Reopen the recorded session: the loop resumes it
                         // with the agent's continue flag, sending nothing.
-                        Some(Pending::Resume(plan, path)) => {
+                        Some(Pending::Resume { plan, path, .. }) => {
                             self.agent_resume = Some((plan, path));
                         }
                         // A delete is a write too (to the clone, via the

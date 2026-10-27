@@ -471,6 +471,45 @@ fn the_detail_keeps_the_pr_while_its_agent_runs() {
 }
 
 #[test]
+fn a_tab_without_its_issue_says_so_instead_of_showing_another() {
+    use gtasks::ui::{draw, view_for};
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = app_with_items();
+    // A tab for an issue the list does not have (stale fetch): the
+    // detail must not fall back to the row under the cursor.
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 11,
+    });
+    app.active_tab = Some(0);
+    let view = view_for(&app);
+    let backend = TestBackend::new(200, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..30 {
+        for x in 0..200 {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    assert!(
+        screen.contains("#11 me/a"),
+        "the tab names its own issue: {screen}"
+    );
+    assert!(
+        screen.contains("not in the current list"),
+        "honest instead of foreign: {screen}"
+    );
+    assert_eq!(
+        screen.matches("#1 one").count(),
+        1,
+        "once — the list row only, never the detail under this tab's name"
+    );
+}
+
+#[test]
 fn the_screen_names_tab_and_repo_keys() {
     // Regression: the tab keys used to live on the tabs strip, which has no
     // room for prose. They now live in the bottom legend; the strip shows

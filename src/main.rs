@@ -195,7 +195,7 @@ fn start_agent(
                         binaries,
                         timeout,
                     },
-                    LaunchMode::Ask,
+                    false,
                 );
             }
             // The refusal goes to the screen as it is: a check failure must
@@ -216,7 +216,7 @@ fn start_agent(
                     binaries,
                     timeout,
                 },
-                LaunchMode::Ask,
+                false,
             );
         }
         agent::AgentNext::AskToCreate(path) => {
@@ -274,7 +274,7 @@ fn start_placed(
                     binaries,
                     timeout,
                 },
-                LaunchMode::Ask,
+                false,
             );
         }
         agent::AgentNext::AskToCreate(path) => {
@@ -404,16 +404,6 @@ fn correct_tree_path(app: &App, plan: &AgentPlan) -> Option<PathBuf> {
 /// embedded in the agent box. The TUI never suspends; the child lives in a
 /// pty sized to the box, and the loop polls it every tick.
 ///
-/// How `launch_agent` starts: `Ask` offers a recorded session first (every
-/// entry point), `Fresh` launches the draft (the offer was declined — never
-/// asked twice), `Resume` reopens the recorded session, sending nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LaunchMode {
-    Ask,
-    Fresh,
-    Resume,
-}
-
 /// The loop-owned resources a launch needs: pty size, live sessions,
 /// binaries and timeouts. One struct instead of four parameters (clippy
 /// allows seven function arguments, and the plan side already takes three).
@@ -432,13 +422,13 @@ fn launch_agent(
     plan: &AgentPlan,
     path: &std::path::Path,
     ctx: LaunchCtx<'_>,
-    mode: LaunchMode,
+    resume: bool,
 ) {
     let key = App::tab_key(&plan.repo, plan.number);
     // A resume reopens exactly this tree: the branch check below would
     // compare the tree against a plan built for it, and a drifted tree is
     // still the tree the user just confirmed.
-    if mode != LaunchMode::Resume {
+    if !resume {
         // The tree may have drifted onto another branch since it was made
         // (renamed outside, checked out by hand): starting the agent there
         // works on the wrong code. Offer the fix instead of starting
@@ -470,21 +460,6 @@ fn launch_agent(
             _ => {}
         }
     }
-    // A recorded agent for this tree, same pick as the plan: offer its
-    // previous session before starting fresh. `n` launches the draft
-    // without asking again; `y` reopens with nothing sent.
-    if mode == LaunchMode::Ask {
-        if let Some(last) = app.resume_offer(plan, path) {
-            let question = format!(
-                "reopen the last {} session here ({})? (y = resume, nothing sent · n = fresh start)",
-                last.agent,
-                path.display()
-            );
-            app.modal = Some(Modal::Confirm(question));
-            app.pending = Some(Pending::Resume(plan.clone(), path.to_path_buf()));
-            return;
-        }
-    }
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
         Err(err) => {
@@ -495,7 +470,7 @@ fn launch_agent(
     // A resume sends nothing: the session comes back as it was, so there
     // is no seed to type. Every launch records its agent for the tree, so
     // reopening it later offers the session back.
-    let body = if mode == LaunchMode::Resume {
+    let body = if resume {
         String::new()
     } else {
         agent::agent_seed_body(&plan.repo, plan.number, &plan.url, None)
@@ -535,7 +510,7 @@ fn launch_agent(
         // Resume: the session comes back as it was — no seed, no draft,
         // nothing sent. Fresh: the agent opens on an empty prompt and
         // the loop types the seed as a draft the user reviews and sends.
-        if mode == LaunchMode::Resume {
+        if resume {
             agent::agent_argv_for_resume(
                 plan.agent.id,
                 &program,
@@ -623,12 +598,8 @@ fn launch_agent(
             // the user reviews the draft and presses Enter. The seed file
             // still travels to the record so the run is reproducible. A
             // resume sends nothing: no draft, just the session back.
-            entry.draft = if mode == LaunchMode::Resume {
-                None
-            } else {
-                Some(body)
-            };
-            app.status = if mode == LaunchMode::Resume {
+            entry.draft = if resume { None } else { Some(body) };
+            app.status = if resume {
                 format!(
                     "reopened the last {} session — nothing sent",
                     plan.agent.id.name()
@@ -1242,21 +1213,6 @@ fn run_tui() -> anyhow::Result<()> {
                 &mut sessions,
             );
         }
-        if let Some((plan, path)) = app.agent_fresh.take() {
-            needs_draw = true;
-            launch_agent(
-                &mut app,
-                &plan,
-                &path,
-                LaunchCtx {
-                    term_size,
-                    sessions: &mut sessions,
-                    binaries: &binaries,
-                    timeout,
-                },
-                LaunchMode::Fresh,
-            );
-        }
         if let Some((plan, path)) = app.agent_resume.take() {
             needs_draw = true;
             launch_agent(
@@ -1269,7 +1225,7 @@ fn run_tui() -> anyhow::Result<()> {
                     binaries: &binaries,
                     timeout,
                 },
-                LaunchMode::Resume,
+                true,
             );
         }
         if let Some((plan, path)) = app.agent_place.take() {

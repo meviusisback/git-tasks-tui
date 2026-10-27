@@ -748,6 +748,32 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
             .block(block)
             .scroll((app.detail_scroll, 0));
     }
+    // The tab names an issue the list does not have (a stale fetch, a
+    // just-created PR): say so instead of showing the row under the
+    // cursor — a foreign PR under this tab's name reads as the tab's own,
+    // which is worse than no box at all. A tab whose agent has a tree
+    // keeps its "working on" context instead: the tree is the news there.
+    if let Some(tab) = app.active_tab.and_then(|idx| app.tabs.get(idx)) {
+        let known = app
+            .items
+            .iter()
+            .any(|i| i.repo == tab.repo && i.number == tab.number);
+        let working = app
+            .active_agent()
+            .and_then(|agent| agent.context.as_ref())
+            .is_some();
+        if !known && !working {
+            let lines = vec![
+                Line::from(Span::styled(
+                    format!("#{} {}", tab.number, tab.repo),
+                    theme::title(false),
+                )),
+                Line::from(Span::raw("not in the current list")),
+                Line::from(Span::raw("r refreshes — the tab keeps pointing here")),
+            ];
+            return Paragraph::new(lines).block(block);
+        }
+    }
     let Some(item) = app.effective_item() else {
         // No issue/PR under the cursor — but the agent may still have a
         // tree: show where it works instead of a blank pane. Repos with

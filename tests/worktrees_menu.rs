@@ -370,6 +370,95 @@ fn the_list_marks_items_that_have_a_worktree() {
 }
 
 #[test]
+fn enter_on_a_recorded_tree_asks_resume_before_anything() {
+    use gtasks::app::Pending;
+    let (mut app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    let path = plant_worktree(&root, "fix-foo");
+    app.last_agents.insert(
+        path.display().to_string(),
+        gtasks::agent::LastAgent {
+            agent: "hermes".to_string(),
+            profile: "default".to_string(),
+        },
+    );
+    // The `g` flow picked hermes, then the tree: the offer names the
+    // recorded agent before anything launches.
+    open_menu(&mut app);
+    confirm_first_row(&mut app);
+    press(&mut app, Key::Enter);
+    let Some(Modal::Confirm(question)) = app.modal.as_ref() else {
+        panic!("a recorded tree asks first, got {:?}", app.modal);
+    };
+    assert!(
+        question.contains("hermes"),
+        "the app already knows who ran here: {question}"
+    );
+    assert!(
+        matches!(app.pending, Some(Pending::Resume { .. })),
+        "y reopens, n chooses"
+    );
+    assert!(app.agent_place.is_none(), "nothing launches yet");
+    // `y` reopens with nothing sent.
+    press(&mut app, Key::Char('y'));
+    let (plan, place) = app
+        .agent_resume
+        .as_ref()
+        .expect("y reopens the recorded session");
+    assert_eq!(place, &path);
+    assert_eq!(plan.agent.id, AgentId::Hermes);
+    assert_eq!(plan.profile, "default");
+}
+
+#[test]
+fn declining_the_offer_goes_back_to_choosing() {
+    use gtasks::app::Pending;
+    let (mut app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    let path = plant_worktree(&root, "fix-foo");
+    app.last_agents.insert(
+        path.display().to_string(),
+        gtasks::agent::LastAgent {
+            agent: "hermes".to_string(),
+            profile: "default".to_string(),
+        },
+    );
+    // The `W` flow picked nothing yet: `n` opens the agent menu there.
+    press(&mut app, Key::Char('W'));
+    press(&mut app, Key::Enter);
+    assert!(
+        matches!(app.pending, Some(Pending::Resume { .. })),
+        "the offer comes before the agent menu, got {:?}",
+        app.pending
+    );
+    press(&mut app, Key::Char('n'));
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("n goes back to choosing, got {:?}", app.modal);
+    };
+    assert_eq!(menu.place.as_ref(), Some(&path));
+    assert!(app.agent_place.is_none() && app.agent_resume.is_none());
+}
+
+#[test]
+fn an_unknown_recorded_agent_chooses_as_usual() {
+    let (mut app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    let path = plant_worktree(&root, "fix-foo");
+    app.last_agents.insert(
+        path.display().to_string(),
+        gtasks::agent::LastAgent {
+            agent: "retired".to_string(),
+            profile: "default".to_string(),
+        },
+    );
+    press(&mut app, Key::Char('W'));
+    press(&mut app, Key::Enter);
+    let Some(Modal::AgentMenu(_)) = app.modal.as_ref() else {
+        panic!("no binary, no offer: {:?}", app.modal);
+    };
+}
+
+#[test]
 fn clicking_a_tab_opens_it_clicking_between_does_not() {
     use gtasks::ui::{tab_at, tabs_row};
     let (mut app, _tmp) = pr_app();
