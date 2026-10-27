@@ -451,10 +451,15 @@ pub struct App {
     /// The `?` overlay with the full keymap is on screen.
     pub show_help: bool,
     /// Open tabs (`Enter` on a row opens one) and the active tab.
-    /// The detail and the agent act on the active tab when set, otherwise
-    /// on the row under the list cursor.
+    /// Bookmarks over the issues being worked: switching to one pins the
+    /// detail on it, and the agent acts on the active tab when set,
+    /// otherwise on the row under the list cursor.
     pub tabs: Vec<Tab>,
     pub active_tab: Option<usize>,
+    /// The detail is pinned on the active tab's issue (a bookmark jump)
+    /// instead of following the list cursor. Set by tab switches and
+    /// Enter; cleared by any browsing: list moves, filter and search.
+    pub follow_tab: bool,
     /// Column/row split of the cross, in percent (left width, top height).
     /// Dragged with the mouse on the dividers, saved to `state.json`:
     /// a restart keeps the user's geometry. Only the two dividers move —
@@ -647,6 +652,7 @@ impl Default for App {
             show_help: false,
             tabs: Vec::new(),
             active_tab: None,
+            follow_tab: false,
             col_pct: 30,
             row_pct: 38,
             drag: None,
@@ -743,6 +749,8 @@ impl App {
     /// Row 0 means "everything"; any other row filters the list to that repo.
     /// The row already is the type — no parse, no expect, no magic string.
     fn apply_repo_filter(&mut self) {
+        // A new filter is browsing: the detail follows the list again.
+        self.follow_tab = false;
         self.repo_filter = match self.repos.get(self.repos_cursor) {
             Some(RepoRow::Repo(slug)) => RepoFilter::One(slug.clone()),
             // Row 0, or a cursor past the end after the list shrank.
@@ -1038,11 +1046,22 @@ impl App {
         self.visible_items().get(self.list_cursor).copied()
     }
 
-    /// The item the right column acts on: the row under the list cursor,
-    /// always. Scrolling the list loads the detail; Enter only moves the
-    /// focus there (and opens the row's tab). Tabs hold agent sessions,
-    /// not the detail — so a tab can never glue a foreign issue on screen.
+    /// The item the right column acts on. Tabs are bookmarks: switching to
+    /// one (`t`, click) pins the detail on the tab's issue — even across a
+    /// repo filter — while any browsing (list move, filter, search) unpins
+    /// and the detail follows the cursor again. Enter pins the row's tab
+    /// the same way, so scrolling never drags the detail off a tab until
+    /// the user moves.
     pub fn effective_item(&self) -> Option<&Item> {
+        if self.follow_tab
+            && let Some(tab) = self.active_tab.and_then(|idx| self.tabs.get(idx))
+            && let Some(found) = self
+                .items
+                .iter()
+                .find(|i| i.repo == tab.repo && i.number == tab.number)
+        {
+            return Some(found);
+        }
         self.selected_item()
     }
 
@@ -1058,6 +1077,7 @@ impl App {
         // Enter on a row means "work on this": the tab opens and focus
         // moves to the right column, on the tab.
         self.pane = Pane::Detail;
+        self.follow_tab = true;
         if let Some(idx) = self
             .tabs
             .iter()
@@ -1092,9 +1112,10 @@ impl App {
         }
     }
 
-    /// Activate tab `idx` (clamped): the agent box follows it. The detail
-    /// follows the list cursor, never the tab. The left column is left
-    /// alone: navigating tabs must not reshuffle the repo selection (an
+    /// Activate tab `idx` (clamped): the tab is a bookmark, so the detail
+    /// jumps to its issue and loads the body when missing. The agent box
+    /// follows the tab the same way. The left column is left alone:
+    /// navigating tabs must not reshuffle the repo selection (an
     /// "all repos" view stays "all repos").
     pub fn activate_tab(&mut self, idx: usize) {
         self.dismiss_finished_card();
@@ -1104,9 +1125,24 @@ impl App {
         }
         let idx = idx.min(self.tabs.len() - 1);
         self.active_tab = Some(idx);
+        self.follow_tab = true;
         self.session_dirty = true;
-        // The detail follows the list cursor, never the tab: switching
-        // tabs switches the agent box, so no body is requested here.
+        // The detail jumps to the tab's issue: load its body when missing.
+        if let Some(tab) = self.tabs.get(idx).cloned() {
+            if let Some(item) = self
+                .items
+                .iter()
+                .find(|i| i.repo == tab.repo && i.number == tab.number)
+                .cloned()
+            {
+                let key = (item.repo.clone(), item.number);
+                if self.detail_for.as_ref() != Some(&key)
+                    && self.detail_requested.as_ref() != Some(&key)
+                {
+                    self.detail_requested = Some(key);
+                }
+            }
+        }
     }
 
     pub fn next_tab(&mut self) {
@@ -2908,8 +2944,13 @@ impl App {
                 Key::Enter => self.searching = false,
                 Key::Backspace => {
                     self.query.pop();
+                    // Narrowing the list is browsing: unpin the bookmark.
+                    self.follow_tab = false;
                 }
-                Key::Char(c) => self.query.push(c),
+                Key::Char(c) => {
+                    self.query.push(c);
+                    self.follow_tab = false;
+                }
                 Key::Up
                 | Key::Down
                 | Key::Tab
@@ -3128,6 +3169,8 @@ impl App {
             }
             Pane::List => {
                 self.list_cursor = step(self.list_cursor, delta, self.list_len);
+                // Browsing unpins the bookmark: the detail follows again.
+                self.follow_tab = false;
                 self.dismiss_finished_card();
                 // Landing on a row starts its body: by the time the user
                 // reads the fields, the description is already on its way.

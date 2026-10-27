@@ -76,6 +76,42 @@ fn enter_in_the_list_opens_a_tab_and_the_detail_follows_it() {
 }
 
 #[test]
+fn switching_tabs_jumps_across_a_filter() {
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter); // tab #1, pinned
+    // Narrow the list to me/b, then bookmark #2 as well.
+    press(&mut app, Key::Esc); // back to the list
+    press(&mut app, Key::Tab); // repos pane
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Down); // me/b: the filter follows
+    press(&mut app, Key::Enter); // drills to the list
+    press(&mut app, Key::Enter); // tab #2, pinned
+    assert_eq!(
+        app.effective_item().map(|i| (i.repo.as_str(), i.number)),
+        Some(("me/b", 2))
+    );
+    // Switch back: the detail jumps to the bookmark even though the
+    // list only shows me/b — and the repo selection is untouched.
+    let cursor = app.repos_cursor;
+    press(&mut app, Key::Char('t'));
+    assert_eq!(app.active_tab, Some(0));
+    assert_eq!(
+        app.effective_item().map(|i| (i.repo.as_str(), i.number)),
+        Some(("me/a", 1)),
+        "switching tabs jumps across the filter"
+    );
+    assert_eq!(app.repos_cursor, cursor, "the repo cursor stays");
+    // Any list move unpins: the detail follows the cursor again.
+    press(&mut app, Key::Esc); // back to the list
+    press(&mut app, Key::Down);
+    assert_eq!(
+        app.effective_item().map(|i| (i.repo.as_str(), i.number)),
+        Some(("me/b", 2)),
+        "scrolling unpins the bookmark"
+    );
+}
+
+#[test]
 fn t_cycles_tabs_forward_and_back() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // #1
@@ -112,8 +148,8 @@ fn activating_a_tab_keeps_the_repo_selection() {
     assert_eq!(app.active_tab, Some(1));
     assert_eq!(
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
-        Some(("me/a", 1)),
-        "the detail stays on the list, not the tab"
+        Some(("me/b", 2)),
+        "switching tabs jumps to the bookmark"
     );
     assert_eq!(app.repos_cursor, cursor, "the repo cursor stays");
     assert_eq!(
@@ -305,8 +341,8 @@ fn switching_tabs_leaves_the_left_column_alone() {
     );
     assert_eq!(
         app.effective_item().map(|i| i.number),
-        Some(2),
-        "tabs switch the agent box, not the detail"
+        Some(1),
+        "switching tabs jumps to the bookmark"
     );
 }
 
