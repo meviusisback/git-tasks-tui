@@ -279,6 +279,23 @@ fn pty_exit_codes_map_like_the_blocking_path() {
             ..
         }
     ));
+    // macOS `strsignal` appends the number; portable-pty falls back to
+    // "Signal N" when it has none. Both must resolve (this is what the
+    // macOS CI runner reports for a killed child).
+    assert!(matches!(
+        gtasks::agent::status_for_pty_exit(1, Some("Killed: 9"), 1),
+        AgentStatus::Finished {
+            outcome: AgentOutcome::Signal(9),
+            ..
+        }
+    ));
+    assert!(matches!(
+        gtasks::agent::status_for_pty_exit(1, Some("Signal 15"), 1),
+        AgentStatus::Finished {
+            outcome: AgentOutcome::Signal(15),
+            ..
+        }
+    ));
 }
 
 #[test]

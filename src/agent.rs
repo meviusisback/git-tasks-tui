@@ -413,10 +413,26 @@ pub fn status_for_pty_exit(code: u32, signal: Option<&str>, secs: u64) -> AgentS
     }
 }
 
-/// A signal name (`"SIGKILL"`) or glibc description (`"Killed"`) to its
-/// number. The values come from `libc`, so they are right per platform.
+/// A signal name (`"SIGKILL"`), a glibc description (`"Killed"`), a macOS
+/// description (`"Killed: 9"` — their `strsignal` appends the number), or
+/// portable-pty's own fallback (`"Signal 9"`) to its number. The values
+/// come from `libc`, so they are right per platform.
 fn signal_number(name_or_desc: &str) -> Option<i32> {
-    let short = name_or_desc.strip_prefix("SIG").unwrap_or(name_or_desc);
+    let s = name_or_desc.trim();
+    // portable-pty's fallback when `strsignal` returns null.
+    if let Some(num) = s.strip_prefix("Signal ") {
+        if let Ok(n) = num.trim().parse() {
+            return Some(n);
+        }
+    }
+    // macOS `strsignal` appends ": N" to the description. The number is
+    // authoritative — it survives even descriptions this table never saw.
+    if let Some((_, tail)) = s.rsplit_once(':') {
+        if let Ok(n) = tail.trim().parse() {
+            return Some(n);
+        }
+    }
+    let short = s.strip_prefix("SIG").unwrap_or(s);
     match short {
         "HUP" | "Hangup" => Some(libc::SIGHUP),
         "INT" | "Interrupt" => Some(libc::SIGINT),
