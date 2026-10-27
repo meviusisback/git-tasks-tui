@@ -14,6 +14,128 @@ fn prog() -> PathBuf {
     PathBuf::from("/usr/bin/agent")
 }
 
+fn g_app(kind: gtasks::model::ItemKind, head: Option<&str>) -> (App, tempfile::TempDir) {
+    use gtasks::actions::RepoSlug;
+    use gtasks::fetch::FetchOutcome;
+    use gtasks::model::Item;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("r").join(".git")).unwrap();
+    let mut app = App {
+        clone_roots: vec![tmp.path().to_path_buf()],
+        worktree_root: Some(tmp.path().join("wt")),
+        ..App::default()
+    };
+    let mut binaries =
+        gtasks::binaries::Binaries::new(PathBuf::from("/bin/gh"), PathBuf::from("/bin/git"));
+    binaries.hermes = Some(PathBuf::from("/bin/hermes"));
+    app.binaries = Some(binaries);
+    app.set_repos(vec![RepoSlug::parse("o/r").expect("valid slug")]);
+    app.apply_outcome(FetchOutcome {
+        items: vec![Item {
+            number: 7,
+            title: "t".to_string(),
+            state: "OPEN".into(),
+            is_draft: None,
+            author: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            updated_at: "2026-10-20T10:00:00Z".into(),
+            created_at: String::new(),
+            url: "https://github.com/o/r/pull/7".to_string(),
+            head_ref_name: head.map(str::to_string),
+            base_ref_name: None,
+            review_decision: None,
+            mergeable: None,
+            status_check_rollup: Vec::new(),
+            closing_issues_references: Vec::new(),
+            repo: "o/r".to_string(),
+            kind,
+        }],
+        failures: Vec::new(),
+    });
+    (app, tmp)
+}
+
+fn plant(root: &std::path::Path, branch: &str) -> PathBuf {
+    use gtasks::worktree::BranchName;
+    let slug = gtasks::actions::RepoSlug::parse("o/r").unwrap();
+    let b = BranchName::parse(branch).unwrap();
+    let path = gtasks::worktree::resolve_in(root, std::path::Path::new(""), &slug, &b).unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    let gitdir = root.join(format!("gitdir-{branch}"));
+    std::fs::create_dir_all(&gitdir).unwrap();
+    std::fs::write(gitdir.join("HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
+    std::fs::write(path.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+    path
+}
+
+#[test]
+fn g_offers_the_single_previous_session_before_any_menu() {
+    use gtasks::app::Modal;
+    use gtasks::model::ItemKind;
+    let (mut app, tmp) = g_app(ItemKind::Pr, Some("fix-foo"));
+    let path = plant(&tmp.path().join("wt"), "fix-foo");
+    app.remember_worktree_agent(&plan(AgentId::Hermes), &path);
+    app.update(Msg::Key(Key::Char('g')));
+    let Some(Modal::Confirm(question)) = app.modal.as_ref() else {
+        panic!("g asks first, got {:?}", app.modal);
+    };
+    assert!(question.contains("hermes"), "names who ran: {question}");
+    assert!(
+        matches!(app.pending, Some(Pending::Resume { .. })),
+        "y reopens, n chooses"
+    );
+    // `y` reopens with nothing sent.
+    app.update(Msg::Key(Key::Char('y')));
+    let (plan, place) = app.agent_resume.as_ref().expect("y reopens");
+    assert_eq!(place, &path);
+    assert_eq!(plan.agent.id, AgentId::Hermes);
+}
+
+#[test]
+fn g_without_a_single_previous_session_opens_the_menu() {
+    use gtasks::app::Modal;
+    use gtasks::model::ItemKind;
+    // Two recorded trees: the menu disambiguates, as before.
+    let (mut app, tmp) = g_app(ItemKind::Pr, Some("fix-foo"));
+    let root = tmp.path().join("wt");
+    let first = plant(&root, "fix-foo");
+    app.remember_worktree_agent(&plan(AgentId::Hermes), &first);
+    // A second tree on another branch is not a candidate for this item,
+    // so plant a twin on the same branch instead.
+    let twin = root.join("o").join("r").join("fix-foo-twin");
+    std::fs::create_dir_all(&twin).unwrap();
+    let gitdir = root.join("gitdir-fix-foo-twin");
+    std::fs::create_dir_all(&gitdir).unwrap();
+    std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/fix-foo\n").unwrap();
+    std::fs::write(twin.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+    app.remember_worktree_agent(&plan(AgentId::Hermes), &twin);
+    app.update(Msg::Key(Key::Char('g')));
+    assert!(
+        matches!(app.modal, Some(Modal::AgentMenu(_))),
+        "several sessions: choose first, got {:?}",
+        app.modal
+    );
+    assert!(app.pending.is_none());
+
+    // A recorded agent with no binary installed is skipped silently.
+    let (mut app, tmp) = g_app(ItemKind::Pr, Some("fix-foo"));
+    let path = plant(&tmp.path().join("wt"), "fix-foo");
+    app.last_agents.insert(
+        path.display().to_string(),
+        LastAgent {
+            agent: "retired".to_string(),
+            profile: "default".to_string(),
+        },
+    );
+    app.update(Msg::Key(Key::Char('g')));
+    assert!(
+        matches!(app.modal, Some(Modal::AgentMenu(_))),
+        "unknown binary: choose, got {:?}",
+        app.modal
+    );
+}
+
 fn tree() -> PathBuf {
     PathBuf::from("/home/user/worktrees/acme-widget")
 }

@@ -373,7 +373,7 @@ fn the_list_marks_items_that_have_a_worktree() {
 }
 
 #[test]
-fn enter_on_a_recorded_tree_asks_resume_before_anything() {
+fn g_on_a_recorded_tree_asks_resume_before_anything() {
     use gtasks::app::Pending;
     let (mut app, tmp) = pr_app();
     let root = tmp.path().join("wt");
@@ -385,13 +385,10 @@ fn enter_on_a_recorded_tree_asks_resume_before_anything() {
             profile: "default".to_string(),
         },
     );
-    // The `g` flow picked hermes, then the tree: the offer names the
-    // recorded agent before anything launches.
-    open_menu(&mut app);
-    confirm_first_row(&mut app);
-    press(&mut app, Key::Enter);
+    // `g` asks right away: no agent menu first.
+    press(&mut app, Key::Char('g'));
     let Some(Modal::Confirm(question)) = app.modal.as_ref() else {
-        panic!("a recorded tree asks first, got {:?}", app.modal);
+        panic!("g asks first, got {:?}", app.modal);
     };
     assert!(
         question.contains("hermes"),
@@ -812,14 +809,15 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
     app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     with_plain_icons(|| {
         let screen = render_200x30(&app);
-        // Twice: once in the detail title, once in the tabs strip — the
-        // list shows nothing, so a third would mean a leak.
+        // Three: the detail title, the tabs strip, and the WORKTREES row —
+        // the list shows nothing, so a fourth would mean a leak.
         assert_eq!(
             screen.matches("◉").count(),
-            2,
-            "marker in detail + tabs: {screen}"
+            3,
+            "marker in detail + tabs + worktrees row: {screen}"
         );
         assert!(screen.contains("◉  #7"), "marker, gap, number: {screen}");
+        assert!(screen.contains("WORKTREES"), "the section shows: {screen}");
     });
     // And the strip knows it structurally, not just visually.
     let infos = app.tab_infos();

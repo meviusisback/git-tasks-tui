@@ -869,21 +869,30 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
                 .add_modifier(Modifier::BOLD),
         )));
         for tree in &view.trees {
-            let mut head = vec![Span::styled(
-                tree.branch.clone(),
-                theme::overlay_text().add_modifier(Modifier::BOLD),
-            )];
+            let mut head = vec![
+                Span::styled(worktree_marker_text(), theme::worktree_marker()),
+                Span::styled(
+                    tree.branch.clone(),
+                    Style::default()
+                        .fg(theme::FOCUSED)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ];
             match &tree.agent {
-                Some(agent) => {
-                    head.push(Span::styled(format!(" · {agent}"), theme::overlay_text()))
-                }
+                Some(agent) => head.push(Span::styled(
+                    format!(" · {agent}"),
+                    theme::overlay_text().add_modifier(Modifier::BOLD),
+                )),
                 None => head.push(Span::styled(
                     " · no agent yet",
                     Style::default().fg(theme::SUBTEXT),
                 )),
             }
             if tree.live {
-                head.push(Span::styled(" · running", Style::default().fg(theme::OK)));
+                head.push(Span::styled(
+                    " · running",
+                    Style::default().fg(theme::OK).add_modifier(Modifier::BOLD),
+                ));
             }
             lines.push(Line::from(head));
             lines.push(Line::from(Span::styled(

@@ -1912,7 +1912,55 @@ impl App {
     /// here; the terminal, git and the seed file belong to the loop, which
     /// consumes `agent_requested` (outbox, like `detail_requested`). Nothing
     /// is written and nothing is spawned by pressing `g`: it opens the agent
-    /// menu, and the menu leads to the worktree choice.
+    /// menu, and the menu leads to the worktree choice — unless a previous
+    /// session for this issue/PR offers itself first.
+    /// Follows the active tab when one is open.
+    ///
+    /// The single previous session behind this issue/PR, if exactly one
+    /// open tree carries a recorded agent: `g` offers it before any menu
+    /// — y reopens with nothing sent, n chooses as usual. Zero or several:
+    /// the menus disambiguate, as before.
+    fn resume_candidate(
+        &self,
+        item: &crate::model::Item,
+    ) -> Option<(AgentPlan, std::path::PathBuf)> {
+        let root = self.worktree_root.as_deref()?;
+        let slug = crate::actions::RepoSlug::parse(&item.repo).ok()?;
+        let branch = item
+            .head_ref_name
+            .clone()
+            .unwrap_or_else(|| format!("issue-{}", item.number));
+        let want = crate::worktree::BranchName::parse(&branch).ok()?;
+        let mut found = Vec::new();
+        for path in crate::worktree::list_worktrees(root, &slug) {
+            let Some(here) = crate::worktree::worktree_branch(&path) else {
+                continue;
+            };
+            if here == want && self.last_agents.contains_key(&path.display().to_string()) {
+                found.push(path);
+            }
+        }
+        let [path] = found.as_slice() else {
+            return None;
+        };
+        let last = self.last_agents.get(&path.display().to_string())?;
+        let choice = self
+            .agent_choices()
+            .into_iter()
+            .find(|c| c.id.name() == last.agent)?;
+        let clone = crate::agent::find_clone(&self.clone_roots, &item.repo).ok()?;
+        let plan = AgentPlan {
+            repo: item.repo.clone(),
+            number: item.number,
+            url: item.url.clone(),
+            branch: want.as_str().to_string(),
+            profile: last.profile.clone(),
+            agent: choice,
+            clone,
+        };
+        Some((plan, path.clone()))
+    }
+
     /// Follows the active tab when one is open.
     pub fn request_agent(&mut self) {
         let Some(item) = self.effective_item().cloned() else {
@@ -1930,6 +1978,21 @@ impl App {
         // question `W` asks, asked up front instead of erroring.
         if crate::agent::find_clone(&self.clone_roots, &item.repo).is_err() {
             self.offer_clone(&item.repo, CloneThen::AgentMenu);
+            return;
+        }
+        // A previous session for this exact issue/PR: offer it before any
+        // menu — the app already knows who ran here.
+        if let Some((plan, path)) = self.resume_candidate(&item) {
+            let agent = plan.agent.id.name();
+            self.modal = Some(Modal::Confirm(format!(
+                "reopen the last {agent} session here ({})? (y = resume, nothing sent · n = choose agent)",
+                path.display()
+            )));
+            self.pending = Some(Pending::Resume {
+                plan,
+                path,
+                preset: None,
+            });
             return;
         }
         let hermes = self.default_hermes();
