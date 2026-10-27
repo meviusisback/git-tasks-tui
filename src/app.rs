@@ -11,6 +11,7 @@ use crate::binaries::Binaries;
 use crate::fetch::{FetchError, FetchOutcome};
 use crate::gh::CheckedArgv;
 use crate::model::Item;
+use crate::model::ItemKind;
 use crate::sanitize::sanitize;
 
 use std::collections::BTreeSet;
@@ -2116,6 +2117,20 @@ impl App {
             return;
         }
         self.close_agent_record();
+    }
+
+    /// The kind of `(repo, number)` on the current list, for body fetches:
+    /// issues need `gh issue view`, PRs need `gh pr view`. The detail
+    /// request only carries repo+number, so the kind is read back here —
+    /// a hardcoded `Pr` asks GitHub for a pull request with an issue's
+    /// number and the body never loads. Unknown items keep the old `Pr`
+    /// guess: the fetch then runs and fails honestly.
+    pub fn item_kind(&self, repo: &str, number: u64) -> ItemKind {
+        self.items
+            .iter()
+            .find(|item| item.repo == repo && item.number == number)
+            .map(|item| item.kind)
+            .unwrap_or(ItemKind::Pr)
     }
 
     /// Bottom-right pane: what to do next, always visible.

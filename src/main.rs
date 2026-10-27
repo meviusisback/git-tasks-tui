@@ -135,6 +135,7 @@ fn start_agent(
         app.status = "an agent is already running".to_string();
         return;
     }
+    let timeout = Duration::from_secs(config.timeout_s.max(1));
     let root = match config.worktree_root.clone() {
         Some(root) => root,
         None => match gtasks::worktree::default_root() {
@@ -181,8 +182,15 @@ fn start_agent(
     if agreed.is_some() {
         match gtasks::worktree::create(&root, &plan.clone, &slug, &branch, binaries) {
             Ok(created) => {
-                // Fresh tree: the agent opens on a draft, not on a run.
-                launch_agent(app, &plan, &created.path, term_size, session, true);
+                launch_agent(
+                    app,
+                    &plan,
+                    &created.path,
+                    term_size,
+                    session,
+                    binaries,
+                    timeout,
+                );
             }
             // The refusal goes to the screen as it is: a check failure must
             // not become indistinguishable from a bug in the check.
@@ -192,8 +200,7 @@ fn start_agent(
     }
     match agent::next_step(target) {
         agent::AgentNext::Launch(path) => {
-            // Existing tree: the agent resumes with the seed as before.
-            launch_agent(app, &plan, &path, term_size, session, false);
+            launch_agent(app, &plan, &path, term_size, session, binaries, timeout);
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -220,6 +227,8 @@ fn start_placed(
     path: PathBuf,
     term_size: (u16, u16),
     session: &mut Option<EmbeddedSession>,
+    binaries: &Binaries,
+    timeout: Duration,
 ) {
     // One agent at a time, same as every other launch.
     if session.is_some() {
@@ -237,7 +246,7 @@ fn start_placed(
     }
     match agent::next_step(path) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, &plan, &path, term_size, session, false);
+            launch_agent(app, &plan, &path, term_size, session, binaries, timeout);
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -349,14 +358,36 @@ fn delete_worktree(
 /// Run the handoff the user validated: seed file plus an agent spawned
 /// embedded in the agent box. The TUI never suspends; the child lives in a
 /// pty sized to the box, and the loop polls it every tick.
+///
+/// The agent never starts working on its own: it opens on an empty prompt
+/// and the loop types the seed as a draft the user reviews and sends.
+/// One Enter to start is cheaper than one run in the wrong direction.
 fn launch_agent(
     app: &mut App,
     plan: &AgentPlan,
     path: &std::path::Path,
     term_size: (u16, u16),
     session: &mut Option<EmbeddedSession>,
-    draft: bool,
+    binaries: &Binaries,
+    timeout: Duration,
 ) {
+    // The tree may have drifted onto another branch since it was made
+    // (renamed outside, checked out by hand): starting the agent there
+    // works on the wrong code. Refuse a known mismatch with both names
+    // instead — delete the tree and relaunch to rebuild it, or fix the
+    // branch by hand. Unknown stays launchable: a git hiccup must not
+    // brick the box.
+    match gtasks::worktree::current_branch(binaries, path, timeout) {
+        Some(have) if have != plan.branch => {
+            app.status = format!(
+                "tree {} is on branch {have}, not {} — fix the branch or delete the tree and relaunch",
+                path.display(),
+                plan.branch
+            );
+            return;
+        }
+        _ => {}
+    }
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
         Err(err) => {
@@ -397,28 +428,15 @@ fn launch_agent(
         } else {
             plan.agent.program.clone()
         };
-        // First launch on a fresh tree: no initial prompt — the agent opens
-        // on an empty prompt and the loop types the seed as a draft the user
-        // reviews and sends. Re-entering an existing tree keeps the old
-        // behaviour (the seed travels as the initial message).
-        if draft {
-            agent::agent_argv_for_draft(
-                plan.agent.id,
-                &program,
-                &plan.profile,
-                path,
-                app.sandbox_agents,
-            )
-        } else {
-            agent::agent_argv_for(
-                plan.agent.id,
-                &program,
-                &plan.profile,
-                seed.path(),
-                path,
-                app.sandbox_agents,
-            )
-        }
+        // No initial prompt, ever: the agent opens on an empty prompt and
+        // the loop types the seed as a draft the user reviews and sends.
+        agent::agent_argv_for_draft(
+            plan.agent.id,
+            &program,
+            &plan.profile,
+            path,
+            app.sandbox_agents,
+        )
     };
     // The box the pty is sized to: the same geometry the draw uses, so the
     // terminal and its box never disagree by a row.
@@ -461,21 +479,11 @@ fn launch_agent(
                 branch: plan.branch.clone(),
                 path: path.to_path_buf(),
             });
-            if draft {
-                // The prompt is typed, not sent: the agent opens ready, and
-                // the user reviews the draft and presses Enter. The seed file
-                // still travels to the record so the run is reproducible.
-                app.draft_text = Some(body);
-                app.status = "agent ready — review the draft, edit it, Enter sends it".to_string();
-            } else if app.sandbox_agents {
-                app.status =
-                    "agent running — sandboxed, Esc unfocuses, Ctrl-C interrupts".to_string();
-            } else {
-                app.status = "agent running — Esc unfocuses, Ctrl-C interrupts".to_string();
-                // A re-entry is never a draft: clear any leftover text so an
-                // old draft cannot leak into a fresh run.
-                app.draft_text = None;
-            };
+            // The prompt is typed, not sent: the agent opens ready, and
+            // the user reviews the draft and presses Enter. The seed file
+            // still travels to the record so the run is reproducible.
+            app.draft_text = Some(body);
+            app.status = "agent ready — review the draft, edit it, Enter sends it".to_string();
             *session = Some(sess);
         }
         Err(err) => app.status = format!("cannot run the agent: {err:#}"),
@@ -518,7 +526,6 @@ fn spawn_detail(
 /// What a body fetch returns, and the tuple kept while it is in flight.
 type DetailResult = Result<String, fetch::FetchError>;
 type PendingDetail = (String, u64, Receiver<DetailResult>);
-
 /// The item's `updated_at` for the cache: a body cached under this stamp is
 /// current, anything else is stale. `None` when the item left the list —
 /// the fetch then runs and fails honestly instead of trusting the disk.
@@ -940,25 +947,28 @@ fn run_tui() -> anyhow::Result<()> {
                             // The apply above clears the request; raise it
                             // again for the revalidation below.
                             app.detail_requested = Some((repo.clone(), number));
+                            let kind = app.item_kind(&repo, number);
                             pending_detail = Some((
                                 repo.clone(),
                                 number,
-                                spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
+                                spawn_detail(binaries.clone(), repo, number, kind, timeout),
                             ));
                         }
                         gtasks::cache::Resolve::Missing => {
+                            let kind = app.item_kind(&repo, number);
                             pending_detail = Some((
                                 repo.clone(),
                                 number,
-                                spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
+                                spawn_detail(binaries.clone(), repo, number, kind, timeout),
                             ));
                         }
                     },
                     (None, _) => {
+                        let kind = app.item_kind(&repo, number);
                         pending_detail = Some((
                             repo.clone(),
                             number,
-                            spawn_detail(binaries.clone(), repo, number, ItemKind::Pr, timeout),
+                            spawn_detail(binaries.clone(), repo, number, kind, timeout),
                         ));
                     }
                 }
@@ -1062,7 +1072,15 @@ fn run_tui() -> anyhow::Result<()> {
             );
         }
         if let Some((plan, path)) = app.agent_place.take() {
-            start_placed(&mut app, plan, path, term_size, &mut embedded);
+            start_placed(
+                &mut app,
+                plan,
+                path,
+                term_size,
+                &mut embedded,
+                &binaries,
+                timeout,
+            );
         }
         if let Some(order) = app.rename_go.take() {
             rename_worktree(&mut app, &binaries, order, &embedded);

@@ -392,6 +392,30 @@ pub fn clone_repo(
     Ok(out)
 }
 
+/// The branch the tree at `path` is actually on — `None` when git cannot
+/// say (not a repo yet, detached HEAD, timeout). Read-only
+/// (`branch --show-current`): a tree that drifted onto another branch
+/// launches the agent on the wrong code, so the launchers refuse a known
+/// mismatch instead of starting silently. Unknown stays launchable: a
+/// hiccup in git must not brick the box.
+pub fn current_branch(
+    binaries: &crate::binaries::Binaries,
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    let argv = crate::gh::git(
+        binaries,
+        path,
+        vec!["branch".into(), "--show-current".into()],
+    );
+    let out = crate::gh::run_checked(&crate::gh::CheckedArgv::from_checked(argv), timeout).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!branch.is_empty()).then_some(branch)
+}
+
 /// Run a worktree-mutating `git` argv (create/rename/move/remove): the typed
 /// path, so `--force` on `worktree remove` survives the untrusted
 /// transport's refusal instead of failing every delete closed. Only fixed
