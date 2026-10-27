@@ -99,7 +99,8 @@ fn one_heavy_repo_does_not_fail_the_whole_batch() {
     let binaries = Binaries::new(fake_gh(tmp.path()), git_binary());
     let repos = repos(20);
 
-    let outcome = fetch::fetch_graphql_many(&binaries, &repos, 10, Duration::from_secs(30), 4);
+    let outcome =
+        fetch::fetch_graphql_many(&binaries, &repos, 10, Duration::from_secs(30), 4, false);
 
     let arrived: Vec<String> = outcome.items.iter().map(|i| i.repo.clone()).collect();
     println!(
@@ -151,7 +152,8 @@ fn the_same_fixture_succeeds_without_the_heavy_repo() {
     let mut repos = repos(20);
     repos.retain(|r| r.as_str() != HEAVY);
 
-    let outcome = fetch::fetch_graphql_many(&binaries, &repos, 10, Duration::from_secs(30), 4);
+    let outcome =
+        fetch::fetch_graphql_many(&binaries, &repos, 10, Duration::from_secs(30), 4, false);
 
     println!(
         "without the heavy repo: {} items over {} repos · failed: {}",

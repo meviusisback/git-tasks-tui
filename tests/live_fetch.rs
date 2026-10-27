@@ -11,7 +11,7 @@ use gtasks::fetch::fetch_graphql_many;
 fn a_real_repo_can_be_fetched() {
     let binaries = Binaries::detect().expect("gh and git on PATH");
     let repos = vec![RepoSlug::parse("cli/cli").expect("valid slug")];
-    let outcome = fetch_graphql_many(&binaries, &repos, 5, Duration::from_secs(30), 1);
+    let outcome = fetch_graphql_many(&binaries, &repos, 5, Duration::from_secs(30), 1, false);
     assert!(
         outcome.failures.is_empty(),
         "fetch failed: {:?}",

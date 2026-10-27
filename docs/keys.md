@@ -19,6 +19,7 @@ disagree, the handler is right and this file is a bug.
 | `w` | focus the agent pane (worktree + agent instructions live there) |
 | `R` | repo selection menu (the rows re-read from GitHub on open, so new repos join without a restart): `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
+| `f` | state filter on a single repo: open → closed → all states (numeric, oldest first). Closed history is fetched on demand; on "all repos" it says to pick one repo first |
 | `d` | diff of the selected PR in an overlay (`↑`/`↓` scroll, wheel scrolls, `Enter`/`Esc` closes): fetched once, then cached; first 200 lines with the total named when truncated |
 | `o` | open the selected item in the browser |
 | `r` | refresh — it works in every pane, including inside a drilled-in repo. The list also re-reads itself every `refresh_s` seconds while idle (default 300, `0` turns it off) |

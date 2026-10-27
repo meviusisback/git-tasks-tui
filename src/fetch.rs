@@ -89,11 +89,12 @@ fn run_batch(
     limit: usize,
     timeout: Duration,
     cwd: &std::path::Path,
+    include_closed: bool,
 ) -> Result<Vec<crate::graphql::RepoRead>, String> {
     // `gh()` takes the resolved binary: no PATH lookup, nothing to overwrite.
     // One `--field`, never `-f`; one argument per word — no shell anywhere
     // near the query text.
-    let query = crate::graphql::batch_query(batch, limit);
+    let query = crate::graphql::batch_query(batch, limit, include_closed);
     let argv = gh(binaries, cwd, crate::graphql::batch_argv(query));
     let checked = CheckedArgv::from_checked(argv);
     let mut attempts = 0;
@@ -141,9 +142,10 @@ fn resolve_batch(
     limit: usize,
     timeout: Duration,
     cwd: &std::path::Path,
+    include_closed: bool,
     out: &mut Vec<ResolvedRepo>,
 ) {
-    match run_batch(binaries, batch, limit, timeout, cwd) {
+    match run_batch(binaries, batch, limit, timeout, cwd, include_closed) {
         Ok(reads) => {
             for read in reads {
                 match read.error {
@@ -157,8 +159,24 @@ fn resolve_batch(
         }
         Err(_) => {
             let mid = batch.len() / 2;
-            resolve_batch(binaries, &batch[..mid], limit, timeout, cwd, out);
-            resolve_batch(binaries, &batch[mid..], limit, timeout, cwd, out);
+            resolve_batch(
+                binaries,
+                &batch[..mid],
+                limit,
+                timeout,
+                cwd,
+                include_closed,
+                out,
+            );
+            resolve_batch(
+                binaries,
+                &batch[mid..],
+                limit,
+                timeout,
+                cwd,
+                include_closed,
+                out,
+            );
         }
     }
 }
@@ -175,6 +193,7 @@ pub fn fetch_graphql_many(
     limit: usize,
     timeout: Duration,
     parallel: usize,
+    include_closed: bool,
 ) -> FetchOutcome {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -194,7 +213,15 @@ pub fn fetch_graphql_many(
                         break;
                     }
                     let mut resolved = Vec::new();
-                    resolve_batch(binaries, chunks[index], limit, timeout, &cwd, &mut resolved);
+                    resolve_batch(
+                        binaries,
+                        chunks[index],
+                        limit,
+                        timeout,
+                        &cwd,
+                        include_closed,
+                        &mut resolved,
+                    );
                     let mut guard = match collected.lock() {
                         Ok(guard) => guard,
                         Err(poisoned) => poisoned.into_inner(),

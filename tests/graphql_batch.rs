@@ -34,7 +34,7 @@ fn sixty_nine_repos_become_four_batches_with_stable_aliases() {
     );
     let mut seen = std::collections::HashSet::new();
     for (batch_no, chunk) in chunks.iter().enumerate() {
-        let query = batch_query(chunk, 100);
+        let query = batch_query(chunk, 100, false);
         for (i, slug) in chunk.iter().enumerate() {
             let (owner, name) = slug.as_str().split_once('/').unwrap();
             assert!(
@@ -54,13 +54,30 @@ fn sixty_nine_repos_become_four_batches_with_stable_aliases() {
 }
 
 #[test]
+fn closed_history_asks_for_closed_and_merged_states() {
+    let repos = slugs(&["o/r"]);
+    let open = batch_query(&repos, 5, false);
+    assert!(open.contains("states: [OPEN]"), "default stays open-only");
+    assert!(!open.contains("MERGED"), "no merged state for issues");
+    let closed = batch_query(&repos, 5, true);
+    assert!(
+        closed.contains("states: [OPEN, CLOSED, MERGED]"),
+        "PRs include merged"
+    );
+    assert!(
+        closed.contains("states: [OPEN, CLOSED]"),
+        "issues exclude merged"
+    );
+}
+
+#[test]
 fn braces_balance_for_any_batch_size() {
     // The builder concatenates literals; a missing brace fails every repo in
     // the batch at once. Count, don't eyeball.
     for n in [1, 7, 20] {
         let names: Vec<String> = (0..n).map(|i| format!("o{i}/r{i}")).collect();
         let all: Vec<&str> = names.iter().map(String::as_str).collect();
-        let query = batch_query(&slugs(&all), 100);
+        let query = batch_query(&slugs(&all), 100, false);
         let open = query.chars().filter(|&c| c == '{').count();
         let close = query.chars().filter(|&c| c == '}').count();
         assert_eq!(open, close, "unbalanced for batch size {n}");
@@ -72,7 +89,7 @@ fn the_batch_argv_is_one_field_never_a_short_flag() {
     // `--field`, not `-f`: the builder path takes no short flags, and the
     // query rides as one argument — no shell anywhere near it.
     let repos = slugs(&["acme/one", "acme/two"]);
-    let args = batch_argv(batch_query(&repos, 5));
+    let args = batch_argv(batch_query(&repos, 5, false));
     assert_eq!(args[0], "api");
     assert_eq!(args[1], "graphql");
     assert_eq!(args[2], "--field");
@@ -172,7 +189,11 @@ fn a_batch_rides_the_checked_transport_end_to_end() {
     let program = fake_gh(dir.path(), BATCH_JSON);
     let binaries = bins(program);
     let repos = slugs(&["o/a"]);
-    let argv = gh(&binaries, dir.path(), batch_argv(batch_query(&repos, 100)));
+    let argv = gh(
+        &binaries,
+        dir.path(),
+        batch_argv(batch_query(&repos, 100, false)),
+    );
     let checked = CheckedArgv::unchecked_for_tests(argv);
     let output = gtasks::gh::run_checked(&checked, Duration::from_secs(10)).unwrap();
     assert!(output.status.success());
@@ -197,7 +218,11 @@ fn a_failing_gh_reports_the_exit_status_and_stderr() {
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     let binaries = bins(program);
     let repos = slugs(&["o/a"]);
-    let argv = gh(&binaries, dir.path(), batch_argv(batch_query(&repos, 100)));
+    let argv = gh(
+        &binaries,
+        dir.path(),
+        batch_argv(batch_query(&repos, 100, false)),
+    );
     let checked = CheckedArgv::unchecked_for_tests(argv);
     let output = gtasks::gh::run_checked(&checked, Duration::from_secs(10)).unwrap();
     assert!(!output.status.success());

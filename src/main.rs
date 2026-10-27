@@ -17,7 +17,7 @@ use clap::Parser;
 use gtasks::actions;
 use gtasks::actions::RepoSlug;
 use gtasks::agent::{self, AgentPlan};
-use gtasks::app::{App, Key, Modal, Msg, Pending};
+use gtasks::app::{App, Key, Modal, Msg, Pending, StateFilter};
 use gtasks::binaries::Binaries;
 use gtasks::config::Config;
 use gtasks::embedded::EmbeddedSession;
@@ -691,10 +691,12 @@ fn spawn_fetch(
     limit: usize,
     timeout: Duration,
     parallel: usize,
+    include_closed: bool,
 ) -> Receiver<FetchOutcome> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let outcome = fetch::fetch_graphql_many(&binaries, &repos, limit, timeout, parallel);
+        let outcome =
+            fetch::fetch_graphql_many(&binaries, &repos, limit, timeout, parallel, include_closed);
         let _ = tx.send(outcome);
     });
     rx
@@ -886,6 +888,7 @@ fn run_tui() -> anyhow::Result<()> {
         limit,
         timeout,
         parallel,
+        app.state_filter != StateFilter::Open,
     ));
     let mut repo_pending: Option<Receiver<Result<Vec<RepoSlug>, String>>> = None;
     // Last completed-or-started refresh: the auto-refresh door below measures
@@ -1268,6 +1271,7 @@ fn run_tui() -> anyhow::Result<()> {
                 limit,
                 timeout,
                 parallel,
+                app.state_filter != StateFilter::Open,
             ));
         }
 
@@ -1654,6 +1658,24 @@ fn run_tui() -> anyhow::Result<()> {
                                     if app.pane != pane {
                                         app.pane = pane;
                                         app.session_dirty = true;
+                                    }
+                                    // Clicking a row selects it too, not just
+                                    // the box: border and overflow clicks
+                                    // select nothing (same rule as tabs).
+                                    if pane == gtasks::app::Pane::List {
+                                        if let Some(idx) = ui::list_row_at(
+                                            g.list,
+                                            me.row,
+                                            app.visible_items().len(),
+                                        ) {
+                                            app.click_list_row(idx);
+                                        }
+                                    } else if pane == gtasks::app::Pane::Repos {
+                                        if let Some(idx) =
+                                            ui::repos_row_at(g.repos, me.row, app.repos.len())
+                                        {
+                                            app.click_repos_row(idx);
+                                        }
                                     }
                                 }
                             }

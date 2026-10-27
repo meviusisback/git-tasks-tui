@@ -209,6 +209,90 @@ fn a_closed_tab_item_stays_in_the_detail() {
 }
 
 #[test]
+fn f_cycles_the_state_filter_on_a_single_repo_only() {
+    let mut app = app_with_items();
+    // All repos: closed history is per-repo, so `f` refuses.
+    press(&mut app, Key::Char('f'));
+    assert!(!app.refresh_requested, "no refetch without a single repo");
+    assert!(
+        app.status.contains("single repo"),
+        "says why: {}",
+        app.status
+    );
+    assert_eq!(app.state_filter, gtasks::app::StateFilter::Open);
+    // Drill into me/a through keys, then cycle.
+    press(&mut app, Key::Tab); // repos pane
+    press(&mut app, Key::Down); // me/a: the filter follows
+    press(&mut app, Key::Enter); // back to the list
+    press(&mut app, Key::Char('f'));
+    assert_eq!(app.state_filter, gtasks::app::StateFilter::Closed);
+    assert!(app.refresh_requested, "the refetch carries the states");
+    assert!(app.loading, "one fetch at a time");
+    // The loop owns the fetch: simulate it landing before cycling on.
+    app.loading = false;
+    app.refresh_requested = false;
+    press(&mut app, Key::Char('f'));
+    assert_eq!(app.state_filter, gtasks::app::StateFilter::All);
+    app.loading = false;
+    app.refresh_requested = false;
+    press(&mut app, Key::Char('f'));
+    assert_eq!(app.state_filter, gtasks::app::StateFilter::Open);
+}
+
+#[test]
+fn closed_items_show_oldest_first_on_a_single_repo() {
+    let mut app = app_with_items();
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![
+            item("me/a", 3, "three"),
+            Item {
+                number: 9,
+                state: "CLOSED".into(),
+                ..item("me/a", 9, "nine")
+            },
+            Item {
+                number: 4,
+                state: "CLOSED".into(),
+                ..item("me/a", 4, "four")
+            },
+            item("me/b", 2, "two"),
+        ],
+        failures: Vec::new(),
+    });
+    // Drill into me/a through keys.
+    press(&mut app, Key::Tab); // repos pane
+    press(&mut app, Key::Down); // me/a
+    press(&mut app, Key::Enter); // back to the list
+    // Open by default: the closed ones stay hidden, no reorder.
+    assert_eq!(
+        app.visible_items()
+            .iter()
+            .map(|i| i.number)
+            .collect::<Vec<_>>(),
+        vec![3],
+        "open-only, fetch order"
+    );
+    app.state_filter = gtasks::app::StateFilter::Closed;
+    assert_eq!(
+        app.visible_items()
+            .iter()
+            .map(|i| i.number)
+            .collect::<Vec<_>>(),
+        vec![4, 9],
+        "closed only, numeric"
+    );
+    app.state_filter = gtasks::app::StateFilter::All;
+    assert_eq!(
+        app.visible_items()
+            .iter()
+            .map(|i| i.number)
+            .collect::<Vec<_>>(),
+        vec![3, 4, 9],
+        "everything, numeric"
+    );
+}
+
+#[test]
 fn t_cycles_tabs_forward_and_back() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // #1

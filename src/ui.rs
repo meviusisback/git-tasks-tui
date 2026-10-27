@@ -659,6 +659,29 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
     chunks
 }
 
+/// Which list row sits under mouse row `y`, if any. Rows are border +
+/// content, so the first content row sits one below the top border;
+/// clicks on the border or past the last row map to `None` — a click
+/// must never silently select the nearest row.
+pub fn list_row_at(list_area: Rect, y: u16, len: usize) -> Option<usize> {
+    let idx = y.saturating_sub(list_area.y.saturating_add(1)) as usize;
+    let last = list_area.height.saturating_sub(2) as usize;
+    if y <= list_area.y || idx >= len.min(last) {
+        return None;
+    }
+    Some(idx)
+}
+
+/// Which repos row sits under mouse row `y`, if any. Same border rule
+/// as the list: border and overflow clicks select nothing.
+pub fn repos_row_at(repos_area: Rect, y: u16, len: usize) -> Option<usize> {
+    let idx = y.saturating_sub(repos_area.y.saturating_add(1)) as usize;
+    let last = repos_area.height.saturating_sub(2) as usize;
+    if y <= repos_area.y || idx >= len.min(last) {
+        return None;
+    }
+    Some(idx)
+}
 /// Which tab sits under a mouse click, if any. Pure over the app (no
 /// terminal needed), so tests pin the mapping: separators and the empty
 /// strip map to `None` — a click between tabs switches nothing.

@@ -59,6 +59,35 @@ pub enum RepoFilter {
     One(RepoSlug),
 }
 
+/// Which states the list shows. Open-only by default — the fetch asks
+/// GitHub for closed history only when the user picks Closed or All on
+/// a single repo, since every extra state multiplies the payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StateFilter {
+    #[default]
+    Open,
+    Closed,
+    All,
+}
+
+impl StateFilter {
+    fn next(self) -> Self {
+        match self {
+            StateFilter::Open => StateFilter::Closed,
+            StateFilter::Closed => StateFilter::All,
+            StateFilter::All => StateFilter::Open,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            StateFilter::Open => "open",
+            StateFilter::Closed => "closed",
+            StateFilter::All => "all states",
+        }
+    }
+}
+
 /// One row of the repos pane: the "everything" selector or one valid slug.
 /// The list is typed end to end — `set_repos` takes slugs, never strings —
 /// so no `parse` (and no `expect`) is left on the cursor path, and no magic
@@ -420,6 +449,9 @@ pub struct App {
     pub all_repos: Vec<RepoSlug>,
     /// The repo selected in the repos pane; `All` means "all".
     pub repo_filter: RepoFilter,
+    /// Closed history needs an explicit ask: `f` cycles open → closed →
+    /// all states, but only on a single repo — all repos stay open-only.
+    pub state_filter: StateFilter,
     /// `Enter` in the repo menu: the checked rows, for the loop to save to
     /// `state.json`. The live list is already updated; this is only the file.
     pub selection_applied: Option<Vec<String>>,
@@ -618,6 +650,7 @@ impl Default for App {
             repos: Vec::new(),
             all_repos: Vec::new(),
             repo_filter: RepoFilter::All,
+            state_filter: StateFilter::Open,
             selection_applied: None,
             loading: false,
             failed: 0,
@@ -761,7 +794,11 @@ impl App {
         let repos = plural(configured, "repo", "repos");
         self.status = match &self.repo_filter {
             RepoFilter::One(slug) => {
-                format!("{} in {slug}", plural(shown, "item", "items"))
+                let stated = match self.state_filter {
+                    StateFilter::Open => String::new(),
+                    filter => format!(" · {}", filter.label()),
+                };
+                format!("{} in {slug}{stated}", plural(shown, "item", "items"))
             }
             RepoFilter::All => match self.failed {
                 0 => format!("{items} from {repos}"),
@@ -835,17 +872,31 @@ impl App {
                 .collect(),
             RepoFilter::All => self.items.iter().collect(),
         };
-        if self.query.trim().is_empty() {
-            return by_repo;
+        let by_state: Vec<&Item> = match self.state_filter {
+            StateFilter::Open => by_repo.into_iter().filter(|i| i.state == "OPEN").collect(),
+            StateFilter::Closed => by_repo.into_iter().filter(|i| i.state != "OPEN").collect(),
+            StateFilter::All => by_repo,
+        };
+        let searched: Vec<&Item> = if self.query.trim().is_empty() {
+            by_state
+        } else {
+            let needle = self.query.to_lowercase();
+            by_state
+                .into_iter()
+                .filter(|item| {
+                    item.title.to_lowercase().contains(&needle)
+                        || item.number.to_string().contains(&needle)
+                })
+                .collect()
+        };
+        // Closed history reads oldest-first: numeric order, like an archive.
+        if self.state_filter == StateFilter::Open {
+            searched
+        } else {
+            let mut ordered = searched;
+            ordered.sort_by_key(|i| i.number);
+            ordered
         }
-        let needle = self.query.to_lowercase();
-        by_repo
-            .into_iter()
-            .filter(|item| {
-                item.title.to_lowercase().contains(&needle)
-                    || item.number.to_string().contains(&needle)
-            })
-            .collect()
     }
 
     /// The bottom legend: the keys available right now, never the full keymap
@@ -925,7 +976,7 @@ impl App {
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees · d diff · s settings",
+                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees · d diff · f state · s settings",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -1127,6 +1178,29 @@ impl App {
             if n == 1 { "repo" } else { "repos" }
         );
         fresh
+    }
+
+    /// Click a list row: the cursor jumps there. Same side effects as the
+    /// keyboard move (finished card dismissed, body preloaded), so mouse
+    /// and keys never disagree about what the row means.
+    pub fn click_list_row(&mut self, idx: usize) {
+        if idx >= self.visible_items().len() {
+            return;
+        }
+        self.list_cursor = idx;
+        self.dismiss_finished_card();
+        self.preload_detail();
+        self.session_dirty = true;
+    }
+
+    /// Click a repos row: same as moving there — the filter follows it.
+    pub fn click_repos_row(&mut self, idx: usize) {
+        if idx >= self.repos.len() {
+            return;
+        }
+        self.repos_cursor = idx;
+        self.apply_repo_filter();
+        self.session_dirty = true;
     }
 
     /// The item under the cursor, if any.
@@ -3223,6 +3297,21 @@ impl App {
                 self.loading = true;
                 self.refresh_requested = true;
                 self.status = "refreshing…".to_string();
+            }
+            // `f` cycles the state filter — open, closed, all — but only
+            // on a single repo: closed history for all repos would
+            // multiply the fetch by every repo. The refetch carries the
+            // closed states; the list shows them oldest-first.
+            Key::Char('f') if !self.loading => {
+                let RepoFilter::One(_) = self.repo_filter else {
+                    self.status =
+                        "pick a single repo first — closed history is per-repo".to_string();
+                    return;
+                };
+                self.state_filter = self.state_filter.next();
+                self.status = format!("showing {}", self.state_filter.label());
+                self.loading = true;
+                self.refresh_requested = true;
             }
             // `d` shows the selected PR's diff in an overlay (fetched once,
             // then cached). With a running agent focused this key types

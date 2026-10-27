@@ -294,7 +294,7 @@ fn issue_item(node: IssueNode) -> Item {
 /// capped at `limit`. Pure: the same slugs always yield the same text.
 /// Braces are balanced by construction — each block opens and closes in
 /// the same literal — and `braces_balance_for_any_batch_size` pins it.
-pub fn batch_query(batch: &[RepoSlug], limit: usize) -> String {
+pub fn batch_query(batch: &[RepoSlug], limit: usize, include_closed: bool) -> String {
     const PR_FIELDS: &str = "number title state url createdAt updatedAt isDraft \
         author { login } labels(first: 20) { nodes { name } } \
         assignees(first: 20) { nodes { login } } \
@@ -313,10 +313,19 @@ pub fn batch_query(batch: &[RepoSlug], limit: usize) -> String {
             .as_str()
             .split_once('/')
             .expect("validated slugs are owner/name");
+        // Open-only by default: closed history only when the user asks for
+        // it (single-repo filter), since every extra state multiplies the
+        // payload of all 69 repos. Issues have no MERGED state, so the two
+        // lists take different state sets.
+        let (pr_states, issue_states) = if include_closed {
+            ("OPEN, CLOSED, MERGED", "OPEN, CLOSED")
+        } else {
+            ("OPEN", "OPEN")
+        };
         out.push_str(&format!(
             " r{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ \
-                pullRequests(first: {limit}, states: OPEN) {{ nodes {{ {PR_FIELDS} }} }} \
-                issues(first: {limit}, states: OPEN) {{ nodes {{ {ISSUE_FIELDS} }} }} }}"
+                pullRequests(first: {limit}, states: [{pr_states}]) {{ nodes {{ {PR_FIELDS} }} }} \
+                issues(first: {limit}, states: [{issue_states}]) {{ nodes {{ {ISSUE_FIELDS} }} }} }}"
         ));
     }
     out.push_str(" }");

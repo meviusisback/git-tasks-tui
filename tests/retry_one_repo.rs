@@ -111,7 +111,14 @@ fn a_transient_failure_is_retried_once() {
     let (gh, count) = fake_gh(tmp.path(), 1);
     let binaries = Binaries::new(gh, git_binary());
 
-    let outcome = fetch::fetch_graphql_many(&binaries, &one_repo(), 10, Duration::from_secs(30), 4);
+    let outcome = fetch::fetch_graphql_many(
+        &binaries,
+        &one_repo(),
+        10,
+        Duration::from_secs(30),
+        4,
+        false,
+    );
 
     println!(
         "transient 502: {} items · {} failures · {} calls to gh",
@@ -143,7 +150,14 @@ fn a_persistent_failure_is_reported_once_after_one_retry() {
     let (gh, count) = fake_gh(tmp.path(), usize::MAX / 2); // always fails
     let binaries = Binaries::new(gh, git_binary());
 
-    let outcome = fetch::fetch_graphql_many(&binaries, &one_repo(), 10, Duration::from_secs(30), 4);
+    let outcome = fetch::fetch_graphql_many(
+        &binaries,
+        &one_repo(),
+        10,
+        Duration::from_secs(30),
+        4,
+        false,
+    );
 
     println!(
         "persistent 502: {} items · {} failures · {} calls to gh",
