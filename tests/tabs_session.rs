@@ -61,13 +61,18 @@ fn enter_in_the_list_opens_a_tab_and_the_detail_follows_it() {
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
         Some(("me/a", 1))
     );
-    // Moving the list cursor does not drag the detail away from the tab.
+    // Scrolling the list loads the detail; Enter only moves the focus
+    // there (and opens the row's tab).
+    press(&mut app, Key::Esc); // back to the list
     press(&mut app, Key::Down);
     assert_eq!(
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
-        Some(("me/a", 1)),
-        "the tab keeps its issue while the list moves"
+        Some(("me/b", 2)),
+        "the detail follows the list"
     );
+    press(&mut app, Key::Enter);
+    assert_eq!(app.tabs.len(), 2, "Enter opens the row's tab");
+    assert_eq!(app.pane, Pane::Detail, "Enter moves the focus right");
 }
 
 #[test]
@@ -107,8 +112,8 @@ fn activating_a_tab_keeps_the_repo_selection() {
     assert_eq!(app.active_tab, Some(1));
     assert_eq!(
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
-        Some(("me/b", 2)),
-        "the detail follows the tab"
+        Some(("me/a", 1)),
+        "the detail stays on the list, not the tab"
     );
     assert_eq!(app.repos_cursor, cursor, "the repo cursor stays");
     assert_eq!(
@@ -300,8 +305,8 @@ fn switching_tabs_leaves_the_left_column_alone() {
     );
     assert_eq!(
         app.effective_item().map(|i| i.number),
-        Some(1),
-        "the detail is back on the first tab"
+        Some(2),
+        "tabs switch the agent box, not the detail"
     );
 }
 
@@ -471,12 +476,13 @@ fn the_detail_keeps_the_pr_while_its_agent_runs() {
 }
 
 #[test]
-fn a_tab_without_its_issue_says_so_instead_of_showing_another() {
+fn a_tab_without_its_issue_names_it_on_an_empty_list() {
     use gtasks::ui::{draw, view_for};
     use ratatui::{Terminal, backend::TestBackend};
     let mut app = app_with_items();
-    // A tab for an issue the list does not have (stale fetch): the
-    // detail must not fall back to the row under the cursor.
+    // A tab for an issue the list does not have (stale fetch): with
+    // nothing under the cursor the detail names it instead of a blank.
+    app.items.clear();
     app.tabs.push(Tab {
         repo: "me/a".to_string(),
         number: 11,
@@ -500,12 +506,11 @@ fn a_tab_without_its_issue_says_so_instead_of_showing_another() {
     );
     assert!(
         screen.contains("not in the current list"),
-        "honest instead of foreign: {screen}"
+        "honest instead of blank: {screen}"
     );
-    assert_eq!(
-        screen.matches("#1 one").count(),
-        1,
-        "once — the list row only, never the detail under this tab's name"
+    assert!(
+        !screen.contains("#1 one"),
+        "the cleared list shows nothing else: {screen}"
     );
 }
 

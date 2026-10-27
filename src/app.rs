@@ -1038,19 +1038,11 @@ impl App {
         self.visible_items().get(self.list_cursor).copied()
     }
 
-    /// The item the right column acts on: the active tab when set and still
-    /// present, otherwise the row under the list cursor. Tabs survive a
-    /// filter change, so the detail never follows a row that disappeared.
+    /// The item the right column acts on: the row under the list cursor,
+    /// always. Scrolling the list loads the detail; Enter only moves the
+    /// focus there (and opens the row's tab). Tabs hold agent sessions,
+    /// not the detail — so a tab can never glue a foreign issue on screen.
     pub fn effective_item(&self) -> Option<&Item> {
-        if let Some(idx) = self.active_tab
-            && let Some(tab) = self.tabs.get(idx)
-            && let Some(found) = self
-                .items
-                .iter()
-                .find(|i| i.repo == tab.repo && i.number == tab.number)
-        {
-            return Some(found);
-        }
         self.selected_item()
     }
 
@@ -1100,10 +1092,10 @@ impl App {
         }
     }
 
-    /// Activate tab `idx` (clamped): the detail follows it and loads its
-    /// body when missing. A finished record's card yields to the detail.
-    /// The left column is left alone: navigating tabs must not reshuffle
-    /// the repo selection (an "all repos" view stays "all repos").
+    /// Activate tab `idx` (clamped): the agent box follows it. The detail
+    /// follows the list cursor, never the tab. The left column is left
+    /// alone: navigating tabs must not reshuffle the repo selection (an
+    /// "all repos" view stays "all repos").
     pub fn activate_tab(&mut self, idx: usize) {
         self.dismiss_finished_card();
         if self.tabs.is_empty() {
@@ -1113,22 +1105,8 @@ impl App {
         let idx = idx.min(self.tabs.len() - 1);
         self.active_tab = Some(idx);
         self.session_dirty = true;
-        if let Some(tab) = self.tabs.get(idx).cloned() {
-            if let Some(item) = self
-                .items
-                .iter()
-                .find(|i| i.repo == tab.repo && i.number == tab.number)
-                .cloned()
-            {
-                let key = (item.repo.clone(), item.number);
-                if self.detail_for.as_ref() != Some(&key)
-                    && self.detail_requested.as_ref() != Some(&key)
-                {
-                    self.detail_requested = Some(key);
-                    self.status = format!("loading #{}…", item.number);
-                }
-            }
-        }
+        // The detail follows the list cursor, never the tab: switching
+        // tabs switches the agent box, so no body is requested here.
     }
 
     pub fn next_tab(&mut self) {
