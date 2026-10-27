@@ -1515,16 +1515,23 @@ fn run_tui() -> anyhow::Result<()> {
                     } else if app.modal.is_none() {
                         let area = Rect::new(0, 0, term_size.0, term_size.1);
                         let g = ui::grid(area, app.col_pct, app.row_pct);
+                        // The box belongs to the active tab: clicks and
+                        // drags map to what the draw shows.
+                        let box_shown =
+                            app.agent_box_shown() || app.pane == gtasks::app::Pane::Agent;
                         match me.kind {
                             MouseEventKind::Down(MouseButton::Left) => {
                                 // Divider grabs win over tab clicks: two
                                 // border cells per line, the cross only.
+                                // The horizontal divider exists only with
+                                // the box: hidden, it focuses detail.
                                 if (me.column == g.div_x.saturating_sub(1) || me.column == g.div_x)
                                     && me.row >= g.body.y
                                     && me.row < g.body.y.saturating_add(g.body.height)
                                 {
                                     app.drag = Some(gtasks::app::DragLine::Cols);
-                                } else if (me.row == g.div_y.saturating_sub(1) || me.row == g.div_y)
+                                } else if box_shown
+                                    && (me.row == g.div_y.saturating_sub(1) || me.row == g.div_y)
                                     && me.column >= g.body.x
                                     && me.column < g.body.x.saturating_add(g.body.width)
                                 {
@@ -1532,7 +1539,9 @@ fn run_tui() -> anyhow::Result<()> {
                                 } else if let Some(idx) = ui::tab_at(&app, area, me.column, me.row)
                                 {
                                     app.activate_tab(idx);
-                                } else if let Some(pane) = ui::pane_at(&g, me.column, me.row) {
+                                } else if let Some(pane) =
+                                    ui::pane_at(&g, me.column, me.row, box_shown)
+                                {
                                     // Clicking a box focuses it — including
                                     // the agent box, so typing starts there.
                                     if app.pane != pane {
@@ -1572,7 +1581,8 @@ fn run_tui() -> anyhow::Result<()> {
                         }
                     }
                     if !matches!(app.modal, Some(Modal::Diff)) {
-                        let box_shown = app.agent_active() || app.pane == gtasks::app::Pane::Agent;
+                        let box_shown =
+                            app.agent_box_shown() || app.pane == gtasks::app::Pane::Agent;
                         match me.kind {
                             MouseEventKind::ScrollUp if box_shown => {
                                 if let Some(key) = app.active_key() {

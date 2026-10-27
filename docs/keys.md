@@ -9,8 +9,8 @@ disagree, the handler is right and this file is a bug.
 | `Ctrl-C` | quit — the escape hatch, always live, except with the agent focused, where it interrupts the agent |
 | `Esc` | back **one level**: overlay → confirmation → search → detail → list → repos. It **never quits** and **never steals agent keys**: with the agent focused `Esc` goes to the agent (like `Tab`; `Shift`+arrows leave the box). At the outermost level it says `Esc — nothing to close` in the status line |
 | `?` | the overlay of keys (it says which work today and which are promised) |
-| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, skipping the empty agent box. Mouse: left-click focuses a box or opens a tab, drag on a divider resizes the cross (saved across restarts), the wheel scrolls the agent box history |
-| `Tab` | next pane: list → repos → detail → list, plus the agent box while an agent runs (for people who expect it) |
+| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, plus the agent box while the active tab's agent operates. Mouse: left-click focuses a box or opens a tab, drag on a divider resizes the cross (saved across restarts), the wheel scrolls the agent box history |
+| `Tab` | next pane: list → repos → detail → list, plus the agent box while the active tab's agent operates |
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
 | `Enter` | in the repos pane: drill into that repo's items; in the list: open a tab for the row and move focus to the detail on the tab; in the search box: leave the box |

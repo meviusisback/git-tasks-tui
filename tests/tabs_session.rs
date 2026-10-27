@@ -380,6 +380,97 @@ fn nerd_icons_follow_the_override_not_the_host() {
 }
 
 #[test]
+fn an_idle_tab_rents_no_agent_box() {
+    use gtasks::ui::{draw, view_for};
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter); // tab me/a#1
+    press(&mut app, Key::Esc); // back to the list
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Enter); // tab me/b#2, now active
+    // An agent works in the other tab; the active one never ran.
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            ..Default::default()
+        },
+    );
+    assert!(
+        !app.agent_box_shown(),
+        "the box belongs to the active tab, not the app"
+    );
+    let view = view_for(&app);
+    let backend = TestBackend::new(200, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..30 {
+        for x in 0..200 {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    assert!(
+        !screen.contains("no run yet"),
+        "no placeholder rents the idle tab's column: {screen}"
+    );
+    assert!(screen.contains("detail"), "the top box stays: {screen}");
+}
+
+#[test]
+fn the_detail_keeps_the_pr_while_its_agent_runs() {
+    use gtasks::agent::{AgentRecord, AgentStatus};
+    use gtasks::ui::{draw, view_for};
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter); // tab me/a#1, focus moves to the detail
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            record: Some(AgentRecord {
+                repo: "me/a".to_string(),
+                number: 1,
+                profile: "default".to_string(),
+                agent: "omp".to_string(),
+                worktree: std::path::PathBuf::from("/tmp/wt"),
+                seed_lines: 4,
+                status: AgentStatus::Running,
+            }),
+            ..Default::default()
+        },
+    );
+    app.detail_for = Some(("me/a".to_string(), 1));
+    app.detail = "Body line".to_string();
+    assert!(app.agent_box_shown(), "the live tab keeps its box");
+    let view = view_for(&app);
+    let backend = TestBackend::new(200, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..30 {
+        for x in 0..200 {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    assert!(
+        screen.contains("#1 one"),
+        "the classic box stays up top: {screen}"
+    );
+    // The running card lives in the agent's box below (the instructions
+    // say what runs there); the detail's own text carries no card.
+    assert!(
+        !view.detail.contains("seed"),
+        "the detail text carries no card: {}",
+        view.detail
+    );
+}
+
+#[test]
 fn the_screen_names_tab_and_repo_keys() {
     // Regression: the tab keys used to live on the tabs strip, which has no
     // room for prose. They now live in the bottom legend; the strip shows

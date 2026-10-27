@@ -55,13 +55,35 @@ fn splits_move_the_dividers() {
 fn clicking_a_box_names_its_pane() {
     use gtasks::app::Pane;
     let g = grid(area(), 30, 38);
-    assert_eq!(pane_at(&g, g.repos.x + 2, g.repos.y + 1), Some(Pane::Repos));
-    assert_eq!(pane_at(&g, g.list.x + 2, g.list.y + 1), Some(Pane::List));
-    assert_eq!(pane_at(&g, g.detail.x + 2, g.detail.y), Some(Pane::Detail));
-    assert_eq!(pane_at(&g, g.agent.x + 2, g.agent.y + 1), Some(Pane::Agent));
-    assert_eq!(pane_at(&g, 0, 0), None, "outside the boxes: the frame");
     assert_eq!(
-        pane_at(&g, g.status.x + 1, g.status.y),
+        pane_at(&g, g.repos.x + 2, g.repos.y + 1, true),
+        Some(Pane::Repos)
+    );
+    assert_eq!(
+        pane_at(&g, g.list.x + 2, g.list.y + 1, true),
+        Some(Pane::List)
+    );
+    assert_eq!(
+        pane_at(&g, g.detail.x + 2, g.detail.y, true),
+        Some(Pane::Detail)
+    );
+    assert_eq!(
+        pane_at(&g, g.agent.x + 2, g.agent.y + 1, true),
+        Some(Pane::Agent)
+    );
+    // Without the box the whole lower right is detail: a click there
+    // focuses detail, never a hidden pane.
+    assert_eq!(
+        pane_at(&g, g.agent.x + 2, g.agent.y + 1, false),
+        Some(Pane::Detail)
+    );
+    assert_eq!(
+        pane_at(&g, 0, 0, true),
+        None,
+        "outside the boxes: the frame"
+    );
+    assert_eq!(
+        pane_at(&g, g.status.x + 1, g.status.y, true),
         None,
         "the status row focuses nothing"
     );

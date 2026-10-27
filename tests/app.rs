@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use gtasks::app::{App, Key, Modal, Msg, Pane, TabAgent};
+use gtasks::app::{App, Key, Modal, Msg, Pane, Tab, TabAgent};
 
 fn press(app: &mut App, key: Key) {
     app.update(Msg::Key(key));
@@ -31,6 +31,11 @@ fn tab_cycles_panes_both_ways() {
 #[test]
 fn tab_cycle_includes_the_agent_while_one_runs() {
     let mut app = App {
+        tabs: vec![Tab {
+            repo: "o/r".to_string(),
+            number: 7,
+        }],
+        active_tab: Some(0),
         tab_agents: HashMap::from([(
             ("o/r".to_string(), 7),
             TabAgent {
@@ -165,6 +170,11 @@ fn shift_arrows_reach_the_agent_box_only_from_the_detail() {
     // from the list is the detail, agent or not.
     let mut app = App {
         pane: List,
+        tabs: vec![Tab {
+            repo: "o/r".to_string(),
+            number: 7,
+        }],
+        active_tab: Some(0),
         tab_agents: HashMap::from([(
             ("o/r".to_string(), 7),
             TabAgent {
@@ -178,6 +188,11 @@ fn shift_arrows_reach_the_agent_box_only_from_the_detail() {
     assert_eq!(app.pane, Detail);
     let mut app = App {
         pane: Detail,
+        tabs: vec![Tab {
+            repo: "o/r".to_string(),
+            number: 7,
+        }],
+        active_tab: Some(0),
         tab_agents: HashMap::from([(
             ("o/r".to_string(), 7),
             TabAgent {

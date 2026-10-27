@@ -1236,7 +1236,22 @@ impl App {
             })
     }
 
-    /// The tab's key in `tab_agents`: agents live per tab, so switching
+    /// The agent box belongs to the active tab, not the app: it shows while
+    /// the tab's agent operates (a live session) or its finished output is
+    /// still on screen (an undismissed record). Any other tab gives the
+    /// whole right column to the detail — an idle tab never rents a box.
+    /// (`w` focuses the pane explicitly, which the draw keeps regardless.)
+    pub fn agent_box_shown(&self) -> bool {
+        let Some(agent) = self.active_agent() else {
+            return false;
+        };
+        if agent.running {
+            return true;
+        }
+        agent.record.is_some() && agent.dismissed_for.is_none()
+    }
+
+    /// The tab's key in `TabAgent`: agents live per tab, so switching
     /// tabs switches boxes.
     pub fn tab_key(repo: &str, number: u64) -> (String, u64) {
         (repo.to_string(), number)
@@ -2802,7 +2817,7 @@ impl App {
             },
             Key::ShiftDown => match self.pane {
                 Pane::Repos => self.pane = Pane::List,
-                Pane::Detail if self.agent_active() => self.pane = Pane::Agent,
+                Pane::Detail if self.agent_box_shown() => self.pane = Pane::Agent,
                 Pane::Detail | Pane::List | Pane::Agent => {}
             },
             Key::Right => {
@@ -2812,8 +2827,8 @@ impl App {
                     self.pane = Pane::Detail;
                 }
             }
-            Key::Tab => self.pane = next_pane(self.pane, true, self.agent_active()),
-            Key::BackTab => self.pane = next_pane(self.pane, false, self.agent_active()),
+            Key::Tab => self.pane = next_pane(self.pane, true, self.agent_box_shown()),
+            Key::BackTab => self.pane = next_pane(self.pane, false, self.agent_box_shown()),
             Key::Up => self.move_cursor(-1),
             Key::Down => self.move_cursor(1),
             Key::Backspace => {}

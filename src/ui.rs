@@ -101,9 +101,10 @@ const HELP_NOW: &[&str] = &[
 /// instead of dangling.
 pub const PLANNED: &[(char, &str)] = &[];
 
-/// Which box a click lands in, if any: the four panes of the cross.
-/// Tabs are handled separately (`tab_at`); this only moves focus.
-pub fn pane_at(g: &Grid, x: u16, y: u16) -> Option<crate::app::Pane> {
+/// Which box a click lands in, if any. `agent_shown` mirrors the draw:
+/// when the active tab rents no agent box, the whole lower right is
+/// detail, so a click there focuses detail instead of a hidden pane.
+pub fn pane_at(g: &Grid, x: u16, y: u16, agent_shown: bool) -> Option<crate::app::Pane> {
     let inside = |r: &Rect| {
         x >= r.x && x < r.x.saturating_add(r.width) && y >= r.y && y < r.y.saturating_add(r.height)
     };
@@ -114,7 +115,11 @@ pub fn pane_at(g: &Grid, x: u16, y: u16) -> Option<crate::app::Pane> {
     } else if inside(&g.detail) || inside(&g.tabs) {
         Some(crate::app::Pane::Detail)
     } else if inside(&g.agent) {
-        Some(crate::app::Pane::Agent)
+        Some(if agent_shown {
+            crate::app::Pane::Agent
+        } else {
+            crate::app::Pane::Detail
+        })
     } else {
         None
     }
@@ -265,10 +270,11 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     frame.render_stateful_widget(issues_widget, g.list, &mut issues_state);
 
     // Right column: tabs + detail on top, agent/worktree at the bottom —
-    // but only while an agent is being arranged or is running, or while the
-    // pane has focus (so `w`/`Tab` still reach the instructions when idle).
-    // Idle and unfocused screens give the whole column to the detail.
-    if app.agent_active() || app.pane == Pane::Agent {
+    // but only while the active tab's agent operates or its finished
+    // output is still on screen (or the pane has focus, so `w` still
+    // reaches the instructions when idle). Idle tabs give the whole
+    // column to the detail.
+    if app.agent_box_shown() || app.pane == Pane::Agent {
         // The tabs are one line, not a box: at 80x12 every row counts, and a
         // bordered strip would eat the detail it labels.
         frame.render_widget(tabs_bar(app, view), g.tabs);
@@ -348,19 +354,13 @@ pub fn view_for(app: &App) -> ViewModel {
     // The detail follows the active tab when one is open, otherwise the row
     // under the list cursor — so a tab keeps its issue/PR while the list
     // moves underneath it.
-    // The record card replaces the detail for its own item: the last agent
-    // run is shown where the detail would be, never beside a PR it is not for.
-    let record_card = app.visible_record().map(|record| record.card());
     // The body only: the meta table renders straight from the item in
     // `detail()`, so a stale body can never glue itself under new fields.
+    // (A finished record's card renders straight from the record there —
+    // the view never carries it, so it can never leak under item fields.)
     let detail = app
         .effective_item()
         .map(|item| {
-            if record_card.is_some() {
-                // The card replaces everything, like before: `detail()`
-                // renders it as the whole pane.
-                return record_card.clone().unwrap_or_default();
-            }
             let key = (item.repo.clone(), item.number);
             if app.detail_for.as_ref() == Some(&key) {
                 app.detail.clone()
@@ -737,9 +737,14 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
             theme::border()
         })
         .title_style(theme::title(focused));
-    // A finished record's card is the whole pane, like before.
-    if app.visible_record().is_some() {
-        return Paragraph::new(md_lines(&view.detail, width))
+    // A finished record's card is the whole pane, like before. A running
+    // session keeps the classic item box up top — the agent's screen is
+    // the box below, never the detail.
+    if let Some(record) = app
+        .visible_record()
+        .filter(|r| matches!(r.status, crate::agent::AgentStatus::Finished { .. }))
+    {
+        return Paragraph::new(md_lines(&record.card(), width))
             .block(block)
             .scroll((app.detail_scroll, 0));
     }
