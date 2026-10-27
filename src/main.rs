@@ -189,10 +189,13 @@ fn start_agent(
                     app,
                     &plan,
                     &created.path,
-                    term_size,
-                    sessions,
-                    binaries,
-                    timeout,
+                    LaunchCtx {
+                        term_size,
+                        sessions,
+                        binaries,
+                        timeout,
+                    },
+                    LaunchMode::Ask,
                 );
             }
             // The refusal goes to the screen as it is: a check failure must
@@ -203,7 +206,18 @@ fn start_agent(
     }
     match agent::next_step(target) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, &plan, &path, term_size, sessions, binaries, timeout);
+            launch_agent(
+                app,
+                &plan,
+                &path,
+                LaunchCtx {
+                    term_size,
+                    sessions,
+                    binaries,
+                    timeout,
+                },
+                LaunchMode::Ask,
+            );
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -250,7 +264,18 @@ fn start_placed(
     }
     match agent::next_step(path) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, &plan, &path, term_size, sessions, binaries, timeout);
+            launch_agent(
+                app,
+                &plan,
+                &path,
+                LaunchCtx {
+                    term_size,
+                    sessions,
+                    binaries,
+                    timeout,
+                },
+                LaunchMode::Ask,
+            );
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -307,6 +332,7 @@ fn rename_worktree(
                     }
                 }
             }
+            app.move_worktree(&order.old_path, &order.new_path);
             app.status = format!("renamed {} to {}", order.old_branch, order.new_branch);
         }
         Ok(out) => {
@@ -350,6 +376,7 @@ fn delete_worktree(
                     agent.dismissed_for = None;
                 }
             }
+            app.forget_worktree(&order.path);
             app.status = format!(
                 "deleted worktree {} (branch {} kept)",
                 order.path.display(),
@@ -377,6 +404,26 @@ fn correct_tree_path(app: &App, plan: &AgentPlan) -> Option<PathBuf> {
 /// embedded in the agent box. The TUI never suspends; the child lives in a
 /// pty sized to the box, and the loop polls it every tick.
 ///
+/// How `launch_agent` starts: `Ask` offers a recorded session first (every
+/// entry point), `Fresh` launches the draft (the offer was declined — never
+/// asked twice), `Resume` reopens the recorded session, sending nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchMode {
+    Ask,
+    Fresh,
+    Resume,
+}
+
+/// The loop-owned resources a launch needs: pty size, live sessions,
+/// binaries and timeouts. One struct instead of four parameters (clippy
+/// allows seven function arguments, and the plan side already takes three).
+struct LaunchCtx<'a> {
+    term_size: (u16, u16),
+    sessions: &'a mut HashMap<(String, u64), EmbeddedSession>,
+    binaries: &'a Binaries,
+    timeout: Duration,
+}
+
 /// The agent never starts working on its own: it opens on an empty prompt
 /// and the loop types the seed as a draft the user reviews and sends.
 /// One Enter to start is cheaper than one run in the wrong direction.
@@ -384,41 +431,59 @@ fn launch_agent(
     app: &mut App,
     plan: &AgentPlan,
     path: &std::path::Path,
-    term_size: (u16, u16),
-    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
-    binaries: &Binaries,
-    timeout: Duration,
+    ctx: LaunchCtx<'_>,
+    mode: LaunchMode,
 ) {
     let key = App::tab_key(&plan.repo, plan.number);
-    // The tree may have drifted onto another branch since it was made
-    // (renamed outside, checked out by hand): starting the agent there
-    // works on the wrong code. Offer the fix instead of starting
-    // silently: build the tree the plan wants and launch there. `n` in
-    // the menu does the same; this catches an Enter on the wrong row.
-    match gtasks::worktree::current_branch(binaries, path, timeout) {
-        Some(have) if have != plan.branch => {
-            match correct_tree_path(app, plan) {
-                Some(target) => {
-                    let question = format!(
-                        "tree {} is on branch {have}, not {} — create {} and launch there?",
-                        path.display(),
-                        plan.branch,
-                        target.display()
-                    );
-                    app.modal = Some(Modal::Confirm(question));
-                    app.pending = Some(Pending::Agent(plan.clone(), target));
+    // A resume reopens exactly this tree: the branch check below would
+    // compare the tree against a plan built for it, and a drifted tree is
+    // still the tree the user just confirmed.
+    if mode != LaunchMode::Resume {
+        // The tree may have drifted onto another branch since it was made
+        // (renamed outside, checked out by hand): starting the agent there
+        // works on the wrong code. Offer the fix instead of starting
+        // silently: build the tree the plan wants and launch there. `n` in
+        // the menu does the same; this catches an Enter on the wrong row.
+        match gtasks::worktree::current_branch(ctx.binaries, path, ctx.timeout) {
+            Some(have) if have != plan.branch => {
+                match correct_tree_path(app, plan) {
+                    Some(target) => {
+                        let question = format!(
+                            "tree {} is on branch {have}, not {} — create {} and launch there?",
+                            path.display(),
+                            plan.branch,
+                            target.display()
+                        );
+                        app.modal = Some(Modal::Confirm(question));
+                        app.pending = Some(Pending::Agent(plan.clone(), target));
+                    }
+                    None => {
+                        app.status = format!(
+                            "tree {} is on branch {have}, not {} — fix the branch or delete the tree and relaunch",
+                            path.display(),
+                            plan.branch
+                        );
+                    }
                 }
-                None => {
-                    app.status = format!(
-                        "tree {} is on branch {have}, not {} — fix the branch or delete the tree and relaunch",
-                        path.display(),
-                        plan.branch
-                    );
-                }
+                return;
             }
+            _ => {}
+        }
+    }
+    // A recorded agent for this tree, same pick as the plan: offer its
+    // previous session before starting fresh. `n` launches the draft
+    // without asking again; `y` reopens with nothing sent.
+    if mode == LaunchMode::Ask {
+        if let Some(last) = app.resume_offer(plan, path) {
+            let question = format!(
+                "reopen the last {} session here ({})? (y = resume, nothing sent · n = fresh start)",
+                last.agent,
+                path.display()
+            );
+            app.modal = Some(Modal::Confirm(question));
+            app.pending = Some(Pending::Resume(plan.clone(), path.to_path_buf()));
             return;
         }
-        _ => {}
     }
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
@@ -427,7 +492,14 @@ fn launch_agent(
             return;
         }
     };
-    let body = agent::agent_seed_body(&plan.repo, plan.number, &plan.url, None);
+    // A resume sends nothing: the session comes back as it was, so there
+    // is no seed to type. Every launch records its agent for the tree, so
+    // reopening it later offers the session back.
+    let body = if mode == LaunchMode::Resume {
+        String::new()
+    } else {
+        agent::agent_seed_body(&plan.repo, plan.number, &plan.url, None)
+    };
     let lines = body.lines().count();
     let seed = match gtasks::agent::SeedFile::create_in(&seeds, &body) {
         Ok(seed) => seed,
@@ -460,20 +532,31 @@ fn launch_agent(
         } else {
             plan.agent.program.clone()
         };
-        // No initial prompt, ever: the agent opens on an empty prompt and
+        // Resume: the session comes back as it was — no seed, no draft,
+        // nothing sent. Fresh: the agent opens on an empty prompt and
         // the loop types the seed as a draft the user reviews and sends.
-        agent::agent_argv_for_draft(
-            plan.agent.id,
-            &program,
-            &plan.profile,
-            path,
-            app.sandbox_agents,
-        )
+        if mode == LaunchMode::Resume {
+            agent::agent_argv_for_resume(
+                plan.agent.id,
+                &program,
+                &plan.profile,
+                path,
+                app.sandbox_agents,
+            )
+        } else {
+            agent::agent_argv_for_draft(
+                plan.agent.id,
+                &program,
+                &plan.profile,
+                path,
+                app.sandbox_agents,
+            )
+        }
     };
     // The box the pty is sized to: the same geometry the draw uses, so the
     // terminal and its box never disagree by a row.
     let outer = ui::agent_box(
-        Rect::new(0, 0, term_size.0, term_size.1),
+        Rect::new(0, 0, ctx.term_size.0, ctx.term_size.1),
         app.col_pct,
         app.row_pct,
     );
@@ -538,10 +621,23 @@ fn launch_agent(
             });
             // The prompt is typed, not sent: the agent opens ready, and
             // the user reviews the draft and presses Enter. The seed file
-            // still travels to the record so the run is reproducible.
-            entry.draft = Some(body);
-            app.status = "agent ready — review the draft, edit it, Enter sends it".to_string();
-            sessions.insert(key, sess);
+            // still travels to the record so the run is reproducible. A
+            // resume sends nothing: no draft, just the session back.
+            entry.draft = if mode == LaunchMode::Resume {
+                None
+            } else {
+                Some(body)
+            };
+            app.status = if mode == LaunchMode::Resume {
+                format!(
+                    "reopened the last {} session — nothing sent",
+                    plan.agent.id.name()
+                )
+            } else {
+                "agent ready — review the draft, edit it, Enter sends it".to_string()
+            };
+            app.remember_worktree_agent(plan, path);
+            ctx.sessions.insert(key, sess);
         }
         Err(err) => app.status = format!("cannot run the agent: {err:#}"),
     }
@@ -1144,6 +1240,36 @@ fn run_tui() -> anyhow::Result<()> {
                 Some(path),
                 term_size,
                 &mut sessions,
+            );
+        }
+        if let Some((plan, path)) = app.agent_fresh.take() {
+            needs_draw = true;
+            launch_agent(
+                &mut app,
+                &plan,
+                &path,
+                LaunchCtx {
+                    term_size,
+                    sessions: &mut sessions,
+                    binaries: &binaries,
+                    timeout,
+                },
+                LaunchMode::Fresh,
+            );
+        }
+        if let Some((plan, path)) = app.agent_resume.take() {
+            needs_draw = true;
+            launch_agent(
+                &mut app,
+                &plan,
+                &path,
+                LaunchCtx {
+                    term_size,
+                    sessions: &mut sessions,
+                    binaries: &binaries,
+                    timeout,
+                },
+                LaunchMode::Resume,
             );
         }
         if let Some((plan, path)) = app.agent_place.take() {

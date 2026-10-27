@@ -2,6 +2,7 @@
 //!
 //! Same write discipline as the config: refuse symlinks, `0600`, atomic rename.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
@@ -37,6 +38,11 @@ pub struct State {
     /// with the mouse, restored on start.
     pub col_pct: u16,
     pub row_pct: u16,
+    /// The agent last launched in each worktree, by tree path: reopening
+    /// the tree offers that agent's previous session instead of a fresh
+    /// start. Unknown agent names are simply never matched, so a stale
+    /// entry is inert, never an error.
+    pub last_agents: HashMap<String, crate::agent::LastAgent>,
 }
 
 impl Default for State {
@@ -56,6 +62,7 @@ impl Default for State {
             active_tab: None,
             col_pct: 30,
             row_pct: 38,
+            last_agents: HashMap::new(),
         }
     }
 }

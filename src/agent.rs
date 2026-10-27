@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
 static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -628,6 +629,72 @@ pub fn agent_argv_for_draft(
         AgentId::Agy => file_argv(program, Vec::new(), worktree),
     }
 }
+/// The agent last launched in a worktree: reopening the tree offers that
+/// agent's previous session instead of a fresh start. Keyed by the tree's
+/// path in `App::last_agents`, persisted in the session file so the offer
+/// survives a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastAgent {
+    pub agent: String,
+    pub profile: String,
+}
+
+/// Resume argv: reopen the previous session, send nothing. Every shape is
+/// the agent's own "continue" flag with no prompt attached — the session
+/// comes back as it was, and the user types anything new themselves.
+/// Verified against each binary's `--help` on this host:
+/// - hermes: `--resume latest` scoped by `--in` to the tree's workspace,
+/// - pi/omp/agy/opencode: `--continue` (previous/last session).
+///
+/// Same sandbox rule as every other launch (the wrapper is the program by
+/// now; omp additionally gets `--approval-mode yolo`).
+pub fn agent_argv_for_resume(
+    agent: AgentId,
+    program: &Path,
+    profile: &str,
+    worktree: &Path,
+    sandbox: bool,
+) -> crate::gh::CheckedArgv {
+    match agent {
+        AgentId::Hermes => hermes_resume_argv(program, profile, worktree),
+        AgentId::Pi => file_argv(program, vec![OsString::from("--continue")], worktree),
+        AgentId::Omp => {
+            let mut args = Vec::new();
+            if sandbox {
+                args.push(OsString::from("--approval-mode"));
+                args.push(OsString::from("yolo"));
+            }
+            args.push(OsString::from("--cwd"));
+            args.push(worktree.as_os_str().to_os_string());
+            args.push(OsString::from("--continue"));
+            file_argv(program, args, worktree)
+        }
+        AgentId::OpenCode => file_argv(program, vec![OsString::from("--continue")], worktree),
+        AgentId::Agy => file_argv(program, vec![OsString::from("--continue")], worktree),
+    }
+}
+
+/// `hermes -p <profile> chat --resume latest --in <worktree>`: the most
+/// recent session in that tree's workspace, reopened with nothing sent.
+/// Same shape and env discipline as [`agent_argv`], minus the query.
+fn hermes_resume_argv(hermes: &Path, profile: &str, worktree: &Path) -> crate::gh::CheckedArgv {
+    crate::gh::CheckedArgv::from_checked(crate::gh::Argv {
+        program: hermes.to_path_buf(),
+        args: vec![
+            "-p".into(),
+            profile.into(),
+            "chat".into(),
+            "--resume".into(),
+            "latest".into(),
+            "--in".into(),
+            worktree.as_os_str().to_os_string(),
+            "--ignore-rules".into(),
+        ],
+        env: Vec::new(),
+        cwd: worktree.to_path_buf(),
+    })
+}
+
 /// `hermes -p <profile> chat` without `--query-file`: the empty prompt,
 /// interactive. Same shape and env discipline as [`agent_argv`], minus the
 /// initial message — the draft text is typed afterwards.

@@ -132,6 +132,10 @@ pub struct PendingAction {
 pub enum Pending {
     Action(PendingAction),
     Agent(AgentPlan, std::path::PathBuf),
+    /// `Enter` on a tree with a recorded agent, confirmed with `y`: reopen
+    /// that agent's previous session there, sending nothing. `n` launches
+    /// fresh instead (see `agent_fresh`).
+    Resume(AgentPlan, std::path::PathBuf),
     /// `d` on a worktree row, confirmed with `y`: the loop deletes it.
     Delete(crate::worktree::WorktreeDelete),
     /// No local clone for the repo, confirmed with `y`: the loop clones it
@@ -446,6 +450,10 @@ pub struct App {
     /// the loop (it owns threads); this is the state the screen renders.
     /// Sessions die with the app, so this map never touches `state.json`.
     pub tab_agents: HashMap<(String, u64), TabAgent>,
+    /// The agent last launched in each worktree, by tree path. Recorded on
+    /// every launch, persisted in the session file: reopening the tree
+    /// offers that agent's previous session instead of a fresh start.
+    pub last_agents: HashMap<String, crate::agent::LastAgent>,
     /// True when session fields changed since the last save: the loop
     /// persists `state.json` so a temporary exit keeps tabs, filter and
     /// cursor positions.
@@ -485,6 +493,13 @@ pub struct App {
     /// Set by `y` on the create question, consumed by the loop: the plan
     /// plus the worktree the user agreed to create.
     pub agent_go: Option<(AgentPlan, std::path::PathBuf)>,
+    /// Set by `n` on the resume question, consumed by the loop: the user
+    /// declined the previous session, so this launches fresh — same plan,
+    /// same tree, no offer asked twice.
+    pub agent_fresh: Option<(AgentPlan, std::path::PathBuf)>,
+    /// Set by `y` on the resume question, consumed by the loop: reopen the
+    /// recorded agent's previous session in that tree, sending nothing.
+    pub agent_resume: Option<(AgentPlan, std::path::PathBuf)>,
     /// Set by `Enter` on a worktree row: the plan plus the tree's real path.
     /// The loop launches there without re-deriving the path from the branch:
     /// a rename outside the app leaves the directory out of sync with the
@@ -580,8 +595,11 @@ impl Default for App {
             clone_roots: Vec::new(),
             config_fallback: false,
             tab_agents: HashMap::new(),
+            last_agents: HashMap::new(),
             agent_requested: None,
             agent_go: None,
+            agent_fresh: None,
+            agent_resume: None,
             agent_place: None,
             rename_go: None,
             delete_go: None,
@@ -1211,6 +1229,8 @@ impl App {
     pub fn agent_active(&self) -> bool {
         self.agent_requested.is_some()
             || self.agent_go.is_some()
+            || self.agent_fresh.is_some()
+            || self.agent_resume.is_some()
             || self.tab_agents.values().any(|a| {
                 a.running || matches!(&a.record, Some(r) if r.status == AgentStatus::Running)
             })
@@ -1245,6 +1265,51 @@ impl App {
         self.tab_agents.get_mut(&key)
     }
 
+    /// The recorded agent for this tree, when the plan picks the same one:
+    /// reopening the tree offers its previous session instead of a fresh
+    /// start. A different pick means a different intention — no offer.
+    pub fn resume_offer(
+        &self,
+        plan: &AgentPlan,
+        path: &std::path::Path,
+    ) -> Option<crate::agent::LastAgent> {
+        let last = self.last_agents.get(&path.display().to_string())?;
+        (last.agent == plan.agent.id.name()).then(|| last.clone())
+    }
+
+    /// Remember the agent launched in this tree, so reopening it offers the
+    /// session back. Recorded on every launch, resume included.
+    pub fn remember_worktree_agent(&mut self, plan: &AgentPlan, path: &std::path::Path) {
+        self.last_agents.insert(
+            path.display().to_string(),
+            crate::agent::LastAgent {
+                agent: plan.agent.id.name().to_string(),
+                profile: plan.profile.clone(),
+            },
+        );
+        self.session_dirty = true;
+    }
+
+    /// A deleted tree has no session to reopen: drop its entry so a later
+    /// tree at the same path starts without a stale offer.
+    pub fn forget_worktree(&mut self, path: &std::path::Path) {
+        if self
+            .last_agents
+            .remove(&path.display().to_string())
+            .is_some()
+        {
+            self.session_dirty = true;
+        }
+    }
+
+    /// A renamed tree keeps its session: the entry follows the directory.
+    pub fn move_worktree(&mut self, old: &std::path::Path, new: &std::path::Path) {
+        if let Some(last) = self.last_agents.remove(&old.display().to_string()) {
+            self.last_agents.insert(new.display().to_string(), last);
+            self.session_dirty = true;
+        }
+    }
+
     /// Copy the session fields into `state` so the loop can persist them.
     pub fn capture_session(&self, state: &mut crate::state::State) {
         state.pane = match self.pane {
@@ -1271,6 +1336,7 @@ impl App {
         state.active_tab = self.active_tab;
         state.col_pct = self.col_pct;
         state.row_pct = self.row_pct;
+        state.last_agents = self.last_agents.clone();
     }
 
     /// Restore pane, cursors, filter, query and tabs from a saved session.
@@ -1326,6 +1392,7 @@ impl App {
             })
             .collect();
         self.active_tab = state.active_tab.filter(|idx| *idx < self.tabs.len());
+        self.last_agents = state.last_agents.clone();
         self.set_lengths(self.repos.len(), self.visible_items().len());
         self.refresh_status();
     }
@@ -2488,7 +2555,21 @@ impl App {
                 return;
             }
             match key {
-                Key::Esc | Key::Char('n') => self.modal = None,
+                Key::Esc => self.modal = None,
+                Key::Char('n') => {
+                    self.modal = None;
+                    // Declining the resume offer launches fresh — same plan,
+                    // same tree, no offer asked twice. Any other question's
+                    // `n` just closes, as before.
+                    if let Some(pending) = self.pending.take() {
+                        match pending {
+                            Pending::Resume(plan, path) => {
+                                self.agent_fresh = Some((plan, path));
+                            }
+                            other => self.pending = Some(other),
+                        }
+                    }
+                }
                 Key::Char('y') => {
                     self.modal = None;
                     match self.pending.take() {
@@ -2511,6 +2592,11 @@ impl App {
                         // terminal): `y` only moves the agreed plan there.
                         Some(Pending::Agent(plan, path)) => {
                             self.agent_go = Some((plan, path));
+                        }
+                        // Reopen the recorded session: the loop resumes it
+                        // with the agent's continue flag, sending nothing.
+                        Some(Pending::Resume(plan, path)) => {
+                            self.agent_resume = Some((plan, path));
                         }
                         // A delete is a write too (to the clone, via the
                         // loop): `y` moves the agreed order there.
