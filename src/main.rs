@@ -723,6 +723,10 @@ fn run_tui() -> anyhow::Result<()> {
     // App only carries what the screen needs. Switching tabs switches
     // boxes; background tabs keep running.
     let mut sessions: HashMap<(String, u64), EmbeddedSession> = HashMap::new();
+    // Draw only on change: view + paint every tick is what caps the fps
+    // budget, so background completions, events and fresh agent output
+    // raise this instead.
+    let mut needs_draw = true;
 
     while !app.quit && !TERMINATE.load(Ordering::SeqCst) {
         // Take a finished fetch, if any.
@@ -750,6 +754,7 @@ fn run_tui() -> anyhow::Result<()> {
                         app.status = format!("up to date — {}", app.status);
                     }
                     pending = None;
+                    needs_draw = true;
                     // No prefetch: the detail body is fetched only on explicit
                     // request (Enter). The list already shows every field.
                 }
@@ -758,6 +763,7 @@ fn run_tui() -> anyhow::Result<()> {
                     app.loading = false;
                     app.status = "fetch ended unexpectedly".to_string();
                     pending = None;
+                    needs_draw = true;
                 }
             }
         }
@@ -775,9 +781,11 @@ fn run_tui() -> anyhow::Result<()> {
         if detail_gone {
             pending_detail = None;
             app.detail_requested = None;
+            needs_draw = true;
         }
         if let Some(result) = detail_result {
             if let Some((repo, number, _)) = pending_detail.take() {
+                needs_draw = true;
                 match result {
                     Ok(body) => {
                         // The fetch is the source of truth: it replaces the
@@ -816,9 +824,11 @@ fn run_tui() -> anyhow::Result<()> {
         if diff_gone {
             pending_diff = None;
             app.diff_requested = None;
+            needs_draw = true;
         }
         if let Some(result) = diff_result {
             if let Some((repo, number, _)) = pending_diff.take() {
+                needs_draw = true;
                 match result {
                     Ok(text) => {
                         if let Some(dir) = detail_cache_dir.as_deref() {
@@ -851,6 +861,7 @@ fn run_tui() -> anyhow::Result<()> {
         // row moved: a sandbox-only toggle never touches the terminal.
         if app.config_save_requested {
             app.config_save_requested = false;
+            needs_draw = true;
             if config_fallback {
                 app.status =
                     "the config file is broken — fix it before saving settings".to_string();
@@ -909,6 +920,7 @@ fn run_tui() -> anyhow::Result<()> {
         // The session (pane, cursors, tabs, filter) travels with it, so a
         // temporary exit keeps what the user was doing.
         if let Some(selected) = app.selection_applied.take() {
+            needs_draw = true;
             let cleared = selected.is_empty();
             state.selected_repos = selected;
             app.capture_session(&mut state);
@@ -941,6 +953,7 @@ fn run_tui() -> anyhow::Result<()> {
                     Err(err) => {
                         app.status = format!("cannot save session: {err:#}");
                         app.session_dirty = false;
+                        needs_draw = true;
                     }
                 },
                 None => app.session_dirty = false,
@@ -949,6 +962,7 @@ fn run_tui() -> anyhow::Result<()> {
 
         // `o`: the key handler already validated the URL.
         if let Some(url) = app.open_requested.take() {
+            needs_draw = true;
             match &binaries.opener {
                 Some(program) => match actions::open_in_browser(program, &url) {
                     Ok(pid) => app.status = format!("opened in the browser (pid {pid})"),
@@ -1061,6 +1075,7 @@ fn run_tui() -> anyhow::Result<()> {
             app.loading = true;
             app.refresh_requested = true;
             app.status = "refreshing…".to_string();
+            needs_draw = true;
         }
         if app.refresh_requested && pending.is_none() {
             app.refresh_requested = false;
@@ -1080,6 +1095,7 @@ fn run_tui() -> anyhow::Result<()> {
             .map(|size| (size.width, size.height))
             .unwrap_or((80, 24));
         if let Some(plan) = app.agent_requested.take() {
+            needs_draw = true;
             start_agent(
                 &mut app,
                 &binaries,
@@ -1091,6 +1107,7 @@ fn run_tui() -> anyhow::Result<()> {
             );
         }
         if let Some((plan, path)) = app.agent_go.take() {
+            needs_draw = true;
             start_agent(
                 &mut app,
                 &binaries,
@@ -1102,6 +1119,7 @@ fn run_tui() -> anyhow::Result<()> {
             );
         }
         if let Some((plan, path)) = app.agent_place.take() {
+            needs_draw = true;
             start_placed(
                 &mut app,
                 plan,
@@ -1113,9 +1131,11 @@ fn run_tui() -> anyhow::Result<()> {
             );
         }
         if let Some(order) = app.rename_go.take() {
+            needs_draw = true;
             rename_worktree(&mut app, &binaries, order, &sessions);
         }
         if let Some(order) = app.delete_go.take() {
+            needs_draw = true;
             delete_worktree(&mut app, &binaries, order, &sessions);
         }
         // A clone runs in a thread — network can take minutes, and the UI
@@ -1142,16 +1162,19 @@ fn run_tui() -> anyhow::Result<()> {
             match rx.try_recv() {
                 Ok((repo, Ok(path))) => {
                     pending_clone = None;
+                    needs_draw = true;
                     app.status = format!("cloned into {} — growing the tree", path.display());
                     app.open_repo_worktree_for(&repo);
                 }
                 Ok((repo, Err(err))) => {
                     pending_clone = None;
+                    needs_draw = true;
                     app.status = format!("cannot clone {repo}: {err:#}");
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     pending_clone = None;
+                    needs_draw = true;
                     app.status = "clone thread died — try again".to_string();
                 }
             }
@@ -1171,6 +1194,7 @@ fn run_tui() -> anyhow::Result<()> {
                 );
             }
             if sess.drain() {
+                needs_draw = true;
                 if let Some(agent) = app.tab_agents.get_mut(key) {
                     agent.screen = sess.snapshot();
                 }
@@ -1192,6 +1216,7 @@ fn run_tui() -> anyhow::Result<()> {
         }
         for (key, summary) in exited {
             sessions.remove(&key);
+            needs_draw = true;
             if Some(&key) == active_key.as_ref() {
                 app.status = format!("agent finished: {summary}");
             }
@@ -1254,15 +1279,17 @@ fn run_tui() -> anyhow::Result<()> {
             }
         }
 
-        let view = ui::view_for(&app);
-        terminal.draw(|frame| ui::draw(frame, &app, &view))?;
-
-        // A running agent repaints at 4fps on the idle tick — visibly
-        // choppy for streaming or repaint-style TUIs. While a session is
-        // attached the loop wakes every 50ms instead; idle screens keep
-        // the slow tick, so an open-but-quiet app does not spin.
-        let tick = if sessions.is_empty() { 250 } else { 50 };
+        // Paint only on change: a full view + paint every tick is what caps
+        // the fps budget. Background completions, events and fresh agent
+        // output raise `needs_draw` instead — an idle screen costs one poll.
+        if needs_draw {
+            needs_draw = false;
+            let view = ui::view_for(&app);
+            terminal.draw(|frame| ui::draw(frame, &app, &view))?;
+        }
+        let tick = if sessions.is_empty() { 250 } else { 16 };
         if event::poll(Duration::from_millis(tick))? {
+            needs_draw = true;
             match event::read()? {
                 Event::Key(key) => {
                     // Focused on a running agent, every key but Tab is
