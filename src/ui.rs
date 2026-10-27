@@ -644,6 +644,18 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             });
         }
     }
+    // The active tab stands out with a full background: at a glance the
+    // eye lands on the bookmark being read, not on the row of dots.
+    if let Some(active) = app.active_tab {
+        for chunk in &mut chunks {
+            if chunk.tab == Some(active) {
+                chunk.style = chunk
+                    .style
+                    .bg(theme::SELECTED_BG)
+                    .add_modifier(Modifier::BOLD);
+            }
+        }
+    }
     chunks
 }
 
@@ -675,9 +687,9 @@ pub fn tab_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
 }
 
 /// Right column, top strip: the open tabs on a single line, so small
-/// terminals keep their detail rows. The active tab is bold, the rest dim;
-/// the number carries the kind colour (green PR, yellow issue). No prefix,
-/// no keys — the legend below owns those.
+/// terminals keep their detail rows. The active tab carries a full
+/// background, the rest stay dim; the number carries the kind colour
+/// (green PR, yellow issue). No prefix, no keys — the legend owns those.
 fn tabs_bar(app: &App, view: &ViewModel) -> Paragraph<'static> {
     if view.tabs.is_empty() {
         let style = theme::title(app.pane == Pane::Detail);

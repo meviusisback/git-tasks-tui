@@ -112,6 +112,56 @@ fn switching_tabs_jumps_across_a_filter() {
 }
 
 #[test]
+fn the_active_tab_carries_a_background() {
+    use gtasks::ui::{draw, view_for};
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = app_with_items();
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    app.tabs.push(Tab {
+        repo: "me/b".to_string(),
+        number: 2,
+    });
+    app.active_tab = Some(1);
+    let view = view_for(&app);
+    let backend = TestBackend::new(200, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let selected = ratatui::style::Color::Rgb(0x58, 0x5b, 0x70);
+    let bg_of = |needle: &str| -> Vec<ratatui::style::Color> {
+        // The tabs strip sits right under the outer border: row 1.
+        let mut row = String::new();
+        for x in 0..200 {
+            row.push_str(buffer[(x, 1)].symbol());
+        }
+        let mut out = Vec::new();
+        if let Some(start) = row.find(needle) {
+            let start_char = row[..start].chars().count();
+            for i in 0..needle.chars().count() {
+                let x = (start_char + i) as u16;
+                out.push(buffer[(x, 1)].bg);
+            }
+        }
+        out
+    };
+    let active = bg_of("#2");
+    assert!(!active.is_empty(), "the active tab is on screen");
+    assert!(
+        active.iter().all(|bg| *bg == selected),
+        "the whole active tab stands out: {active:?}"
+    );
+    let idle = bg_of("#1");
+    assert!(!idle.is_empty(), "the idle tab is on screen");
+    assert!(
+        idle.iter().all(|bg| *bg != selected),
+        "the idle tab keeps no background: {idle:?}"
+    );
+}
+
+#[test]
 fn t_cycles_tabs_forward_and_back() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // #1
