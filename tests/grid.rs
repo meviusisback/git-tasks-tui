@@ -2,7 +2,7 @@
 //! the tiling (no gaps, no overlaps), the divider grabs and the drag
 //! guards.
 
-use gtasks::ui::{col_pct_for, grid, row_pct_for};
+use gtasks::ui::{col_pct_for, grid, pane_at, row_pct_for};
 use ratatui::layout::Rect;
 
 fn area() -> Rect {
@@ -48,6 +48,22 @@ fn splits_move_the_dividers() {
     assert!(
         (left_w as i32 - 59).abs() <= 1,
         "30% of 198 ≈ 59, got {left_w}"
+    );
+}
+
+#[test]
+fn clicking_a_box_names_its_pane() {
+    use gtasks::app::Pane;
+    let g = grid(area(), 30, 38);
+    assert_eq!(pane_at(&g, g.repos.x + 2, g.repos.y + 1), Some(Pane::Repos));
+    assert_eq!(pane_at(&g, g.list.x + 2, g.list.y + 1), Some(Pane::List));
+    assert_eq!(pane_at(&g, g.detail.x + 2, g.detail.y), Some(Pane::Detail));
+    assert_eq!(pane_at(&g, g.agent.x + 2, g.agent.y + 1), Some(Pane::Agent));
+    assert_eq!(pane_at(&g, 0, 0), None, "outside the boxes: the frame");
+    assert_eq!(
+        pane_at(&g, g.status.x + 1, g.status.y),
+        None,
+        "the status row focuses nothing"
     );
 }
 

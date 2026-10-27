@@ -101,6 +101,25 @@ const HELP_NOW: &[&str] = &[
 /// instead of dangling.
 pub const PLANNED: &[(char, &str)] = &[];
 
+/// Which box a click lands in, if any: the four panes of the cross.
+/// Tabs are handled separately (`tab_at`); this only moves focus.
+pub fn pane_at(g: &Grid, x: u16, y: u16) -> Option<crate::app::Pane> {
+    let inside = |r: &Rect| {
+        x >= r.x && x < r.x.saturating_add(r.width) && y >= r.y && y < r.y.saturating_add(r.height)
+    };
+    if inside(&g.repos) {
+        Some(crate::app::Pane::Repos)
+    } else if inside(&g.list) {
+        Some(crate::app::Pane::List)
+    } else if inside(&g.detail) || inside(&g.tabs) {
+        Some(crate::app::Pane::Detail)
+    } else if inside(&g.agent) {
+        Some(crate::app::Pane::Agent)
+    } else {
+        None
+    }
+}
+
 /// Left width for a vertical-divider drag at `x`, in percent — `None`
 /// when the body is too small or the cursor would leave a sliver box.
 /// Only the cross divider moves; single boxes are never sized directly.

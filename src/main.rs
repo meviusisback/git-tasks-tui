@@ -1406,6 +1406,13 @@ fn run_tui() -> anyhow::Result<()> {
                                 } else if let Some(idx) = ui::tab_at(&app, area, me.column, me.row)
                                 {
                                     app.activate_tab(idx);
+                                } else if let Some(pane) = ui::pane_at(&g, me.column, me.row) {
+                                    // Clicking a box focuses it — including
+                                    // the agent box, so typing starts there.
+                                    if app.pane != pane {
+                                        app.pane = pane;
+                                        app.session_dirty = true;
+                                    }
                                 }
                             }
                             MouseEventKind::Drag(MouseButton::Left) => {
