@@ -657,6 +657,25 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
             .scroll((app.detail_scroll, 0));
     }
     let Some(item) = app.effective_item() else {
+        // No issue/PR under the cursor — but the agent may still have a
+        // tree: show where it works instead of a blank pane. Repos with
+        // no rows (a fresh branch, a W-grown tree) would otherwise leave
+        // the whole right column above the box empty.
+        if let Some(ctx) = &app.agent_context {
+            let lines = vec![
+                Line::from(Span::styled(
+                    "working on",
+                    theme::overlay_text().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::raw(ctx.repo.clone())),
+                Line::from(Span::raw(format!(
+                    "{} @ {}",
+                    ctx.path.display(),
+                    ctx.branch
+                ))),
+            ];
+            return Paragraph::new(lines).block(block);
+        }
         return Paragraph::new(Vec::<Line<'static>>::new()).block(block);
     };
     let now = std::time::SystemTime::now()

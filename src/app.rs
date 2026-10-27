@@ -251,6 +251,15 @@ pub struct AgentMenu {
     pub place: Option<std::path::PathBuf>,
 }
 
+/// Where a launched agent works: repo, branch and tree path. The detail
+/// pane renders this while no issue/PR is selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentContext {
+    pub repo: String,
+    pub branch: String,
+    pub path: std::path::PathBuf,
+}
+
 /// The worktree picker for one repo: existing trees plus the plan the
 /// choice applies to. `agent` is `Some` inside the `g` flow and `None` when
 /// opened directly with `W`: using a tree then leads to the agent menu
@@ -456,6 +465,11 @@ pub struct App {
     /// The last agent run, if any. It stays after the exit: `Esc` hides the
     /// card, `x` deletes the record, a new run replaces it.
     pub agent_record: Option<AgentRecord>,
+    /// What the running agent is working on (repo, branch, tree): the detail
+    /// pane shows this when no issue/PR is selected, so the right column
+    /// never goes blank while the agent has a tree but the list has no rows.
+    /// Set at launch, cleared when the session ends.
+    pub agent_context: Option<AgentContext>,
     /// The item the record card was dismissed for: the card shows again when
     /// that item is reselected, and stays hidden while it is selected.
     pub agent_dismissed_for: Option<(String, u64)>,
@@ -480,6 +494,10 @@ pub struct App {
     /// the directory the user agreed to clone it into. The loop clones in a
     /// thread (network can take minutes) and continues the W flow when done.
     pub clone_go: Option<(String, std::path::PathBuf)>,
+    /// Text the loop types into a freshly opened agent, a chunk per tick:
+    /// first launches open on a draft the user reviews and sends, instead
+    /// of starting to work before being directed.
+    pub draft_text: Option<String>,
     /// Where worktrees live (configured root, or the default). The list
     /// icons and the worktree picker read it; `None` (unresolvable home)
     /// means no icons, and the picker explains instead of guessing.
@@ -543,6 +561,7 @@ impl Default for App {
             clone_roots: Vec::new(),
             config_fallback: false,
             agent_record: None,
+            agent_context: None,
             agent_dismissed_for: None,
             agent_requested: None,
             agent_go: None,
@@ -550,6 +569,7 @@ impl Default for App {
             rename_go: None,
             delete_go: None,
             clone_go: None,
+            draft_text: None,
             worktree_root: None,
             agent_running: false,
             agent_screen: Vec::new(),
@@ -1701,7 +1721,7 @@ impl App {
     /// Follows the active tab when one is open.
     pub fn request_agent(&mut self) {
         if self.agent_running {
-            self.status = "an agent is already running in the box below".to_string();
+            self.status = "an agent is already running".to_string();
             return;
         }
         let Some(item) = self.effective_item().cloned() else {

@@ -480,22 +480,38 @@ pub fn agent_argv(
     })
 }
 
-/// The `<agent>-sandboxed` wrapper next to the resolved binary, when the
-/// `sandbox_agents` setting is on: same directory, `-sandboxed` suffixed to
-/// the file name, and it must exist — a sibling that was never installed is
-/// `None`, not a launch into the wrong binary. The menu still lists the
+/// The `<agent>-sandboxed` wrapper for a resolved agent binary, when the
+/// `sandbox_agents` setting is on: the sibling next to it first
+/// (deterministic — the wrapper shipped with its binary), then the same stem
+/// on the live `PATH` (the binary may be reached through a symlink or a bare
+/// name while the wrapper sits in a `PATH` directory). A missing wrapper is
+/// `None`, not a launch into the wrong binary — the menu still lists the
 /// plain binaries (availability), so a missing wrapper refuses at launch
-/// with its own name instead of hiding the row.
+/// with its own name instead of hiding the row. Whatever is found still goes
+/// through the spawn-time ownership and permission checks, so the `PATH` leg
+/// trusts no more than any other resolved binary.
 pub fn sandboxed_program(program: &Path) -> Option<PathBuf> {
-    let dir = program.parent()?;
+    let dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    sandboxed_program_in(program, &dirs)
+}
+
+pub fn sandboxed_program_in(program: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
     let stem = program.file_name()?;
     let mut name = stem.to_os_string();
     name.push("-sandboxed");
-    let candidate = dir.join(name);
-    match std::fs::symlink_metadata(&candidate) {
-        Ok(meta) if meta.file_type().is_file() => Some(candidate),
-        _ => None,
+    if let Some(dir) = program.parent() {
+        let candidate = dir.join(&name);
+        if let Ok(meta) = std::fs::symlink_metadata(&candidate) {
+            if meta.file_type().is_file() {
+                return Some(candidate);
+            }
+        }
     }
+    let needle = name.to_string_lossy();
+    let refs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+    crate::binaries::resolve_in(&needle, &refs).ok()
 }
 
 /// The argv for whichever agent the menu picked. Every shape passes the
@@ -562,6 +578,57 @@ pub fn agent_argv_for(
             worktree,
         ),
     }
+}
+
+/// Interactive argv for a first launch: no initial prompt anywhere. The loop
+/// types the seed afterwards (see `App::draft_text`), so the user reviews and
+/// sends it — an agent that starts working before being directed burns the
+/// first impression and the first tokens on a guess.
+pub fn agent_argv_for_draft(
+    agent: AgentId,
+    program: &Path,
+    profile: &str,
+    worktree: &Path,
+    sandbox: bool,
+) -> crate::gh::CheckedArgv {
+    match agent {
+        // Chat without a query: the empty prompt, interactive.
+        AgentId::Hermes => agent_argv_no_query(program, profile, worktree),
+        // Bare REPLs: no file, no initial message.
+        AgentId::Pi => file_argv(program, Vec::new(), worktree),
+        AgentId::Omp => {
+            let mut args = Vec::new();
+            if sandbox {
+                args.push(OsString::from("--approval-mode"));
+                args.push(OsString::from("yolo"));
+            }
+            args.push(OsString::from("--cwd"));
+            args.push(worktree.as_os_str().to_os_string());
+            file_argv(program, args, worktree)
+        }
+        // Bare interactive TUI instead of `run --file` (which streams once
+        // and exits): a draft only makes sense where the user can send it.
+        AgentId::OpenCode => file_argv(program, Vec::new(), worktree),
+        AgentId::Agy => file_argv(program, Vec::new(), worktree),
+    }
+}
+/// `hermes -p <profile> chat` without `--query-file`: the empty prompt,
+/// interactive. Same shape and env discipline as [`agent_argv`], minus the
+/// initial message — the draft text is typed afterwards.
+fn agent_argv_no_query(hermes: &Path, profile: &str, worktree: &Path) -> crate::gh::CheckedArgv {
+    crate::gh::CheckedArgv::from_checked(crate::gh::Argv {
+        program: hermes.to_path_buf(),
+        args: vec![
+            "-p".into(),
+            profile.into(),
+            "chat".into(),
+            "--in".into(),
+            worktree.as_os_str().to_os_string(),
+            "--ignore-rules".into(),
+        ],
+        env: Vec::new(),
+        cwd: worktree.to_path_buf(),
+    })
 }
 
 /// `@/path/to/seed`: the file-include form of the pi/omp/agy family. It

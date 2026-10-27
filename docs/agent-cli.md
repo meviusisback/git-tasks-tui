@@ -16,9 +16,10 @@ fenced seed, unlinked after the child exits (normal exit and failure alike, via 
 
 `config.toml` key `sandbox_agents` (default `false`). When on, every agent
 starts through its `<agent>-sandboxed` wrapper — the bubblewrap containment
-in `~/.local/bin` (read-only `/`, the worktree plus data dirs bound
-read-write, `--die-with-parent`) — with non-interactive approvals so it does
-not ask at every step:
+(read-only `/`, the worktree plus data dirs bound read-write,
+`--die-with-parent`) — with non-interactive approvals so it does not ask at
+every step. The wrapper is looked up next to its binary first, then on
+`PATH`: keeping both in `~/.local/bin` covers every case.
 
 | Agent | Program | Extra flags | Why |
 |---|---|---|---|

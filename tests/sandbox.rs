@@ -5,7 +5,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use gtasks::agent::{AgentId, agent_argv_for, sandboxed_program};
+use gtasks::agent::{AgentId, agent_argv_for, sandboxed_program, sandboxed_program_in};
 use gtasks::app::{App, Key, Modal, Msg};
 use gtasks::config::Config;
 
@@ -120,14 +120,38 @@ fn the_wrapper_is_the_sibling_that_exists() {
     let plain = dir.path().join("pi");
     std::fs::write(&plain, "#!/bin/sh\n").unwrap();
     std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // No sibling, empty search dirs: no launch target anywhere.
     assert_eq!(
-        sandboxed_program(&plain),
+        sandboxed_program_in(&plain, &[]),
         None,
         "no wrapper, no launch target"
     );
     let wrapped = dir.path().join("pi-sandboxed");
     std::fs::write(&wrapped, "#!/bin/sh\n").unwrap();
-    assert_eq!(sandboxed_program(&plain), Some(wrapped));
+    assert_eq!(
+        sandboxed_program_in(&plain, &[]),
+        Some(wrapped.clone()),
+        "the sibling wins without any PATH"
+    );
+    // Sibling missing, wrapper on the search path: the PATH leg finds it.
+    std::fs::remove_file(&wrapped).unwrap();
+    assert_eq!(
+        sandboxed_program_in(&plain, std::slice::from_ref(&dir.path().to_path_buf())),
+        None,
+        "wrapper gone everywhere"
+    );
+    std::fs::write(&wrapped, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&wrapped, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        sandboxed_program_in(&plain, std::slice::from_ref(&dir.path().to_path_buf())),
+        Some(wrapped),
+        "PATH leg covers a binary reached without its sibling"
+    );
+    // The live PATH still works end to end (sibling next to the binary).
+    assert_eq!(
+        sandboxed_program(&plain),
+        Some(dir.path().join("pi-sandboxed"))
+    );
 }
 
 #[test]

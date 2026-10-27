@@ -132,7 +132,7 @@ fn start_agent(
     // One agent at a time: the box shows one session, so a second `g` while
     // one runs is refused instead of orphaning the first.
     if session.is_some() {
-        app.status = "an agent is already running in the box below".to_string();
+        app.status = "an agent is already running".to_string();
         return;
     }
     let root = match config.worktree_root.clone() {
@@ -181,7 +181,8 @@ fn start_agent(
     if agreed.is_some() {
         match gtasks::worktree::create(&root, &plan.clone, &slug, &branch, binaries) {
             Ok(created) => {
-                launch_agent(app, &plan, &created.path, term_size, session);
+                // Fresh tree: the agent opens on a draft, not on a run.
+                launch_agent(app, &plan, &created.path, term_size, session, true);
             }
             // The refusal goes to the screen as it is: a check failure must
             // not become indistinguishable from a bug in the check.
@@ -191,7 +192,8 @@ fn start_agent(
     }
     match agent::next_step(target) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, &plan, &path, term_size, session);
+            // Existing tree: the agent resumes with the seed as before.
+            launch_agent(app, &plan, &path, term_size, session, false);
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -221,7 +223,7 @@ fn start_placed(
 ) {
     // One agent at a time, same as every other launch.
     if session.is_some() {
-        app.status = "an agent is already running in the box below".to_string();
+        app.status = "an agent is already running".to_string();
         return;
     }
     if !agent::placed_ok_in(&path, app.worktree_root.as_deref()) {
@@ -235,7 +237,7 @@ fn start_placed(
     }
     match agent::next_step(path) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(app, &plan, &path, term_size, session);
+            launch_agent(app, &plan, &path, term_size, session, false);
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -353,6 +355,7 @@ fn launch_agent(
     path: &std::path::Path,
     term_size: (u16, u16),
     session: &mut Option<EmbeddedSession>,
+    draft: bool,
 ) {
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
@@ -394,14 +397,28 @@ fn launch_agent(
         } else {
             plan.agent.program.clone()
         };
-        agent::agent_argv_for(
-            plan.agent.id,
-            &program,
-            &plan.profile,
-            seed.path(),
-            path,
-            app.sandbox_agents,
-        )
+        // First launch on a fresh tree: no initial prompt — the agent opens
+        // on an empty prompt and the loop types the seed as a draft the user
+        // reviews and sends. Re-entering an existing tree keeps the old
+        // behaviour (the seed travels as the initial message).
+        if draft {
+            agent::agent_argv_for_draft(
+                plan.agent.id,
+                &program,
+                &plan.profile,
+                path,
+                app.sandbox_agents,
+            )
+        } else {
+            agent::agent_argv_for(
+                plan.agent.id,
+                &program,
+                &plan.profile,
+                seed.path(),
+                path,
+                app.sandbox_agents,
+            )
+        }
     };
     // The box the pty is sized to: the same geometry the draw uses, so the
     // terminal and its box never disagree by a row.
@@ -436,10 +453,28 @@ fn launch_agent(
             });
             app.agent_dismissed_for = None;
             app.pane = gtasks::app::Pane::Agent;
-            app.status = if app.sandbox_agents {
-                "agent running below — sandboxed, Esc unfocuses, Ctrl-C interrupts".to_string()
+            // The detail pane shows where the agent works while no
+            // issue/PR is selected; without it the right column above the
+            // box goes blank on repos with no rows.
+            app.agent_context = Some(gtasks::app::AgentContext {
+                repo: plan.repo.clone(),
+                branch: plan.branch.clone(),
+                path: path.to_path_buf(),
+            });
+            if draft {
+                // The prompt is typed, not sent: the agent opens ready, and
+                // the user reviews the draft and presses Enter. The seed file
+                // still travels to the record so the run is reproducible.
+                app.draft_text = Some(body);
+                app.status = "agent ready — review the draft, edit it, Enter sends it".to_string();
+            } else if app.sandbox_agents {
+                app.status =
+                    "agent running — sandboxed, Esc unfocuses, Ctrl-C interrupts".to_string();
             } else {
-                "agent running below — Esc unfocuses, Ctrl-C interrupts".to_string()
+                app.status = "agent running — Esc unfocuses, Ctrl-C interrupts".to_string();
+                // A re-entry is never a draft: clear any leftover text so an
+                // old draft cannot leak into a fresh run.
+                app.draft_text = None;
             };
             *session = Some(sess);
         }
@@ -1095,15 +1130,46 @@ fn run_tui() -> anyhow::Result<()> {
                 app.agent_dismissed_for = Some(key);
                 app.agent_running = false;
                 app.agent_screen = Vec::new();
+                app.agent_context = None;
                 app.status = format!("agent finished: {summary}");
                 embedded = None;
+            }
+        }
+
+        // A fresh launch types its draft: 1KB per tick so a long seed never
+        // blocks the loop on a full pty. The agent boots while the first
+        // chunks queue up, then reads them as its input.
+        if let Some(mut text) = app.draft_text.take() {
+            if let Some(sess) = embedded.as_mut() {
+                // Byte chunks must end on a char boundary, or a multibyte
+                // character split across two ticks renders as mojibake.
+                let mut n = text.len().min(1024);
+                while !text.is_char_boundary(n) {
+                    n -= 1;
+                }
+                let rest = text.split_off(n);
+                sess.write(text.as_bytes());
+                if !rest.is_empty() {
+                    app.draft_text = Some(rest);
+                }
+            } else {
+                // No session to type into (a launch failed between setting
+                // the draft and spawning): keep it. Dropping the user's
+                // direction would be worse than retrying it on the next run,
+                // which overwrites it anyway.
+                app.draft_text = Some(text);
             }
         }
 
         let view = ui::view_for(&app);
         terminal.draw(|frame| ui::draw(frame, &app, &view))?;
 
-        if event::poll(Duration::from_millis(250))? {
+        // A running agent repaints at 4fps on the idle tick — visibly
+        // choppy for streaming or repaint-style TUIs. While a session is
+        // attached the loop wakes every 50ms instead; idle screens keep
+        // the slow tick, so an open-but-quiet app does not spin.
+        let tick = if embedded.is_some() { 50 } else { 250 };
+        if event::poll(Duration::from_millis(tick))? {
             match event::read()? {
                 Event::Key(key) => {
                     // Focused on a running agent, every key but Esc/Tab is
