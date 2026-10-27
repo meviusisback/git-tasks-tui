@@ -2812,6 +2812,7 @@ impl App {
     pub fn item_kind(&self, repo: &str, number: u64) -> ItemKind {
         self.items
             .iter()
+            .chain(self.retained.iter())
             .find(|item| item.repo == repo && item.number == number)
             .map(|item| item.kind)
             .unwrap_or(ItemKind::Pr)

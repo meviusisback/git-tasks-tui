@@ -1376,6 +1376,9 @@ fn run_tui() -> anyhow::Result<()> {
                     app.retained
                         .retain(|i| !(i.repo == repo && i.number == number));
                     app.retained.push(item);
+                    // The tab finally has its item: start the body at once,
+                    // like every other arrival — not only on Enter.
+                    app.preload_detail();
                     needs_draw = true;
                 }
                 Ok((repo, number, Err(_))) => {

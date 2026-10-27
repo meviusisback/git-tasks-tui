@@ -209,6 +209,29 @@ fn a_closed_tab_item_stays_in_the_detail() {
 }
 
 #[test]
+fn the_body_fetch_uses_the_retained_kind() {
+    use gtasks::model::ItemKind;
+    let mut app = app_with_items();
+    // Tab #1, then the refresh drops it: retained.
+    press(&mut app, Key::Enter); // tab #1 (a PR here)
+    let second = app.items[1].clone();
+    app.apply_outcome(gtasks::fetch::FetchOutcome {
+        items: vec![second],
+        failures: Vec::new(),
+    });
+    assert_eq!(
+        app.item_kind("me/a", 1),
+        ItemKind::Pr,
+        "retained items keep their kind, not the Pr default"
+    );
+    assert_eq!(
+        app.item_kind("me/a", 9),
+        ItemKind::Pr,
+        "unknown items still default to Pr"
+    );
+}
+
+#[test]
 fn f_cycles_the_state_filter_on_a_single_repo_only() {
     let mut app = app_with_items();
     // All repos: closed history is per-repo, so `f` refuses.
