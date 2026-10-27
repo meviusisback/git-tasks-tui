@@ -3,7 +3,7 @@
 //! build; Enter goes through the same confirmation as `a`.
 
 use gtasks::actions::RepoSlug;
-use gtasks::app::{ActionPick, App, Key, Modal, Msg};
+use gtasks::app::{ActionPick, App, Key, Modal, Msg, Pane, Pending};
 use gtasks::fetch::FetchOutcome;
 use gtasks::model::{Item, ItemKind};
 
@@ -49,8 +49,40 @@ fn pr_app() -> App {
 }
 
 #[test]
+fn y_on_the_cleanup_question_hands_trees_and_branch_to_the_loop() {
+    use std::path::PathBuf;
+    let mut app = pr_app();
+    let order = gtasks::worktree::CleanupOrder {
+        repo: "o/r".to_string(),
+        number: 7,
+        branch: gtasks::worktree::BranchName::parse("fix-foo").unwrap(),
+        clone: PathBuf::from("/c"),
+        trees: vec![PathBuf::from("/t")],
+    };
+    app.modal = Some(Modal::Confirm("merged #7 — delete tree /t?".into()));
+    app.pending = Some(Pending::Cleanup(order));
+    app.update(Msg::Key(Key::Char('y')));
+    let moved = app.cleanup_go.as_ref().expect("the loop cleans up");
+    assert_eq!(moved.branch.as_str(), "fix-foo");
+    assert_eq!(moved.trees, vec![PathBuf::from("/t")]);
+
+    let mut app = pr_app();
+    let order = gtasks::worktree::CleanupOrder {
+        repo: "o/r".to_string(),
+        number: 7,
+        branch: gtasks::worktree::BranchName::parse("fix-foo").unwrap(),
+        clone: PathBuf::from("/c"),
+        trees: Vec::new(),
+    };
+    app.modal = Some(Modal::Confirm("merged #7 — delete local branch?".into()));
+    app.pending = Some(Pending::Cleanup(order));
+    app.update(Msg::Key(Key::Char('n')));
+    assert!(app.modal.is_none(), "the question closes");
+    assert!(app.cleanup_go.is_none(), "declining keeps everything");
+}
+
+#[test]
 fn m_outside_the_list_refuses_instead_of_opening() {
-    use gtasks::app::Pane;
     let mut app = pr_app();
     app.pane = Pane::Detail;
     app.update(Msg::Key(Key::Char('m')));

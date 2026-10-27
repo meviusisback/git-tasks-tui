@@ -126,17 +126,20 @@ fn seed_body_shows_the_note_only_when_given() {
 }
 
 #[test]
-fn plan_refuses_issues_because_they_have_no_branch() {
-    let err = plan_agent(
+fn plan_gives_issues_a_fresh_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("r").join(".git")).unwrap();
+    let roots = vec![tmp.path().to_path_buf()];
+    let plan = plan_agent(
         "o/r",
         9,
         "https://github.com/o/r/issues/9",
         ItemKind::Issue,
         None,
-        test_inputs("default", &[PathBuf::from("/x")]),
+        test_inputs("default", &roots),
     )
-    .expect_err("issues must be refused");
-    assert_eq!(err, "agents start on pull requests — issues have no branch");
+    .expect("issues work with a fresh branch");
+    assert_eq!(plan.branch, "issue-9");
 }
 
 #[test]
@@ -288,17 +291,19 @@ fn g_without_clone_root_names_the_missing_config() {
 }
 
 #[test]
-fn g_on_an_issue_says_why_not() {
+fn g_on_an_issue_opens_the_agent_menu() {
     let (mut app, _tmp) = pr_app();
     app.apply_outcome(FetchOutcome {
         items: vec![item("o/r", 9, ItemKind::Issue, None)],
         failures: Vec::new(),
     });
     app.update(Msg::Key(Key::Char('g')));
-    assert!(app.agent_requested.is_none());
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("g works on issues too, got {:?}", app.modal);
+    };
     assert_eq!(
-        app.status,
-        "agents start on pull requests — issues have no branch"
+        menu.plan.branch, "issue-9",
+        "a fresh branch, editable in the name prompt"
     );
 }
 

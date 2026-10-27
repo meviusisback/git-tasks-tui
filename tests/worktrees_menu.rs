@@ -297,18 +297,21 @@ fn w_with_no_trees_still_opens_the_menu() {
 }
 
 #[test]
-fn w_refuses_issues_like_g_does() {
+fn w_on_an_issue_suggests_a_fresh_branch() {
     let (mut app, _tmp) = pr_app();
     app.apply_outcome(FetchOutcome {
         items: vec![item("o/r", 9, ItemKind::Issue, None)],
         failures: Vec::new(),
     });
     press(&mut app, Key::Char('W'));
-    assert!(app.modal.is_none(), "no menu without a branch");
+    let Some(Modal::Worktrees(menu)) = app.modal.as_ref() else {
+        panic!("W works on issues too, got {:?}", app.modal);
+    };
+    assert!(menu.agent.is_none(), "no agent picked yet");
     assert!(
-        app.status.contains("no branch"),
-        "the reason is on screen: {}",
-        app.status
+        menu.plan.branch == "issue-9",
+        "a fresh branch, ready to grow: {}",
+        menu.plan.branch
     );
 }
 
@@ -558,6 +561,29 @@ fn every_agent_takes_the_seed_as_a_file_never_as_text() {
             "{id:?} never passes a bare dash"
         );
     }
+}
+
+#[test]
+fn branch_cleanup_after_a_merge_uses_safe_delete() {
+    use gtasks::worktree::{BranchName, delete_branch_argv};
+    let binaries =
+        gtasks::binaries::Binaries::new(PathBuf::from("/bin/gh"), PathBuf::from("/usr/bin/git"));
+    let clone = PathBuf::from("/c");
+    let branch = BranchName::parse("perf-cells-in-place").unwrap();
+    let args: Vec<String> = delete_branch_argv(&binaries, &clone, &branch)
+        .args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        args.windows(3)
+            .any(|w| w == ["branch", "-d", "perf-cells-in-place"]),
+        "safe delete, never -D: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|a| a == "-D" || a == "--force"),
+        "no force anywhere: {args:?}"
+    );
 }
 
 #[test]

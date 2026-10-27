@@ -319,20 +319,24 @@ pub fn plan_agent(
 ) -> Result<AgentPlan, String> {
     let profile = inputs.profile;
     let default_agent = inputs.default_agent;
-    if kind != crate::model::ItemKind::Pr {
-        return Err("agents start on pull requests — issues have no branch".to_string());
-    }
-    let Some(branch) = head_branch.filter(|b| !b.is_empty()) else {
-        return Err(format!(
-            "no head branch for {repo}#{number} — refresh and try again"
-        ));
+    // Issues have no head branch: they get a fresh one, named after the
+    // issue and editable in the name prompt. PRs keep their head branch.
+    let branch = if kind == crate::model::ItemKind::Pr {
+        let Some(branch) = head_branch.filter(|b| !b.is_empty()) else {
+            return Err(format!(
+                "no head branch for {repo}#{number} — refresh and try again"
+            ));
+        };
+        branch.to_string()
+    } else {
+        format!("issue-{number}")
     };
     let clone = find_clone(inputs.roots, repo)?;
     Ok(AgentPlan {
         repo: repo.to_string(),
         number,
         url: url.to_string(),
-        branch: branch.to_string(),
+        branch,
         profile: profile.to_string(),
         agent: default_agent,
         clone,

@@ -233,6 +233,53 @@ pub struct WorktreeDelete {
     pub branch: BranchName,
     pub path: PathBuf,
 }
+/// After a merge: the head branch's local trees plus the local branch.
+/// The remote branch is already gone when the merge asked for it
+/// (`--delete-branch`); this is what is left on disk.
+#[derive(Debug, Clone)]
+pub struct CleanupOrder {
+    pub repo: String,
+    pub number: u64,
+    pub branch: BranchName,
+    pub clone: PathBuf,
+    pub trees: Vec<PathBuf>,
+}
+
+/// `git -C <clone> branch -d <branch>`: drop the local head branch after a
+/// merge. Safe delete only — a branch git considers unmerged is refused
+/// with its reason on screen instead of losing commits to `-D`.
+pub fn delete_branch_argv(
+    binaries: &crate::binaries::Binaries,
+    clone: &Path,
+    branch: &BranchName,
+) -> crate::gh::CheckedArgv {
+    crate::gh::CheckedArgv::from_checked(crate::gh::git(
+        binaries,
+        clone,
+        vec!["branch".into(), "-d".into(), branch.as_str().into()],
+    ))
+}
+
+/// Does the local head branch still exist in the clone? A read, so it goes
+/// through `run_checked`, not the mutation runner.
+pub fn has_branch(
+    binaries: &crate::binaries::Binaries,
+    clone: &Path,
+    branch: &BranchName,
+    timeout: std::time::Duration,
+) -> bool {
+    let argv = crate::gh::CheckedArgv::from_checked(crate::gh::git(
+        binaries,
+        clone,
+        vec![
+            "show-ref".into(),
+            "--verify".into(),
+            "--quiet".into(),
+            format!("refs/heads/{}", branch.as_str()).into(),
+        ],
+    ));
+    crate::gh::run_checked(&argv, timeout).is_ok_and(|out| out.status.success())
+}
 /// The default worktree root: `$XDG_DATA_HOME/gtasks/worktrees`. The caller
 /// applies the configured `worktree_root` when set. One function, so every
 /// path computation starts from the same base.

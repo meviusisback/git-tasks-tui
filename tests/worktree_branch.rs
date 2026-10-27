@@ -20,6 +20,26 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 #[test]
+fn has_branch_sees_only_existing_branches() {
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    git(dir, &["init", "-q", "-b", "main", "."]);
+    git(dir, &["config", "user.email", "t@t"]);
+    git(dir, &["config", "user.name", "t"]);
+    git(dir, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(dir, &["checkout", "-q", "-b", "perf-cells-in-place"]);
+    let binaries = gtasks::binaries::Binaries::detect().expect("git+gh on PATH");
+    let timeout = Duration::from_secs(10);
+    let here = gtasks::worktree::BranchName::parse("perf-cells-in-place").unwrap();
+    let gone = gtasks::worktree::BranchName::parse("no-such-branch").unwrap();
+    assert!(gtasks::worktree::has_branch(&binaries, dir, &here, timeout));
+    assert!(!gtasks::worktree::has_branch(
+        &binaries, dir, &gone, timeout
+    ));
+}
+
+#[test]
 fn current_branch_names_the_checked_out_branch() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();

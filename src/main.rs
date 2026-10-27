@@ -389,6 +389,75 @@ fn delete_worktree(
     }
 }
 
+/// Delete a merged PR's local leftovers: its trees, then its head branch.
+/// A tree with a live session is kept with its reason, and the branch goes
+/// only when no tree holds it anymore. Every refusal lands on screen as
+/// is — a kept tree is information, not an error to hide.
+fn cleanup_after_merge(
+    app: &mut App,
+    binaries: &Binaries,
+    order: gtasks::worktree::CleanupOrder,
+    sessions: &HashMap<(String, u64), EmbeddedSession>,
+) {
+    let mut deleted: Vec<String> = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
+    for path in &order.trees {
+        if sessions.values().any(|s| s.worktree() == *path) {
+            kept.push(format!(
+                "{} (an agent is still running there)",
+                path.display()
+            ));
+            continue;
+        }
+        let delete = gtasks::worktree::WorktreeDelete {
+            clone: order.clone.clone(),
+            branch: order.branch.clone(),
+            path: path.clone(),
+        };
+        match gtasks::worktree::remove_tree(binaries, &delete) {
+            Ok(()) => {
+                for agent in app.tab_agents.values_mut() {
+                    if agent.record.as_ref().is_some_and(|r| r.worktree == *path) {
+                        agent.record = None;
+                        agent.dismissed_for = None;
+                    }
+                }
+                app.forget_worktree(path);
+                deleted.push(path.display().to_string());
+            }
+            Err(err) => kept.push(format!("{} ({err:#})", path.display())),
+        }
+    }
+    // The branch goes only when no tree holds it: git would refuse anyway,
+    // but "a tree still holds it" explains it before git does.
+    let mut branch_done = false;
+    if order.trees.len() == deleted.len() {
+        let argv = gtasks::worktree::delete_branch_argv(binaries, &order.clone, &order.branch);
+        match gtasks::worktree::run_mutation(argv.as_argv(), std::time::Duration::from_secs(60)) {
+            Ok(out) if out.status.success() => branch_done = true,
+            Ok(out) => kept.push(format!(
+                "branch {} ({})",
+                order.branch,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+            Err(err) => kept.push(format!("branch {} ({err:#})", order.branch)),
+        }
+    } else {
+        kept.push(format!("branch {} (a tree still holds it)", order.branch));
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !deleted.is_empty() {
+        parts.push(format!("deleted {}", deleted.join(", ")));
+    }
+    if branch_done {
+        parts.push(format!("deleted local branch {}", order.branch));
+    }
+    if !kept.is_empty() {
+        parts.push(format!("kept {}", kept.join("; ")));
+    }
+    app.status = format!("merged #{} — {}", order.number, parts.join("; "));
+}
+
 /// The tree the plan wants, from repo + branch: used when the picked tree
 /// turned out to be on the wrong branch, to offer building the right one.
 /// `None` when the names do not parse — the plan itself came from validated
@@ -1247,6 +1316,10 @@ fn run_tui() -> anyhow::Result<()> {
         if let Some(order) = app.delete_go.take() {
             needs_draw = true;
             delete_worktree(&mut app, &binaries, order, &sessions);
+        }
+        if let Some(order) = app.cleanup_go.take() {
+            needs_draw = true;
+            cleanup_after_merge(&mut app, &binaries, order, &sessions);
         }
         // A clone runs in a thread — network can take minutes, and the UI
         // must stay alive meanwhile. When it lands, the W flow continues

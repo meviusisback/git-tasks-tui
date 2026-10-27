@@ -143,6 +143,9 @@ pub enum Pending {
     },
     /// `d` on a worktree row, confirmed with `y`: the loop deletes it.
     Delete(crate::worktree::WorktreeDelete),
+    /// A merged PR, confirmed with `y`: the loop deletes its local trees
+    /// and head branch. Asked while the merge is fresh, never assumed.
+    Cleanup(crate::worktree::CleanupOrder),
     /// No local clone for the repo, confirmed with `y`: the loop clones it
     /// into the agreed directory, then grows the tree the user asked for.
     Clone {
@@ -510,8 +513,11 @@ pub struct App {
     /// Set by `Enter` on the rename prompt, consumed by the loop: rename
     /// the branch, then move the tree. No confirm — nothing is lost.
     pub rename_go: Option<crate::worktree::WorktreeRename>,
-    /// Set by `y` on the delete question, consumed by the loop.
+    /// `y` on the delete question, consumed by the loop.
     pub delete_go: Option<crate::worktree::WorktreeDelete>,
+    /// Set by `y` on the merge cleanup question, consumed by the loop: the
+    /// merged PR's local trees plus its head branch.
+    pub cleanup_go: Option<crate::worktree::CleanupOrder>,
     /// Set by `y` on the clone question, consumed by the loop: the repo plus
     /// the directory the user agreed to clone it into. The loop clones in a
     /// thread (network can take minutes) and continues the W flow when done.
@@ -603,6 +609,7 @@ impl Default for App {
             agent_place: None,
             rename_go: None,
             delete_go: None,
+            cleanup_go: None,
             clone_go: None,
             worktree_root: None,
             detail: String::new(),
@@ -2102,6 +2109,78 @@ impl App {
         }));
     }
 
+    /// A merged PR leaves its local trees and head branch behind: while the
+    /// merge is fresh, offer to delete what is no longer useful. Silent when
+    /// nothing local remains — a PR merged elsewhere asks nothing.
+    fn offer_merge_cleanup(&mut self, action: &Action) {
+        let Action::Merge { repo, number, .. } = action else {
+            return;
+        };
+        let Some(item) = self
+            .items
+            .iter()
+            .find(|i| i.repo == repo.as_str() && i.number == *number)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(head) = item.head_ref_name.as_deref() else {
+            return;
+        };
+        let Ok(branch) = crate::worktree::BranchName::parse(head) else {
+            return;
+        };
+        let Some(binaries) = self.binaries.clone() else {
+            return;
+        };
+        // The plan resolves the clone; the rows list the trees — the same
+        // doors as the worktree menu, no special cases for cleanup. A plan
+        // that cannot be built (no clone, no root) skips silently and keeps
+        // the merge status line.
+        let plan = match crate::agent::plan_agent(
+            &item.repo,
+            item.number,
+            &item.url,
+            item.kind,
+            item.head_ref_name.as_deref(),
+            crate::agent::PlanInputs {
+                profile: &self.agent_profile,
+                roots: &self.clone_roots,
+                default_agent: self.default_hermes(),
+            },
+        ) {
+            Ok(plan) => plan,
+            Err(_) => return,
+        };
+        let trees: Vec<std::path::PathBuf> = self
+            .repo_worktrees(&plan)
+            .into_iter()
+            .filter(|row| row.branch == branch)
+            .map(|row| row.path)
+            .collect();
+        let branch_here =
+            crate::worktree::has_branch(&binaries, &plan.clone, &branch, self.write_timeout);
+        if trees.is_empty() && !branch_here {
+            return;
+        }
+        let what = match (trees.len(), branch_here) {
+            (0, _) => format!("local branch '{branch}'"),
+            (1, false) => format!("tree {}", trees[0].display()),
+            (1, true) => format!("tree {} and local branch '{branch}'", trees[0].display()),
+            (n, false) => format!("{n} trees"),
+            (n, true) => format!("{n} trees and local branch '{branch}'"),
+        };
+        let question = format!("merged #{number} — delete {what}?");
+        self.modal = Some(Modal::Confirm(question));
+        self.pending = Some(Pending::Cleanup(crate::worktree::CleanupOrder {
+            repo: item.repo,
+            number: item.number,
+            branch,
+            clone: plan.clone,
+            trees,
+        }));
+    }
+
     /// `W` on the selected row: the worktree menu directly, without going
     /// through the agent menu first. Managing trees (rename, delete, or
     /// picking where to work) is not launching an agent.
@@ -2340,7 +2419,10 @@ impl App {
                         out.push(format!("branch · {branch}"));
                     }
                     crate::model::ItemKind::Issue => {
-                        out.push("issue · no branch — g refuses, m closes".to_string());
+                        out.push(format!(
+                            "issue · new branch issue-{} — g works, m closes",
+                            item.number
+                        ));
                     }
                 }
             }
@@ -2643,12 +2725,28 @@ impl App {
                             if matches!(&outcome, Executed::Finished(_) | Executed::Unknown(_)) {
                                 self.refresh_requested = true;
                             }
+                            let merged = matches!(
+                                &outcome,
+                                Executed::Finished(status) if status.success()
+                            ) && matches!(pending.action, Action::Merge { .. });
                             self.status = describe(outcome);
+                            // A merge that landed leaves its local trees and
+                            // head branch behind: while it is fresh, offer to
+                            // delete what is no longer useful. Anything else
+                            // keeps its status line, no question asked.
+                            if merged {
+                                self.offer_merge_cleanup(&pending.action);
+                            }
                         }
                         // A worktree write needs the loop (git, seed file,
                         // terminal): `y` only moves the agreed plan there.
                         Some(Pending::Agent(plan, path)) => {
                             self.agent_go = Some((plan, path));
+                        }
+                        // A merged PR leaves its local trees and head branch
+                        // behind: `y` hands the cleanup to the loop.
+                        Some(Pending::Cleanup(order)) => {
+                            self.cleanup_go = Some(order);
                         }
                         // Reopen the recorded session: the loop resumes it
                         // with the agent's continue flag, sending nothing.
