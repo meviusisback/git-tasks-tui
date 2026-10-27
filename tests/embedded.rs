@@ -212,7 +212,11 @@ fn keys_become_terminal_bytes_except_pane_keys() {
     assert_eq!(key_to_pty(&Key::Char('a')), Some(b"a".to_vec()));
     assert_eq!(key_to_pty(&Key::Up), Some(b"\x1b[A".to_vec()));
     assert_eq!(key_to_pty(&Key::CtrlC), Some(vec![0x03]));
-    assert_eq!(key_to_pty(&Key::Esc), None);
+    assert_eq!(
+        key_to_pty(&Key::Esc),
+        Some(vec![0x1b]),
+        "Esc goes to the agent; Tab leaves the box"
+    );
 }
 
 #[test]

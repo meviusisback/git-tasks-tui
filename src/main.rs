@@ -1265,23 +1265,28 @@ fn run_tui() -> anyhow::Result<()> {
         if event::poll(Duration::from_millis(tick))? {
             match event::read()? {
                 Event::Key(key) => {
-                    // Focused on a running agent, every key but Esc/Tab is
-                    // agent input — including Ctrl-C, which interrupts it.
-                    // Esc unfocuses, Tab cycles panes, Shift+arrows move
+                    // Focused on a running agent, every key but Tab is
+                    // agent input — including Esc and Ctrl-C, which
+                    // interrupts it. Tab cycles panes, Shift+arrows move
                     // between boxes: all through the app. Anywhere else,
                     // keys are app keys (where Ctrl-C quits).
                     let to_app = matches!(
                         map_key(key),
                         Some(Msg::Key(
-                            Key::Esc
-                                | Key::Tab
+                            Key::Tab
                                 | Key::BackTab
                                 | Key::ShiftUp
                                 | Key::ShiftDown
                                 | Key::ShiftLeft
                                 | Key::ShiftRight
                         ))
-                    );
+                    ) || (matches!(map_key(key), Some(Msg::Key(Key::Esc)))
+                        && (app.modal.is_some() || app.searching || app.show_help));
+                    // Note what is missing: Esc. While the box has focus and
+                    // no dialog, search or help is open, Esc belongs to the
+                    // agent (vim mode, closing popups, cancelling) — Tab
+                    // leaves the box. Dialogs still close with Esc through
+                    // the condition above.
                     let active_key = app.active_key();
                     let session_live = active_key.as_ref().is_some_and(|key| {
                         sessions.contains_key(key)

@@ -7,7 +7,7 @@ disagree, the handler is right and this file is a bug.
 |---|---|
 | `q` | quit |
 | `Ctrl-C` | quit — the escape hatch, always live, except with the agent focused, where it interrupts the agent |
-| `Esc` | back **one level**: overlay → confirmation → search → agent → detail → list → repos. It **never quits**: at the outermost level it says `Esc — nothing to close` in the status line |
+| `Esc` | back **one level**: overlay → confirmation → search → detail → list → repos. It **never quits** and **never steals agent keys**: with the agent focused `Esc` goes to the agent (`Tab` leaves the box). At the outermost level it says `Esc — nothing to close` in the status line |
 | `?` | the overlay of keys (it says which work today and which are promised) |
 | `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, skipping the empty agent box. The mouse wheel scrolls the agent box history |
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while an agent runs (for people who expect it) |
@@ -41,8 +41,8 @@ Before anything runs, `g` asks two things: which agent (hermes, pi, omp,
 opencode, agy) and on which worktree. A worktree marker (`◉` without a Nerd Font)
 in front of a list row means a worktree directory already exists for that
 branch — `g` then works on it instead of creating one. While the box has
-focus every key but `Esc`, `Tab` and `Shift`+arrows is agent input — typing,
-arrows, `Ctrl-C` (interrupt). `Esc` unfocuses, `Tab` cycles panes,
+focus every key but `Tab` and `Shift`+arrows is agent input — typing,
+arrows, `Esc` (vim mode, popups), `Ctrl-C` (interrupt). `Tab` cycles panes,
 `Shift`+arrows move between boxes, the agent keeps running either way. The
 mouse wheel scrolls the box back through history (fullscreen agents like Pi
 draw on the box's main screen — their alternate screen is folded away, so

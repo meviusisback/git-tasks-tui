@@ -545,15 +545,18 @@ fn pump(mut reader: Box<dyn Read + Send>, tx: mpsc::Sender<Vec<u8>>) {
     }
 }
 
-/// A keypress as pty bytes. `None` means "the app handles it": `Esc`
-/// unfocuses the box, `Tab` cycles panes, `Shift`+arrows move between boxes,
-/// `Ctrl-C` handled by the caller (interrupt when focused, quit otherwise).
-/// Everything else is agent input — including `q`, `?` and `R`. The caller
-/// routes: focused on a running agent the bytes go to the pty, otherwise the
-/// key goes to the app.
+/// A keypress as pty bytes. `None` means "the app handles it": `Tab`
+/// cycles panes, `Shift`+arrows move between boxes, `Ctrl-C` handled by
+/// the caller (interrupt when focused, quit otherwise). Everything else is
+/// agent input — including `Esc`, `q`, `?` and `R`. The caller routes:
+/// focused on a running agent the bytes go to the pty, otherwise the key
+/// goes to the app.
 pub fn key_to_pty(key: &Key) -> Option<Vec<u8>> {
     match key {
-        Key::Esc | Key::Tab | Key::BackTab => None,
+        // Esc reaches the agent (vim mode, popups, cancel): leaving the box
+        // is Tab's job. Tab/BackTab and the Shift arrows stay app keys.
+        Key::Esc => Some(vec![0x1b]),
+        Key::Tab | Key::BackTab => None,
         Key::ShiftUp | Key::ShiftDown | Key::ShiftLeft | Key::ShiftRight => None,
         Key::CtrlC => Some(vec![0x03]),
         Key::Enter => Some(b"\r".to_vec()),

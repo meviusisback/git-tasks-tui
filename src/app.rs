@@ -790,7 +790,7 @@ impl App {
             // including Ctrl-C, which interrupts it. The legend must not
             // promise keys that type instead.
             if self.active_agent().is_some_and(|a| a.running) {
-                String::from("Esc/Tab panes · Ctrl-C interrupts · wheel scrolls · type to agent")
+                String::from("Tab panes · Ctrl-C interrupts · wheel scrolls · type to agent")
             } else {
                 String::from(
                     "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
