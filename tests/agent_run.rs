@@ -486,6 +486,13 @@ fn another_item_shows_detail_not_the_record() {
         items: vec![item("o/r", 8, ItemKind::Pr, Some("other"))],
         failures: Vec::new(),
     });
+    // The tab still owns #7 (retained while tabbed): card and all.
+    assert!(
+        app.visible_record().is_some(),
+        "the tab keeps #7 and its card"
+    );
+    // Opening #8 hands the detail to #8: no foreign card there.
+    app.update(Msg::Key(Key::Enter));
     assert!(
         app.visible_record().is_none(),
         "a record for #7 is not shown on #8"

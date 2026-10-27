@@ -13,8 +13,8 @@ disagree, the handler is right and this file is a bug.
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while the active tab's agent operates |
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
-| `Enter` | in the repos pane: drill into that repo's items; in the list: bookmark the row — open its tab, pin the detail on it and move the focus right; in the search box: leave the box |
-| `t` / `T` | next / previous tab — the detail jumps to the tab's issue (even across a repo filter) and its agent comes back below; any scroll, filter or search hands the detail back to the list. Never touches the repo selection on the left |
+| `Enter` | in the repos pane: drill into that repo's items; in the list: bookmark the row — open its tab, show it and move the focus right (the open tab owns the detail; without tabs the detail follows the list); in the search box: leave the box |
+| `t` / `T` | next / previous tab — the open tab owns the detail (its issue shows even across a repo filter, even closed) and its agent comes back below; scrolling never drags the detail off a tab. Never touches the repo selection on the left |
 | `x` / `X` | close the active tab first, then the agent record |
 | `w` | focus the agent pane (worktree + agent instructions live there) |
 | `R` | repo selection menu (the rows re-read from GitHub on open, so new repos join without a restart): `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |

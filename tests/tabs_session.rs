@@ -61,14 +61,15 @@ fn enter_in_the_list_opens_a_tab_and_the_detail_follows_it() {
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
         Some(("me/a", 1))
     );
-    // Scrolling the list loads the detail; Enter only moves the focus
-    // there (and opens the row's tab).
+    // Scrolling the list never drags the detail off the tab: the open
+    // tab owns the right column. Without tabs the detail follows the
+    // cursor instead (covered where no tab is ever opened).
     press(&mut app, Key::Esc); // back to the list
     press(&mut app, Key::Down);
     assert_eq!(
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
-        Some(("me/b", 2)),
-        "the detail follows the list"
+        Some(("me/a", 1)),
+        "the tab owns the detail while it lives"
     );
     press(&mut app, Key::Enter);
     assert_eq!(app.tabs.len(), 2, "Enter opens the row's tab");
@@ -101,13 +102,14 @@ fn switching_tabs_jumps_across_a_filter() {
         "switching tabs jumps across the filter"
     );
     assert_eq!(app.repos_cursor, cursor, "the repo cursor stays");
-    // Any list move unpins: the detail follows the cursor again.
+    // Scrolling leaves the tab's detail alone: only another tab (or
+    // closing this one) hands the detail back to the list.
     press(&mut app, Key::Esc); // back to the list
     press(&mut app, Key::Down);
     assert_eq!(
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
-        Some(("me/b", 2)),
-        "scrolling unpins the bookmark"
+        Some(("me/a", 1)),
+        "scrolling never drags the detail off a tab"
     );
 }
 
@@ -346,7 +348,7 @@ fn the_session_roundtrip_keeps_tabs_filter_and_cursors() {
     press(&mut app, Key::Enter); // tab #1
     press(&mut app, Key::Char('t')); // single tab: stays, but marks dirty
     press(&mut app, Key::Esc); // back to the list
-    press(&mut app, Key::Down); // cursor #2: the detail unpins here
+    press(&mut app, Key::Down); // cursor #2: the tab still owns the detail
     // Simulate the loop: capture the session, save, load into a fresh app.
     let mut state = gtasks::state::State {
         selected_repos: Vec::new(),

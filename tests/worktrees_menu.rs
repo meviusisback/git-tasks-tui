@@ -853,19 +853,16 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
     app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     with_plain_icons(|| {
         let screen = render_200x30(&app);
-        // One: the tabs strip only. The list shows nothing and the detail
-        // names the tab's missing issue instead of a box — so a second
-        // would mean a leak.
+        // Three: the detail title (the tab owns the detail even though the
+        // filter hides its row), the worktrees box row, and the tabs
+        // strip — so a fourth would mean a leak.
         assert_eq!(
             screen.matches("◉").count(),
-            1,
-            "marker in tabs only: {screen}"
+            3,
+            "marker in detail + worktrees row + tabs: {screen}"
         );
         assert!(screen.contains("◉  #7"), "marker, gap, number: {screen}");
-        assert!(
-            screen.contains("not in the current list"),
-            "the tab names its missing issue: {screen}"
-        );
+        assert!(screen.contains("fix-foo"), "the tree shows: {screen}");
     });
     // And the strip knows it structurally, not just visually.
     let infos = app.tab_infos();
