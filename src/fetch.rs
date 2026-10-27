@@ -44,6 +44,122 @@ pub fn fetch_repo_list(binaries: &Binaries, timeout: Duration) -> Result<Vec<Rep
     Ok(parse_repo_list(&String::from_utf8_lossy(&output.stdout)))
 }
 
+/// Fetch one issue/PR by number, open or closed, for a tab the OPEN-only
+/// fetch never saw: closed work with a live tab resolves here instead of
+/// falling back to whatever sits under the cursor. Issues are tried
+/// first (the common tabbed-closed case), then PRs; anything else is
+/// the entry's failure, not the tab's.
+pub fn fetch_closed_item(
+    binaries: &Binaries,
+    repo: &str,
+    number: u64,
+    timeout: Duration,
+) -> Result<Item, String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+    for kind in [ItemKind::Issue, ItemKind::Pr] {
+        let subcommand = match kind {
+            ItemKind::Issue => "issue",
+            ItemKind::Pr => "pr",
+        };
+        // Issues have no head/base branches, reviews or drafts: asking
+        // for them errors the whole call, so each kind asks its own list.
+        let fields = match kind {
+            ItemKind::Issue => "number,title,state,url,author,labels,assignees,createdAt,updatedAt",
+            ItemKind::Pr => {
+                "number,title,state,url,author,labels,assignees,createdAt,updatedAt,headRefName,baseRefName,reviewDecision,mergeable,isDraft"
+            }
+        };
+        let argv = gh(
+            binaries,
+            &cwd,
+            vec![
+                subcommand.into(),
+                "view".into(),
+                number.to_string().into(),
+                "--repo".into(),
+                repo.into(),
+                "--json".into(),
+                fields.into(),
+            ],
+        );
+        let checked = CheckedArgv::from_checked(argv);
+        match gh::run_checked(&checked, timeout) {
+            Ok(output) if output.status.success() && !output.truncated => {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Ok(item) = parse_closed_item(kind, repo, &text) {
+                    return Ok(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    Err(format!("{repo}#{number}: neither issue nor PR found"))
+}
+
+/// Parse one `gh (issue|pr) view --json`: the entry's own shape decides,
+/// so a wrong-typed payload is `Err` and the caller tries the other kind.
+fn parse_closed_item(kind: ItemKind, repo: &str, text: &str) -> Result<Item, String> {
+    use crate::model::{Author, Label};
+    let entry: serde_json::Value =
+        serde_json::from_str(text).map_err(|err| format!("cannot parse: {err:#}"))?;
+    let number = entry
+        .get("number")
+        .and_then(|n| n.as_u64())
+        .ok_or_else(|| "no number in entry".to_string())?;
+    let str_field = |name: &str| entry.get(name).and_then(|v| v.as_str()).map(str::to_string);
+    Ok(Item {
+        number,
+        title: str_field("title").unwrap_or_default(),
+        state: str_field("state").unwrap_or_else(|| "UNKNOWN".to_string()),
+        is_draft: entry.get("isDraft").and_then(|v| v.as_bool()),
+        author: entry
+            .get("author")
+            .and_then(|a| a.get("login"))
+            .and_then(|l| l.as_str())
+            .map(|login| Author {
+                login: login.to_string(),
+            }),
+        labels: entry
+            .get("labels")
+            .and_then(|l| l.as_array())
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|n| n.get("name")?.as_str())
+                    .map(|name| Label {
+                        name: name.to_string(),
+                        color: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        assignees: entry
+            .get("assignees")
+            .and_then(|a| a.as_array())
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|n| n.get("login")?.as_str())
+                    .map(|login| Author {
+                        login: login.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        updated_at: str_field("updatedAt").unwrap_or_default(),
+        created_at: str_field("createdAt").unwrap_or_default(),
+        url: str_field("url").unwrap_or_default(),
+        head_ref_name: str_field("headRefName"),
+        base_ref_name: str_field("baseRefName"),
+        review_decision: str_field("reviewDecision"),
+        mergeable: str_field("mergeable"),
+        status_check_rollup: Vec::new(),
+        closing_issues_references: Vec::new(),
+        repo: repo.to_string(),
+        kind,
+    })
+}
+
 /// Parse `gh repo list --json nameWithOwner`: an array of
 /// `{"nameWithOwner": "owner/repo"}`. A wrong-typed entry is that entry's
 /// failure, not the list's: the rest still parses.
@@ -444,7 +560,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::parse_repo_list;
+    use super::{parse_closed_item, parse_repo_list};
+    use crate::model::ItemKind;
 
     #[test]
     fn repo_list_parses_slugs_and_skips_garbage() {
@@ -459,5 +576,44 @@ mod tests {
     fn repo_list_refuses_non_arrays() {
         assert!(parse_repo_list("{\"oops\": true}").is_empty());
         assert!(parse_repo_list("not json").is_empty());
+    }
+
+    #[test]
+    fn closed_item_parses_an_issue() {
+        let item = parse_closed_item(
+            ItemKind::Issue,
+            "o/r",
+            r#"{"number":4,"title":"bug","state":"CLOSED","url":"https://github.com/o/r/issues/4","author":{"login":"me"},"labels":[{"name":"bug"}],"assignees":[]}"#,
+        )
+        .expect("an issue parses");
+        assert_eq!(item.number, 4);
+        assert_eq!(item.state, "CLOSED");
+        assert_eq!(item.kind, ItemKind::Issue);
+        assert_eq!(item.author.map(|a| a.login), Some("me".to_string()));
+        assert_eq!(
+            item.labels
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bug"]
+        );
+    }
+
+    #[test]
+    fn closed_item_parses_a_pr() {
+        let item = parse_closed_item(
+            ItemKind::Pr,
+            "o/r",
+            r#"{"number":10,"title":"pr","state":"MERGED","url":"https://github.com/o/r/pull/10","headRefName":"fix","baseRefName":"main","reviewDecision":"APPROVED","mergeable":"MERGEABLE","isDraft":false}"#,
+        )
+        .expect("a PR parses");
+        assert_eq!(item.head_ref_name.as_deref(), Some("fix"));
+        assert_eq!(item.review_decision.as_deref(), Some("APPROVED"));
+    }
+
+    #[test]
+    fn closed_item_refuses_garbage() {
+        assert!(parse_closed_item(ItemKind::Issue, "o/r", "not json").is_err());
+        assert!(parse_closed_item(ItemKind::Pr, "o/r", "{\"nope\":1}").is_err());
     }
 }

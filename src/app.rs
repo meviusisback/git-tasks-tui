@@ -461,6 +461,11 @@ pub struct App {
     pub failed: usize,
     /// Set by the key handler, consumed by the event loop that owns the thread.
     pub refresh_requested: bool,
+    /// The tab's own item, asked straight from GitHub: when the OPEN-only
+    /// fetch never saw it (closed before startup), the detail fetches it
+    /// on demand instead of falling back to the cursor row. Set while the
+    /// ask is in flight — and after a miss, so a gone item asks once.
+    pub item_requested: Option<(String, u64)>,
     /// `R` also re-reads the repo list from GitHub, behind the open menu.
     pub repo_refresh_requested: bool,
     /// A repo refresh found new repos: the config file still needs them.
@@ -655,6 +660,7 @@ impl Default for App {
             loading: false,
             failed: 0,
             refresh_requested: false,
+            item_requested: None,
             repo_refresh_requested: false,
             repos_save_requested: false,
             binaries: None,
@@ -757,6 +763,9 @@ impl App {
         self.items = items;
         self.failed = failures.len();
         self.loading = false;
+        // A fresh fetch is a fresh chance: a tab item the last round
+        // could not load asks again instead of staying silent.
+        self.item_requested = None;
 
         // Keep the configured repos: a repo with no open items must still be
         // visible, otherwise it looks like it was never configured. Slugs

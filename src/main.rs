@@ -714,6 +714,25 @@ fn spawn_repo_list(
     rx
 }
 
+/// A closed item asked for its tab: repo, number and what GitHub said.
+type ItemFetch = (String, u64, Result<gtasks::model::Item, String>);
+
+/// One closed item in the background, for a tab the OPEN-only fetch
+/// never saw.
+fn spawn_item(
+    binaries: Binaries,
+    repo: String,
+    number: u64,
+    timeout: Duration,
+) -> Receiver<ItemFetch> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = fetch::fetch_closed_item(&binaries, &repo, number, timeout);
+        let _ = tx.send((repo, number, result));
+    });
+    rx
+}
+
 /// Start one body fetch in the background.
 fn spawn_detail(
     binaries: Binaries,
@@ -891,6 +910,7 @@ fn run_tui() -> anyhow::Result<()> {
         app.state_filter != StateFilter::Open,
     ));
     let mut repo_pending: Option<Receiver<Result<Vec<RepoSlug>, String>>> = None;
+    let mut item_pending: Option<Receiver<ItemFetch>> = None;
     // Last completed-or-started refresh: the auto-refresh door below measures
     // `refresh_s` from here, so the first automatic re-read lands one full
     // interval after startup, never on top of the initial fetch.
@@ -1318,6 +1338,55 @@ fn run_tui() -> anyhow::Result<()> {
                 Err(TryRecvError::Disconnected) => {
                     repo_pending = None;
                     app.status = "repo list not updated: the reader died".to_string();
+                    needs_draw = true;
+                }
+            }
+        }
+
+        // A tab the OPEN-only fetch never saw (closed before startup):
+        // ask GitHub for the item itself, once, so the detail shows the
+        // tab instead of falling back to the cursor row.
+        let want_item = app
+            .active_tab
+            .and_then(|idx| app.tabs.get(idx))
+            .map(|tab| (tab.repo.clone(), tab.number));
+        let have_item = want_item.as_ref().is_some_and(|(repo, number)| {
+            app.items
+                .iter()
+                .any(|i| &i.repo == repo && i.number == *number)
+                || app
+                    .retained
+                    .iter()
+                    .any(|i| &i.repo == repo && i.number == *number)
+        });
+        if let Some((repo, number)) = want_item {
+            if !have_item
+                && item_pending.is_none()
+                && app.item_requested != Some((repo.clone(), number))
+            {
+                app.item_requested = Some((repo.clone(), number));
+                item_pending = Some(spawn_item(binaries.clone(), repo, number, timeout));
+            }
+        }
+        if let Some(rx) = item_pending.as_ref() {
+            match rx.try_recv() {
+                Ok((repo, number, Ok(item))) => {
+                    item_pending = None;
+                    app.item_requested = None;
+                    app.retained
+                        .retain(|i| !(i.repo == repo && i.number == number));
+                    app.retained.push(item);
+                    needs_draw = true;
+                }
+                Ok((repo, number, Err(_))) => {
+                    item_pending = None;
+                    app.item_requested = Some((repo.clone(), number));
+                    app.status = format!("could not load {repo}#{number} — gone from GitHub?");
+                    needs_draw = true;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    item_pending = None;
                     needs_draw = true;
                 }
             }
