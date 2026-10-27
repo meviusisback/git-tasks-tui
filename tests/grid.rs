@@ -155,14 +155,14 @@ fn clicking_a_list_row_selects_it() {
         "past the last row selects nothing"
     );
     let mut app = two_item_app();
-    app.click_list_row(1);
+    app.click_list_row(1, std::time::Instant::now());
     assert_eq!(app.list_cursor, 1);
     assert_eq!(
         app.effective_item().map(|i| i.number),
         Some(2),
         "no tabs: the detail follows the clicked row"
     );
-    app.click_list_row(9); // overflow: ignored, cursor stays
+    app.click_list_row(9, std::time::Instant::now()); // overflow: ignored, cursor stays
     assert_eq!(app.list_cursor, 1);
 }
 
@@ -177,7 +177,7 @@ fn clicking_a_repos_row_moves_the_filter() {
         "border selects nothing"
     );
     let mut app = two_item_app();
-    app.click_repos_row(2); // me/b
+    app.click_repos_row(2, std::time::Instant::now()); // me/b
     assert_eq!(
         app.visible_items()
             .iter()
@@ -186,4 +186,43 @@ fn clicking_a_repos_row_moves_the_filter() {
         vec![2],
         "the list follows the clicked repo"
     );
+}
+
+#[test]
+fn double_click_on_a_row_opens_its_tab() {
+    use gtasks::app::Pane;
+    let mut app = two_item_app();
+    app.pane = Pane::List;
+    let first = std::time::Instant::now();
+    app.click_list_row(0, first);
+    assert!(app.tabs.is_empty(), "one click only selects");
+    app.click_list_row(0, first);
+    assert_eq!(app.tabs.len(), 1, "two clicks open the tab");
+    assert_eq!(app.pane, Pane::Detail, "the tab takes the focus right");
+}
+
+#[test]
+fn two_slow_clicks_do_not_open_a_tab() {
+    use gtasks::app::Pane;
+    let mut app = two_item_app();
+    app.pane = Pane::List;
+    let first = std::time::Instant::now();
+    app.click_list_row(0, first);
+    app.click_list_row(0, first + std::time::Duration::from_secs(5));
+    assert!(
+        app.tabs.is_empty(),
+        "clicks past the window are two single clicks"
+    );
+}
+
+#[test]
+fn double_click_in_repos_drills_in() {
+    use gtasks::app::Pane;
+    let mut app = two_item_app();
+    app.pane = Pane::Repos;
+    let at = std::time::Instant::now();
+    app.click_repos_row(1, at);
+    assert_eq!(app.pane, Pane::Repos, "one click only moves the filter");
+    app.click_repos_row(1, at);
+    assert_eq!(app.pane, Pane::List, "two clicks drill into the repo");
 }

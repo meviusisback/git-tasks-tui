@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
+use std::time::Instant;
 
 use clap::Parser;
 use gtasks::actions;
@@ -1740,13 +1741,13 @@ fn run_tui() -> anyhow::Result<()> {
                                             me.row,
                                             app.visible_items().len(),
                                         ) {
-                                            app.click_list_row(idx);
+                                            app.click_list_row(idx, Instant::now());
                                         }
                                     } else if pane == gtasks::app::Pane::Repos {
                                         if let Some(idx) =
                                             ui::repos_row_at(g.repos, me.row, app.repos.len())
                                         {
-                                            app.click_repos_row(idx);
+                                            app.click_repos_row(idx, Instant::now());
                                         }
                                     }
                                 }

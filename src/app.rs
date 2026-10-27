@@ -16,6 +16,10 @@ use crate::sanitize::sanitize;
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+/// Two clicks on the same row within this window open the row, like Enter.
+pub const DOUBLE_CLICK_MS: u64 = 500;
 
 /// Which pane has focus. Left column holds `Repos` (top) and `List`
 /// (bottom); right column holds `Detail` (top) and `Agent` (bottom).
@@ -470,6 +474,9 @@ pub struct App {
     pub repo_refresh_requested: bool,
     /// A repo refresh found new repos: the config file still needs them.
     pub repos_save_requested: bool,
+    /// Last mouse click, for double-click-to-open: pane, row and time.
+    /// Not session state — the window is half a second.
+    pub last_click: Option<(Pane, usize, Instant)>,
     /// Resolved once at startup; `None` in tests that do not execute.
     pub binaries: Option<Binaries>,
     /// Limit for a write started from the UI.
@@ -663,6 +670,7 @@ impl Default for App {
             item_requested: None,
             repo_refresh_requested: false,
             repos_save_requested: false,
+            last_click: None,
             binaries: None,
             write_timeout: std::time::Duration::from_secs(30),
             pending: None,
@@ -1191,8 +1199,12 @@ impl App {
 
     /// Click a list row: the cursor jumps there. Same side effects as the
     /// keyboard move (finished card dismissed, body preloaded), so mouse
-    /// and keys never disagree about what the row means.
-    pub fn click_list_row(&mut self, idx: usize) {
+    /// and keys never disagree about what the row means. A second click
+    /// on the same row within the double-click window opens its tab,
+    /// exactly like Enter.
+    pub fn click_list_row(&mut self, idx: usize, now: Instant) {
+        let double = matches!(self.last_click, Some((Pane::List, row, at)) if row == idx && now.duration_since(at) < Duration::from_millis(DOUBLE_CLICK_MS));
+        self.last_click = Some((Pane::List, idx, now));
         if idx >= self.visible_items().len() {
             return;
         }
@@ -1200,16 +1212,25 @@ impl App {
         self.dismiss_finished_card();
         self.preload_detail();
         self.session_dirty = true;
+        if double {
+            self.on_key(Key::Enter);
+        }
     }
 
     /// Click a repos row: same as moving there — the filter follows it.
-    pub fn click_repos_row(&mut self, idx: usize) {
+    /// A second click within the double-click window drills in, like Enter.
+    pub fn click_repos_row(&mut self, idx: usize, now: Instant) {
+        let double = matches!(self.last_click, Some((Pane::Repos, row, at)) if row == idx && now.duration_since(at) < Duration::from_millis(DOUBLE_CLICK_MS));
+        self.last_click = Some((Pane::Repos, idx, now));
         if idx >= self.repos.len() {
             return;
         }
         self.repos_cursor = idx;
         self.apply_repo_filter();
         self.session_dirty = true;
+        if double {
+            self.on_key(Key::Enter);
+        }
     }
 
     /// The item under the cursor, if any.
