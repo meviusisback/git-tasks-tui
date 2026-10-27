@@ -282,10 +282,16 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
         // bordered strip would eat the detail it labels.
         frame.render_widget(tabs_bar(app, view), g.tabs);
         frame.render_widget(detail(app, view, g.detail.width), g.detail);
+        if let Some(area) = worktrees_box_rect(g.detail, view) {
+            frame.render_widget(worktrees_box(view), area);
+        }
         frame.render_widget(agent_panel(app, view, g.agent.width), g.agent);
     } else {
         frame.render_widget(tabs_bar(app, view), g.tabs);
         frame.render_widget(detail(app, view, g.detail_full.width), g.detail_full);
+        if let Some(area) = worktrees_box_rect(g.detail_full, view) {
+            frame.render_widget(worktrees_box(view), area);
+        }
     }
 
     // Two panels, so the status cannot be pushed off the right edge by the
@@ -743,6 +749,73 @@ fn field_style(tone: Option<crate::model::FieldTone>) -> Style {
 /// description can never glue itself to the fields. The agent record card
 /// keeps the old whole-pane path — it replaces the detail, it is not a row
 /// of it.
+/// The open trees behind the shown issue/PR float in their own box,
+/// top-right inside the detail. `worktrees_box_rect` says where, `draw`
+/// renders it after the detail so it sits on top; the mouse still maps
+/// the whole area to the detail. `None` when there is nothing to show
+/// or the detail is too narrow to host it.
+pub fn worktrees_box_rect(detail_area: Rect, view: &ViewModel) -> Option<Rect> {
+    if view.trees.is_empty() || detail_area.width < 30 || detail_area.height < 5 {
+        return None;
+    }
+    let mut inner: usize = "worktrees".len();
+    for tree in &view.trees {
+        let head = tree_head_text(tree);
+        inner = inner.max(head.len());
+        inner = inner.max(tree.path.display().to_string().len() + 2);
+    }
+    let width = (inner + 4).min(detail_area.width as usize) as u16;
+    let height = (view.trees.len() as u16) * 2 + 2;
+    if height + 1 >= detail_area.height {
+        return None;
+    }
+    Some(Rect::new(
+        detail_area.x + detail_area.width.saturating_sub(width),
+        detail_area.y,
+        width,
+        height,
+    ))
+}
+
+/// One head line per tree, without the marker glyph (it leads the box
+/// rows at render time): `branch · agent · running`.
+fn tree_head_text(tree: &crate::app::ItemTree) -> String {
+    let mut head = tree.branch.clone();
+    match &tree.agent {
+        Some(agent) => head.push_str(&format!(" · {agent}")),
+        None => head.push_str(" · no agent yet"),
+    }
+    if tree.live {
+        head.push_str(" · running");
+    }
+    head
+}
+
+fn worktrees_box(view: &ViewModel) -> Paragraph<'static> {
+    let mut lines = Vec::new();
+    for tree in &view.trees {
+        lines.push(Line::from(vec![
+            Span::styled(worktree_marker_text(), theme::worktree_marker()),
+            Span::styled(
+                tree_head_text(tree),
+                Style::default()
+                    .fg(theme::FOCUSED)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", tree.path.display()),
+            Style::default().fg(theme::SUBTEXT),
+        )));
+    }
+    Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" worktrees ")
+            .border_style(theme::border()),
+    )
+}
+
 fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
     let focused = app.pane == Pane::Detail;
     let block = Block::default()
@@ -855,47 +928,6 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         ]));
     }
     lines.push(Line::from(""));
-    if !view.trees.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "WORKTREES",
-            Style::default()
-                .fg(theme::FOCUSED)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for tree in &view.trees {
-            let mut head = vec![
-                Span::styled(worktree_marker_text(), theme::worktree_marker()),
-                Span::styled(
-                    tree.branch.clone(),
-                    Style::default()
-                        .fg(theme::FOCUSED)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ];
-            match &tree.agent {
-                Some(agent) => head.push(Span::styled(
-                    format!(" · {agent}"),
-                    theme::overlay_text().add_modifier(Modifier::BOLD),
-                )),
-                None => head.push(Span::styled(
-                    " · no agent yet",
-                    Style::default().fg(theme::SUBTEXT),
-                )),
-            }
-            if tree.live {
-                head.push(Span::styled(
-                    " · running",
-                    Style::default().fg(theme::OK).add_modifier(Modifier::BOLD),
-                ));
-            }
-            lines.push(Line::from(head));
-            lines.push(Line::from(Span::styled(
-                format!("  {}", tree.path.display()),
-                Style::default().fg(theme::SUBTEXT),
-            )));
-        }
-        lines.push(Line::from(""));
-    }
     lines.push(Line::from(Span::styled(
         "DESCRIPTION",
         Style::default()

@@ -500,7 +500,7 @@ fn the_detail_names_the_open_trees_and_who_ran_there() {
         screen
     };
     let screen = render(&app, &view);
-    assert!(screen.contains("WORKTREES"), "the section shows: {screen}");
+    assert!(screen.contains("worktrees"), "the box shows: {screen}");
     assert!(screen.contains("fix-foo"), "the branch shows: {screen}");
     assert!(screen.contains("hermes"), "who ran shows: {screen}");
 
@@ -786,6 +786,50 @@ fn render_200x30(app: &App) -> String {
         out.push('\n');
     }
     out
+}
+
+#[test]
+fn the_worktrees_box_floats_top_right_of_the_detail() {
+    use gtasks::agent::{AgentChoice, AgentId, AgentPlan};
+    use gtasks::ui::{view_for, worktrees_box_rect};
+    use ratatui::layout::Rect;
+    let (mut app, tmp) = pr_app();
+    let path = plant_worktree(&tmp.path().join("wt"), "fix-foo");
+    app.remember_worktree_agent(
+        &AgentPlan {
+            repo: "o/r".to_string(),
+            number: 7,
+            url: "https://github.com/o/r/pull/7".to_string(),
+            branch: "fix-foo".to_string(),
+            profile: "default".to_string(),
+            agent: AgentChoice {
+                id: AgentId::Hermes,
+                program: PathBuf::from("/bin/hermes"),
+            },
+            clone: tmp.path().join("r"),
+        },
+        &path,
+    );
+    let view = view_for(&app);
+    assert!(!view.trees.is_empty());
+    let detail_area = Rect::new(80, 5, 118, 20);
+    let area = worktrees_box_rect(detail_area, &view).expect("a box is shown");
+    assert_eq!(area.y, detail_area.y, "top edge");
+    assert_eq!(
+        area.x + area.width,
+        detail_area.x + detail_area.width,
+        "right edge"
+    );
+    assert_eq!(
+        area.height,
+        view.trees.len() as u16 * 2 + 2,
+        "one head row plus the path per tree, inside borders"
+    );
+    // Nothing behind the issue: no box, the detail keeps every row.
+    let (plain, _tmp) = pr_app();
+    let plain_view = view_for(&plain);
+    assert!(plain_view.trees.is_empty());
+    assert_eq!(worktrees_box_rect(detail_area, &plain_view), None);
 }
 
 #[test]
