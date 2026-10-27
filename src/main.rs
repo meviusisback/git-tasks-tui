@@ -1422,6 +1422,9 @@ fn run_tui() -> anyhow::Result<()> {
                         gtasks::app::CloneThen::AgentMenu => {
                             app.request_agent();
                         }
+                        gtasks::app::CloneThen::RepoSessions => {
+                            app.open_repo_sessions_for(&repo);
+                        }
                     }
                 }
                 Ok((repo, Err(err), _)) => {

@@ -332,7 +332,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
         draw_settings(frame, frame.area(), menu, app);
     }
     if let Some(crate::app::Modal::Worktrees(menu)) = &app.modal {
-        draw_worktrees_menu(frame, frame.area(), menu);
+        draw_worktrees_menu(frame, frame.area(), menu, app);
     }
     if let Some(crate::app::Modal::NameInput(input)) = &app.modal {
         draw_name_input(frame, frame.area(), input);
@@ -1252,7 +1252,12 @@ fn draw_agent_menu(
 /// The worktree picker: one row per existing tree (branch — path, the
 /// current item's branch marked), chosen with `Enter`, managed with
 /// `n`/`r`/`d`.
-fn draw_worktrees_menu(frame: &mut Frame, area: Rect, menu: &crate::app::WorktreeMenu) {
+fn draw_worktrees_menu(
+    frame: &mut Frame,
+    area: Rect,
+    menu: &crate::app::WorktreeMenu,
+    app: &crate::app::App,
+) {
     let area = centered_rect(70, 80, area);
     frame.render_widget(Clear, area);
     let items: Vec<ListItem> = menu
@@ -1261,13 +1266,29 @@ fn draw_worktrees_menu(frame: &mut Frame, area: Rect, menu: &crate::app::Worktre
         .enumerate()
         .map(|(i, row)| {
             let mark = if i == menu.cursor { "▸" } else { " " };
-            let current = if row.branch.as_str() == menu.plan.branch {
+            // Repo-level plans (number 0) own no PR: no row may claim it.
+            let current = if menu.plan.number != 0 && row.branch.as_str() == menu.plan.branch {
                 " · this PR"
             } else {
                 ""
             };
+            // Who ran here and whether it still runs: the sessions menu
+            // reads like a roster, not a directory listing.
+            let agent = match app.last_agents.get(&row.path.display().to_string()) {
+                Some(last) => format!(" · {}", last.agent),
+                None => " · no agent yet".to_string(),
+            };
+            let live = if app.tree_live(&row.path) {
+                " · running"
+            } else {
+                ""
+            };
+            let issue = match app.issue_ref_for_branch(row.branch.as_str()) {
+                Some(number) => format!(" · #{number}"),
+                None => String::new(),
+            };
             ListItem::new(sanitize(&format!(
-                "{mark} {} — {}{current}",
+                "{mark} {} — {}{current}{agent}{live}{issue}",
                 row.branch,
                 row.path.display()
             )))

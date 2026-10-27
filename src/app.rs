@@ -298,6 +298,7 @@ pub struct WorktreeMenu {
 pub enum CloneThen {
     GrowTree,
     AgentMenu,
+    RepoSessions,
 }
 
 /// What the name being typed is for: a fresh worktree (agent + plan wait
@@ -2454,6 +2455,90 @@ impl App {
         }
     }
 
+    /// `g` in the repos pane: every agent and past session on the repo
+    /// under the cursor, open or closed — one contextual menu to reopen
+    /// them. Rows come from disk, so closed issues/PRs show up exactly
+    /// like open ones; `Enter` reopens (the recorded session first, with
+    /// nothing sent) or picks an agent for a fresh run.
+    pub fn open_repo_sessions_for(&mut self, repo: &str) {
+        let slug = match RepoSlug::parse(repo) {
+            Ok(slug) => slug,
+            Err(_) => {
+                self.status = format!("cannot list sessions: invalid repo {repo}");
+                return;
+            }
+        };
+        let repo = slug.as_str();
+        let clone = match crate::agent::find_clone(&self.clone_roots, repo) {
+            Ok(clone) => clone,
+            Err(_) => {
+                self.offer_clone(repo, CloneThen::RepoSessions);
+                return;
+            }
+        };
+        let name = repo.split('/').next_back().unwrap_or(repo);
+        // A repo-level tree works on no PR: number 0 with the repo URL, so
+        // the seed names the repo instead of inventing a PR number — the
+        // same shape `W` grows. Empty branch: no row may claim "this PR".
+        let plan = AgentPlan {
+            repo: repo.to_string(),
+            number: 0,
+            url: format!("https://github.com/{repo}"),
+            branch: String::new(),
+            profile: self.agent_profile.clone(),
+            agent: self.default_hermes(),
+            clone,
+        };
+        let rows = self.repo_worktrees(&plan);
+        if rows.is_empty() {
+            // Nothing to reopen: fall through to naming a fresh tree, the
+            // same suggestion `W` grows.
+            let mut plan = plan;
+            plan.branch = format!("{name}-dev");
+            self.modal = Some(Modal::NameInput(NameInput {
+                value: plan.branch.clone(),
+                purpose: NamePurpose::Create { agent: None, plan },
+            }));
+            return;
+        }
+        self.modal = Some(Modal::Worktrees(WorktreeMenu {
+            agent: None,
+            plan,
+            rows,
+            cursor: 0,
+        }));
+    }
+
+    /// True while any tab's agent runs in `path`: the sessions menu marks
+    /// the live tree, so reopening does not double a running agent.
+    pub fn tree_live(&self, path: &std::path::Path) -> bool {
+        self.tab_agents.values().any(|agent| {
+            agent.running
+                && agent
+                    .record
+                    .as_ref()
+                    .is_some_and(|record| record.worktree == path)
+        })
+    }
+
+    /// The issue/PR a worktree branch belongs to, if the app knows it: an
+    /// open item by head branch, a retained (closed, tabbed) one the same
+    /// way, or the number straight from an `issue-N` branch. Closed work
+    /// with no tab stays anonymous — the fetch never saw it.
+    pub fn issue_ref_for_branch(&self, branch: &str) -> Option<u64> {
+        if let Some(number) = branch
+            .strip_prefix("issue-")
+            .and_then(|rest| rest.parse::<u64>().ok())
+        {
+            return Some(number);
+        }
+        self.items
+            .iter()
+            .chain(self.retained.iter())
+            .find(|i| i.head_ref_name.as_deref() == Some(branch))
+            .map(|i| i.number)
+    }
+
     /// An agent row was confirmed: with existing worktrees the user picks
     /// one (or manages them); without, they name the new one directly.
     fn pick_agent(&mut self, agent: AgentChoice, plan: AgentPlan) {
@@ -3085,8 +3170,19 @@ impl App {
             // branch deletion are a choice instead of a constant.
             Key::Char('m') => self.open_action_menu(),
             // `g` hands the selected PR to an agent (the loop owns the
-            // terminal, so this only validates and asks).
-            Key::Char('g') => self.request_agent(),
+            // terminal, so this only validates and asks). From the repos
+            // pane it lists the repo's sessions instead: every agent and
+            // past run on its worktrees, open or closed.
+            Key::Char('g') => {
+                if self.pane == Pane::Repos {
+                    match self.repos.get(self.repos_cursor).cloned() {
+                        Some(RepoRow::Repo(slug)) => self.open_repo_sessions_for(slug.as_str()),
+                        _ => self.status = "pick one repo first — All is not a session".to_string(),
+                    }
+                } else {
+                    self.request_agent()
+                }
+            }
             // `W` manages worktrees without launching anything: list, use,
             // rename, delete — the agent menu only appears when a tree is
             // picked for work.
