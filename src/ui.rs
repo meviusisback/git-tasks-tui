@@ -762,12 +762,13 @@ fn field_style(tone: Option<crate::model::FieldTone>) -> Style {
 /// keeps the old whole-pane path — it replaces the detail, it is not a row
 /// of it.
 /// The open trees behind the shown issue/PR float in their own box,
-/// top-right inside the detail. `worktrees_box_rect` says where, `draw`
+/// top-right inside the detail — one row and one column off the borders,
+/// a box inside the box. `worktrees_box_rect` says where, `draw`
 /// renders it after the detail so it sits on top; the mouse still maps
 /// the whole area to the detail. `None` when there is nothing to show
 /// or the detail is too narrow to host it.
 pub fn worktrees_box_rect(detail_area: Rect, view: &ViewModel) -> Option<Rect> {
-    if view.trees.is_empty() || detail_area.width < 30 || detail_area.height < 5 {
+    if view.trees.is_empty() || detail_area.width < 32 || detail_area.height < 6 {
         return None;
     }
     let mut inner: usize = "worktrees".len();
@@ -782,8 +783,8 @@ pub fn worktrees_box_rect(detail_area: Rect, view: &ViewModel) -> Option<Rect> {
         return None;
     }
     Some(Rect::new(
-        detail_area.x + detail_area.width.saturating_sub(width),
-        detail_area.y,
+        detail_area.x + detail_area.width.saturating_sub(width + 1),
+        detail_area.y + 1,
         width,
         height,
     ))

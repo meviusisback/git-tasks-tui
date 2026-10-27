@@ -814,11 +814,11 @@ fn the_worktrees_box_floats_top_right_of_the_detail() {
     assert!(!view.trees.is_empty());
     let detail_area = Rect::new(80, 5, 118, 20);
     let area = worktrees_box_rect(detail_area, &view).expect("a box is shown");
-    assert_eq!(area.y, detail_area.y, "top edge");
+    assert_eq!(area.y, detail_area.y + 1, "one row off the top border");
     assert_eq!(
         area.x + area.width,
-        detail_area.x + detail_area.width,
-        "right edge"
+        detail_area.x + detail_area.width - 1,
+        "one column off the right border"
     );
     assert_eq!(
         area.height,
