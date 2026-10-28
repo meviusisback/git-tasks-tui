@@ -410,6 +410,66 @@ pub fn remove_tree(
     Ok(())
 }
 
+/// Create a repo on GitHub and clone it: the `N` panel asks, the loop
+/// runs this in a thread. `gh repo create <name>` makes owner/name, so
+/// the owner is read first; the README commit keeps the clone pushable
+/// from the first tree. Returns the slug and the clone path.
+pub fn create_project(
+    binaries: &crate::binaries::Binaries,
+    root: &Path,
+    name: &str,
+    private: bool,
+    timeout: std::time::Duration,
+) -> Result<(String, std::path::PathBuf), String> {
+    use crate::gh::{self, CheckedArgv};
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+    // Owner first: `gh repo create <name>` makes owner/name.
+    let argv = gh::gh(
+        binaries,
+        &cwd,
+        vec!["api".into(), "user".into(), "--jq".into(), ".login".into()],
+    );
+    let who = crate::gh::run_checked(&CheckedArgv::from_checked(argv), timeout)
+        .map_err(|err| format!("cannot ask GitHub who you are: {err:#}"))?;
+    if !who.status.success() {
+        return Err(format!(
+            "cannot ask GitHub who you are: {}",
+            String::from_utf8_lossy(&who.stderr).trim()
+        ));
+    }
+    let owner = String::from_utf8_lossy(&who.stdout).trim().to_string();
+    if owner.is_empty() {
+        return Err("GitHub did not say who you are".to_string());
+    }
+    let slug = format!("{owner}/{name}");
+    let visibility = if private { "--private" } else { "--public" };
+    let argv = gh::gh(
+        binaries,
+        &cwd,
+        vec![
+            "repo".into(),
+            "create".into(),
+            name.to_string().into(),
+            visibility.into(),
+            "--add-readme".into(),
+        ],
+    );
+    let out =
+        run_mutation(&argv, timeout).map_err(|err| format!("cannot create {slug}: {err:#}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "cannot create {slug}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    // Clone through the app's own path, so the tree grows where `W` looks.
+    let dest = root.join(name);
+    let parsed = crate::actions::RepoSlug::parse(&slug)
+        .map_err(|err| format!("cannot use {slug}: {err:#}"))?;
+    clone_repo(binaries, &dest, &parsed).map_err(|err| format!("cannot clone {slug}: {err:#}"))?;
+    Ok((slug, dest))
+}
+
 /// Clone `repo` into `path` (`gh repo clone owner/name path`): the typed
 /// path, like every other mutation. The caller confirmed first — a clone
 /// fetches code and can take minutes, so the loop runs this in a thread and

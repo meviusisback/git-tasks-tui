@@ -219,6 +219,9 @@ pub enum Modal {
     /// Prepopulated with the suggestion (head branch, or the old name), so
     /// confirming untouched keeps the obvious choice.
     NameInput(NameInput),
+    /// `N`: a new GitHub project — name, visibility, first branch — in
+    /// one panel, created and cloned by the loop on confirm.
+    NewProject(NewProject),
     /// A startup notice (broken config): information, not a question. `Esc`
     /// dismisses it, `q` quits through it; nothing else acts while it is up.
     Notice(String),
@@ -366,6 +369,26 @@ pub struct NameInput {
     pub value: String,
 }
 
+/// Which field of the new-project panel is being typed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewProjectField {
+    Name,
+    Visibility,
+    Branch,
+}
+
+/// `N` in the repos pane: a new GitHub project in one panel — name,
+/// visibility and first branch. Confirming hands it to the loop, which
+/// creates it on GitHub, clones it, grows the branch's tree and opens
+/// the agent menu for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProject {
+    pub name: String,
+    pub private: bool,
+    pub branch: String,
+    pub field: NewProjectField,
+}
+
 /// One row of the actions menu: the fully specified choice. No strings cross
 /// this boundary — a row IS the typed parameters the action runs with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,6 +497,9 @@ pub struct App {
     pub repo_refresh_requested: bool,
     /// A repo refresh found new repos: the config file still needs them.
     pub repos_save_requested: bool,
+    /// `N` confirmed: create on GitHub, clone, grow the branch's tree.
+    /// The loop owns the thread; the panel only asks.
+    pub create_requested: Option<NewProject>,
     /// Last mouse click, for double-click-to-open: pane, row and time.
     /// Not session state — the window is half a second.
     pub last_click: Option<(Pane, usize, Instant)>,
@@ -670,6 +696,7 @@ impl Default for App {
             item_requested: None,
             repo_refresh_requested: false,
             repos_save_requested: false,
+            create_requested: None,
             last_click: None,
             binaries: None,
             write_timeout: std::time::Duration::from_secs(30),
@@ -943,6 +970,11 @@ impl App {
             Some(Modal::NameInput(_)) => {
                 return String::from("type the name · Enter confirm · Esc cancel");
             }
+            Some(Modal::NewProject(_)) => {
+                return String::from(
+                    "type · Tab move · Space visibility · Enter create · Esc cancel",
+                );
+            }
             Some(Modal::Diff) => {
                 return String::from("↑/↓ scroll · Enter/Esc close · q quit");
             }
@@ -985,7 +1017,7 @@ impl App {
             }
         } else if self.pane == Pane::Repos {
             String::from(
-                "q quit · ? help · ↑/↓ move · Enter drill in · R repos · t/T · W worktree · x close",
+                "q quit · ? help · ↑/↓ move · Enter drill in · R repos · N new project · t/T · W worktree · x close",
             )
         } else if self.repo_filter == RepoFilter::All {
             String::from(
@@ -1044,6 +1076,94 @@ impl App {
     /// list (everything, when the state file never picked a subset) — and a
     /// `gh repo list` runs behind it, so repos created outside the app join
     /// the rows instead of needing a restart.
+    /// `N`: a new GitHub project in one panel — name, visibility and
+    /// first branch. Private by default; confirming validates and hands
+    /// the work to the loop.
+    pub fn open_new_project(&mut self) {
+        self.modal = Some(Modal::NewProject(NewProject {
+            name: String::new(),
+            private: true,
+            branch: String::new(),
+            field: NewProjectField::Name,
+        }));
+    }
+
+    fn step_new_project(&mut self, delta: i32) {
+        if let Some(Modal::NewProject(input)) = self.modal.as_mut() {
+            let order = [
+                NewProjectField::Name,
+                NewProjectField::Visibility,
+                NewProjectField::Branch,
+            ];
+            let pos = order.iter().position(|f| f == &input.field).unwrap_or(0) as i32;
+            let next = (pos + delta).rem_euclid(order.len() as i32) as usize;
+            input.field = order[next];
+        }
+    }
+
+    /// A GitHub repo name: letters, digits, dots, dashes, underscores.
+    /// Spaces never survive — the create call would split them.
+    fn valid_project_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 100
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+    }
+
+    fn confirm_new_project(&mut self) {
+        let Some(Modal::NewProject(input)) = self.modal.take() else {
+            return;
+        };
+        let name = input.name.trim().to_string();
+        if !Self::valid_project_name(&name) {
+            self.status =
+                "a repo name needs letters, digits, dots, dashes or underscores".to_string();
+            self.modal = Some(Modal::NewProject(input));
+            return;
+        }
+        // Empty branch means the obvious one: the wizard names the tree
+        // the same way `W` does, so the two flows stay interchangeable.
+        let branch = if input.branch.trim().is_empty() {
+            format!("{name}-dev")
+        } else {
+            input.branch.trim().to_string()
+        };
+        if crate::worktree::BranchName::parse(&branch).is_err() {
+            self.status = format!("cannot use {branch} as a branch name");
+            self.modal = Some(Modal::NewProject(input));
+            return;
+        }
+        self.status = format!("creating {name} on GitHub…");
+        self.create_requested = Some(NewProject {
+            name,
+            private: input.private,
+            branch,
+            field: NewProjectField::Name,
+        });
+    }
+
+    /// The wizard's branch, straight to the agent menu: the loop calls
+    /// this after the clone lands, reusing the `W` naming path instead
+    /// of asking for the branch a second time.
+    pub fn start_wizard_tree(&mut self, repo: &str, branch: &str, path: &std::path::Path) {
+        let plan = AgentPlan {
+            repo: repo.to_string(),
+            number: 0,
+            url: format!("https://github.com/{repo}"),
+            branch: branch.to_string(),
+            profile: self.agent_profile.clone(),
+            agent: self.default_hermes(),
+            clone: path.to_path_buf(),
+        };
+        self.modal = Some(Modal::NameInput(NameInput {
+            value: branch.to_string(),
+            purpose: NamePurpose::Create { agent: None, plan },
+        }));
+        self.confirm_name_input();
+        self.pane = Pane::Detail;
+    }
+
     pub fn open_repo_menu(&mut self) {
         if self.all_repos.is_empty() {
             self.status = "no repos configured".to_string();
@@ -3069,6 +3189,60 @@ impl App {
                 }
                 return;
             }
+            if matches!(self.modal, Some(Modal::NewProject(_))) {
+                match key {
+                    Key::Esc => self.modal = None,
+                    Key::Up | Key::BackTab => self.step_new_project(-1),
+                    Key::Down | Key::Tab => self.step_new_project(1),
+                    Key::Enter => self.confirm_new_project(),
+                    Key::Backspace => {
+                        if let Some(Modal::NewProject(mut input)) = self.modal.take() {
+                            match input.field {
+                                NewProjectField::Name => {
+                                    input.name.pop();
+                                }
+                                NewProjectField::Branch => {
+                                    input.branch.pop();
+                                }
+                                NewProjectField::Visibility => {}
+                            }
+                            self.modal = Some(Modal::NewProject(input));
+                        }
+                    }
+                    Key::Char(' ') => {
+                        if let Some(Modal::NewProject(mut input)) = self.modal.take() {
+                            match input.field {
+                                NewProjectField::Visibility => {
+                                    input.private = !input.private;
+                                }
+                                NewProjectField::Name => input.name.push(' '),
+                                NewProjectField::Branch => input.branch.push(' '),
+                            }
+                            self.modal = Some(Modal::NewProject(input));
+                        }
+                    }
+                    Key::Left | Key::Right => {
+                        if let Some(Modal::NewProject(mut input)) = self.modal.take() {
+                            if input.field == NewProjectField::Visibility {
+                                input.private = !input.private;
+                            }
+                            self.modal = Some(Modal::NewProject(input));
+                        }
+                    }
+                    Key::Char(c) => {
+                        if let Some(Modal::NewProject(mut input)) = self.modal.take() {
+                            match input.field {
+                                NewProjectField::Name => input.name.push(c),
+                                NewProjectField::Branch => input.branch.push(c),
+                                NewProjectField::Visibility => {}
+                            }
+                            self.modal = Some(Modal::NewProject(input));
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
             if matches!(self.modal, Some(Modal::Notice(_))) {
                 // Information, not a question: `Esc` puts it away, `q` quits
                 // through it, everything else waits its turn. Quitting must
@@ -3331,6 +3505,9 @@ impl App {
             Key::Char('/') => self.searching = true,
             // `R` picks which repos the list shows (multi-select menu).
             Key::Char('R') => self.open_repo_menu(),
+            // `N` starts a new GitHub project: name, visibility and
+            // first branch in one panel.
+            Key::Char('N') => self.open_new_project(),
             // `o` opens the selected item in the browser, if the URL is safe.
             Key::Char('o') => self.request_open(),
             // One refresh at a time: a second `r` while loading is ignored.

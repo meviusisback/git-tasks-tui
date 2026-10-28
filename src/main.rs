@@ -715,7 +715,7 @@ fn spawn_repo_list(
     rx
 }
 
-/// A closed item asked for its tab: repo, number and what GitHub said.
+/// One closed item asked for its tab: repo, number and what GitHub said.
 type ItemFetch = (String, u64, Result<gtasks::model::Item, String>);
 
 /// One closed item in the background, for a tab the OPEN-only fetch
@@ -732,6 +732,38 @@ fn spawn_item(
         let _ = tx.send((repo, number, result));
     });
     rx
+}
+
+/// What a finished project create returns: the ask, and the new slug
+/// with its clone path — or why GitHub refused.
+type ProjectResult = (
+    gtasks::app::NewProject,
+    Result<(String, std::path::PathBuf), String>,
+);
+
+/// `N` confirmed: create on GitHub, then clone — both network, both in
+/// a thread, so the panel stays alive meanwhile.
+fn spawn_project(
+    binaries: Binaries,
+    root: std::path::PathBuf,
+    req: gtasks::app::NewProject,
+    timeout: Duration,
+) -> Receiver<ProjectResult> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = create_project(&binaries, &root, &req, timeout);
+        let _ = tx.send((req, result));
+    });
+    rx
+}
+
+fn create_project(
+    binaries: &Binaries,
+    root: &std::path::Path,
+    req: &gtasks::app::NewProject,
+    timeout: Duration,
+) -> Result<(String, std::path::PathBuf), String> {
+    gtasks::worktree::create_project(binaries, root, &req.name, req.private, timeout)
 }
 
 /// Start one body fetch in the background.
@@ -912,6 +944,7 @@ fn run_tui() -> anyhow::Result<()> {
     ));
     let mut repo_pending: Option<Receiver<Result<Vec<RepoSlug>, String>>> = None;
     let mut item_pending: Option<Receiver<ItemFetch>> = None;
+    let mut pending_project: Option<Receiver<ProjectResult>> = None;
     // Last completed-or-started refresh: the auto-refresh door below measures
     // `refresh_s` from here, so the first automatic re-read lands one full
     // interval after startup, never on top of the initial fetch.
@@ -1518,6 +1551,57 @@ fn run_tui() -> anyhow::Result<()> {
             }
         }
 
+        // A project create runs in a thread — GitHub plus a clone take a
+        // while, and the UI must stay alive meanwhile. When it lands, the
+        // repo joins the list, the wizard's branch grows its tree, and the
+        // agent menu opens for it.
+        if let Some(req) = app.create_requested.take() {
+            if app.clone_roots.is_empty() {
+                app.status =
+                    "no local clone and no clone_roots configured — set one first".to_string();
+            } else {
+                pending_project = Some(spawn_project(
+                    binaries.clone(),
+                    app.clone_roots[0].clone(),
+                    req,
+                    timeout,
+                ));
+            }
+            needs_draw = true;
+        }
+        if let Some(rx) = pending_project.as_ref() {
+            match rx.try_recv() {
+                Ok((req, Ok((slug, path)))) => {
+                    pending_project = None;
+                    needs_draw = true;
+                    match RepoSlug::parse(&slug) {
+                        Ok(parsed) => {
+                            app.merge_repo_list(vec![parsed.clone()]);
+                            app.apply_repo_selection(vec![parsed.clone()]);
+                            app.loading = true;
+                            app.refresh_requested = true;
+                            app.start_wizard_tree(parsed.as_str(), &req.branch, &path);
+                            app.status =
+                                format!("{slug} ready — pick an agent to work in {}", req.branch);
+                        }
+                        Err(_) => {
+                            app.status = format!("cannot use {slug} as a repo");
+                        }
+                    }
+                }
+                Ok((req, Err(err))) => {
+                    pending_project = None;
+                    needs_draw = true;
+                    app.status = format!("cannot create {}: {err}", req.name);
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    pending_project = None;
+                    needs_draw = true;
+                    app.status = "the create thread died — try again".to_string();
+                }
+            }
+        }
         // Every live session, every tick: background tabs keep streaming
         // while another is on screen. Only the active tab's box is sized
         // to the pty — a hidden box has no geometry to match.

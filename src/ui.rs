@@ -337,6 +337,9 @@ pub fn draw(frame: &mut Frame, app: &App, view: &ViewModel) {
     if let Some(crate::app::Modal::NameInput(input)) = &app.modal {
         draw_name_input(frame, frame.area(), input);
     }
+    if let Some(crate::app::Modal::NewProject(input)) = &app.modal {
+        draw_new_project(frame, frame.area(), input);
+    }
     if matches!(app.modal, Some(crate::app::Modal::Diff)) {
         draw_diff(frame, frame.area(), app);
     }
@@ -1484,4 +1487,72 @@ fn draw_name_input(frame: &mut Frame, area: Rect, input: &crate::app::NameInput)
     let value = Paragraph::new(ratatui::text::Line::from(sanitize(&input.value)))
         .style(theme::overlay_text());
     frame.render_widget(value, inner);
+}
+
+/// `N`: name, visibility and first branch in one panel. The active
+/// field carries the cursor; visibility toggles in place.
+fn draw_new_project(frame: &mut Frame, area: Rect, input: &crate::app::NewProject) {
+    use crate::app::NewProjectField;
+    let area = centered_rect(70, 40, area);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" new project — Enter create · Esc cancel ")
+        .border_style(theme::overlay())
+        .title_style(theme::overlay())
+        .style(theme::overlay_text());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let field_style = |active: bool| {
+        if active {
+            theme::overlay_text().add_modifier(Modifier::BOLD)
+        } else {
+            theme::overlay_text()
+        }
+    };
+    let branch_hint = if input.branch.trim().is_empty() {
+        format!(" (empty = {}-dev)", input.name.trim())
+    } else {
+        String::new()
+    };
+    let vis = if input.private {
+        "● private ○ public"
+    } else {
+        "○ private ● public"
+    };
+    let lines = vec![
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled(
+                "name: ",
+                field_style(input.field == NewProjectField::Name),
+            ),
+            ratatui::text::Span::styled(
+                sanitize(&input.name),
+                field_style(input.field == NewProjectField::Name),
+            ),
+        ]),
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled(
+                "visibility: ",
+                field_style(input.field == NewProjectField::Visibility),
+            ),
+            ratatui::text::Span::styled(
+                vis,
+                field_style(input.field == NewProjectField::Visibility),
+            ),
+        ]),
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled(
+                "branch: ",
+                field_style(input.field == NewProjectField::Branch),
+            ),
+            ratatui::text::Span::styled(
+                sanitize(&input.branch) + &branch_hint,
+                field_style(input.field == NewProjectField::Branch),
+            ),
+        ]),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from("type · Tab move · Space/←→ visibility · Enter create"),
+    ];
+    frame.render_widget(Paragraph::new(lines).style(theme::overlay_text()), inner);
 }
