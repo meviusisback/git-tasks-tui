@@ -245,6 +245,12 @@ fn omp_resume_keeps_cwd_and_continue() {
 
 fn recorded(agent: &str) -> App {
     let mut app = App::default();
+    // A hermes binary on record: the routing half must not depend on
+    // which agents the machine happens to have installed (CI has none).
+    let mut binaries =
+        gtasks::binaries::Binaries::new(PathBuf::from("/bin/gh"), PathBuf::from("/bin/git"));
+    binaries.hermes = Some(PathBuf::from("/bin/hermes"));
+    app.binaries = Some(binaries);
     app.last_agents.insert(
         tree().display().to_string(),
         LastAgent {
