@@ -2808,6 +2808,16 @@ impl App {
         }
     }
 
+    /// Close the tab at `idx` from the mouse: activate it first, then run
+    /// the same close as the `x` key, so the tab's agent and body go
+    /// with it instead of lingering.
+    pub fn close_tab_at(&mut self, idx: usize) {
+        if idx < self.tabs.len() {
+            self.active_tab = Some(idx);
+            self.close_tab_or_record();
+        }
+    }
+
     /// `x`/`X`: close the active tab first, then the agent record.
     /// Tabs are the newest layer, so they close first — once no tab is
     /// left, `x` forgets the record exactly as before.

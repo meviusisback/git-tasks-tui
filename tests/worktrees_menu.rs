@@ -575,6 +575,48 @@ fn clicking_a_tab_opens_it_clicking_between_does_not() {
 }
 
 #[test]
+fn the_close_mark_closes_instead_of_switching() {
+    use gtasks::ui::{tab_at, tab_close_at, tabs_row};
+    let (mut app, _tmp) = pr_app();
+    app.apply_outcome(FetchOutcome {
+        items: vec![
+            item("o/r", 7, ItemKind::Pr, Some("fix-foo")),
+            item("o/r", 8, ItemKind::Pr, Some("fix-bar")),
+        ],
+        failures: Vec::new(),
+    });
+    app.update(Msg::Key(Key::Enter));
+    app.list_cursor = 1;
+    app.update(Msg::Key(Key::Esc)); // Enter focuses right: back to the list
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.tabs.len(), 2);
+
+    let area = ratatui::layout::Rect::new(0, 0, 200, 30);
+    let row = tabs_row(area, app.col_pct);
+    // The ✕ is the last cell of each tab: it closes, everything else
+    // on the tab still switches.
+    let mut close_cells: Vec<usize> = Vec::new();
+    let mut switch_cells = 0;
+    for x in row.x..row.x + row.width {
+        match (
+            tab_at(&app, area, x, row.y),
+            tab_close_at(&app, area, x, row.y),
+        ) {
+            (Some(_), Some(idx)) => close_cells.push(idx),
+            (Some(_), None) => switch_cells += 1,
+            (None, None) => {}
+            (None, Some(idx)) => panic!("close {idx} sits on no tab"),
+        }
+    }
+    assert_eq!(close_cells, vec![0, 1], "each tab ends in its own ✕");
+    assert!(switch_cells > 0, "the tab bodies still switch");
+    // Closing the first tab leaves the second one active.
+    app.close_tab_at(0);
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.tabs[0].number, 8);
+}
+
+#[test]
 fn every_agent_takes_the_seed_as_a_file_never_as_text() {
     let hermes = agent_argv(
         PathBuf::from("/bin/hermes").as_path(),

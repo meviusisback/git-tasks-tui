@@ -556,6 +556,8 @@ struct TabChunk {
     text: String,
     style: Style,
     tab: Option<usize>,
+    /// The tab's close mark: a click here closes instead of switching.
+    close: bool,
 }
 
 fn tab_chunks(app: &App) -> Vec<TabChunk> {
@@ -566,6 +568,7 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
                 text: "  │  ".to_string(),
                 style: Style::default(),
                 tab: None,
+                close: false,
             });
         }
         let mark = if info.active { "●" } else { "○" };
@@ -580,11 +583,13 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             text: mark.to_string(),
             style: mark_style,
             tab: Some(i),
+            close: false,
         });
         chunks.push(TabChunk {
             text: " ".to_string(),
             style: Style::default(),
             tab: Some(i),
+            close: false,
         });
         let icon = match info.kind {
             Some(ItemKind::Pr) => icons::kind_pr(),
@@ -597,11 +602,13 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
                 text: worktree_marker_text().to_string(),
                 style: theme::worktree_marker(),
                 tab: Some(i),
+                close: false,
             });
             chunks.push(TabChunk {
                 text: " ".to_string(),
                 style: Style::default(),
                 tab: Some(i),
+                close: false,
             });
         }
         if !icon.is_empty() {
@@ -609,6 +616,7 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
                 text: icon.to_string(),
                 style: kind_style(info.kind),
                 tab: Some(i),
+                close: false,
             });
         }
         let (number, title) = split_number_title(&info.label);
@@ -616,17 +624,20 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             text: sanitize(&number),
             style: kind_style(info.kind),
             tab: Some(i),
+            close: false,
         });
         if !title.is_empty() {
             chunks.push(TabChunk {
                 text: " ".to_string(),
                 style: Style::default(),
                 tab: Some(i),
+                close: false,
             });
             chunks.push(TabChunk {
                 text: sanitize(&title),
                 style: Style::default(),
                 tab: Some(i),
+                close: false,
             });
         }
         if info.has_agent {
@@ -636,13 +647,29 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
                 text: " ".to_string(),
                 style: Style::default(),
                 tab: Some(i),
+                close: false,
             });
             chunks.push(TabChunk {
                 text: "◉".to_string(),
                 style: Style::default().fg(theme::FOCUSED),
                 tab: Some(i),
+                close: false,
             });
         }
+        // The close mark: a click here closes the tab instead of
+        // switching to it, the mouse twin of the `x` key.
+        chunks.push(TabChunk {
+            text: " ".to_string(),
+            style: Style::default(),
+            tab: Some(i),
+            close: false,
+        });
+        chunks.push(TabChunk {
+            text: "✕".to_string(),
+            style: Style::default().fg(theme::SUBTEXT),
+            tab: Some(i),
+            close: true,
+        });
     }
     // The active tab stands out with a full background: at a glance the
     // eye lands on the bookmark being read, not on the row of dots.
@@ -682,10 +709,9 @@ pub fn repos_row_at(repos_area: Rect, y: u16, len: usize) -> Option<usize> {
     }
     Some(idx)
 }
-/// Which tab sits under a mouse click, if any. Pure over the app (no
-/// terminal needed), so tests pin the mapping: separators and the empty
-/// strip map to `None` — a click between tabs switches nothing.
-pub fn tab_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
+/// The chunk under a mouse click, if any: the shared walk behind
+/// switching tabs and closing them.
+fn chunk_at(app: &App, area: Rect, x: u16, y: u16) -> Option<TabChunk> {
     use unicode_width::UnicodeWidthStr;
     let row = grid(area, app.col_pct, app.row_pct).tabs;
     if y != row.y || x < row.x {
@@ -699,7 +725,7 @@ pub fn tab_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
     for chunk in tab_chunks(app) {
         let width = chunk.text.width() as u16;
         if x >= cursor && x < cursor.saturating_add(width) {
-            return chunk.tab;
+            return Some(chunk);
         }
         cursor = cursor.saturating_add(width);
         if cursor >= end {
@@ -707,6 +733,19 @@ pub fn tab_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
         }
     }
     None
+}
+
+/// Which tab sits under a mouse click, if any. Pure over the app (no
+/// terminal needed), so tests pin the mapping: separators and the empty
+/// strip map to `None` — a click between tabs switches nothing.
+pub fn tab_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
+    chunk_at(app, area, x, y).and_then(|chunk| chunk.tab)
+}
+
+/// Which tab's close mark sits under a mouse click, if any: checked
+/// before `tab_at`, so the ✕ closes instead of switching.
+pub fn tab_close_at(app: &App, area: Rect, x: u16, y: u16) -> Option<usize> {
+    chunk_at(app, area, x, y).and_then(|chunk| if chunk.close { chunk.tab } else { None })
 }
 
 /// Right column, top strip: the open tabs on a single line, so small

@@ -1720,6 +1720,10 @@ fn run_tui() -> anyhow::Result<()> {
                                     && me.column < g.body.x.saturating_add(g.body.width)
                                 {
                                     app.drag = Some(gtasks::app::DragLine::Rows);
+                                } else if let Some(idx) =
+                                    ui::tab_close_at(&app, area, me.column, me.row)
+                                {
+                                    app.close_tab_at(idx);
                                 } else if let Some(idx) = ui::tab_at(&app, area, me.column, me.row)
                                 {
                                     app.activate_tab(idx);
