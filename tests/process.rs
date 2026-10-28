@@ -6,10 +6,14 @@
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 use gtasks::binaries::Binaries;
-use gtasks::gh::{Argv, Caps, Timeout, check_argv, gh, git, run_pipe, run_pipe_with_caps};
+#[cfg(target_os = "linux")]
+use gtasks::gh::Timeout;
+use gtasks::gh::{Argv, Caps, check_argv, gh, git, run_pipe, run_pipe_with_caps};
 
 /// Builders take the resolved binaries; tests hand them explicit paths, so no
 /// test ever repairs `argv.program` after the fact.

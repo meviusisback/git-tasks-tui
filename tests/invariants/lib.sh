@@ -76,9 +76,9 @@ spawn_sites_found() { # spawn_sites_found <root> → files containing Command::n
 # above a call site does not fail the invariant, while a **new** call in an existing file
 # still does: two doors in one file are two doors.
 ARGV_SITES_ALLOWED='src/actions.rs|1|an action becomes an argv here, through the allowlist
-src/agent.rs|2|the hermes handoff argv (agent_argv) and the shared spawned-CLI shape (file_argv): both generated or validated, prompt as a path
-src/fetch.rs|1|the batch read is a query the builder vouches for
-src/worktree.rs|1|worktree mutations run through run_mutation so --force survives the untrusted transport'
+src/agent.rs|4|the hermes handoff (agent_argv), its resume twin, its draft twin and the shared spawned-CLI shape (file_argv): all generated or validated, prompt as a path
+src/fetch.rs|3|read-only gh calls the builder vouches for: the repo list, one rescued closed item for its tab, and the GraphQL batch
+src/worktree.rs|5|worktree mutations through run_mutation, branch reads (delete_branch_argv, has_branch, current_branch) and the project-create owner lookup'
 
 argv_sites_found() { # argv_sites_found <root> → "file:count" per file, sorted
   local root=$1
