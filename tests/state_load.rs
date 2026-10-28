@@ -14,11 +14,12 @@ fn a_symlinked_state_file_is_refused_through_the_public_seam() {
     let err = State::load(&link).unwrap_err();
     // Assert the errno, not the message: ELOOP is what `O_NOFOLLOW` produces and
     // a message can be reworded without anyone noticing the check went slack.
+    // The number differs per OS (40 Linux, 62 macOS): `libc` knows both.
     let io = err
         .root_cause()
         .downcast_ref::<std::io::Error>()
         .unwrap_or_else(|| panic!("expected an io error, got: {err:#}"));
-    assert_eq!(io.raw_os_error(), Some(40), "ELOOP: {err:#}");
+    assert_eq!(io.raw_os_error(), Some(libc::ELOOP), "ELOOP: {err:#}");
 }
 
 #[test]
