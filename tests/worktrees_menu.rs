@@ -593,7 +593,7 @@ fn the_close_mark_closes_instead_of_switching() {
 
     let area = ratatui::layout::Rect::new(0, 0, 200, 30);
     let row = tabs_row(area, app.col_pct);
-    // The ✕ is the last cell of each tab: it closes, everything else
+    // The [✕] box is the tail of each tab: it closes, everything else
     // on the tab still switches.
     let mut close_cells: Vec<usize> = Vec::new();
     let mut switch_cells = 0;
@@ -608,7 +608,14 @@ fn the_close_mark_closes_instead_of_switching() {
             (None, Some(idx)) => panic!("close {idx} sits on no tab"),
         }
     }
-    assert_eq!(close_cells, vec![0, 1], "each tab ends in its own ✕");
+    assert_eq!(
+        close_cells
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [0, 1].iter().collect::<std::collections::BTreeSet<_>>(),
+        "both tabs end in a close box"
+    );
+    assert!(close_cells.len() >= 6, "the box spans a few cells, not one");
     assert!(switch_cells > 0, "the tab bodies still switch");
     // Closing the first tab leaves the second one active.
     app.close_tab_at(0);

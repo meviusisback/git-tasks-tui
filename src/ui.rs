@@ -657,16 +657,13 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             });
         }
         // The close mark: a click here closes the tab instead of
-        // switching to it, the mouse twin of the `x` key.
+        // switching to it, the mouse twin of the `x` key. Spaced and
+        // boxed so the finger lands on it first try.
         chunks.push(TabChunk {
-            text: " ".to_string(),
-            style: Style::default(),
-            tab: Some(i),
-            close: false,
-        });
-        chunks.push(TabChunk {
-            text: "✕".to_string(),
-            style: Style::default().fg(theme::SUBTEXT),
+            text: " [✕]".to_string(),
+            style: Style::default()
+                .fg(theme::ALERT)
+                .add_modifier(Modifier::BOLD),
             tab: Some(i),
             close: true,
         });
