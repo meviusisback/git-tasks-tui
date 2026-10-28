@@ -133,6 +133,10 @@ fn git_always_carries_s16_overrides() {
 /// group) and the call returns instead of blocking forever. The trap script
 /// spawns a grandchild `sleep` in the same group: if only the direct child
 /// died, the sleeper would linger and the /proc scan would catch it.
+/// Burial is verified through /proc, so this probe is Linux-only: on
+/// macOS the scanner below would find nothing and the test would pass
+/// while proving nothing.
+#[cfg(target_os = "linux")]
 #[test]
 fn hung_gh_kills_process_group() {
     let tmp = tempfile::tempdir().unwrap();
@@ -186,6 +190,7 @@ fn hung_gh_kills_process_group() {
 /// wrong parse, wrong file — the loop would find an empty group every time and the
 /// timeout test would pass while proving nothing. This control asserts the scanner can
 /// see a group that is demonstrably alive.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_group_scanner_sees_a_live_group() {
     use std::os::unix::process::CommandExt;
@@ -210,6 +215,9 @@ fn the_group_scanner_sees_a_live_group() {
 }
 
 /// Live pids whose **process group** is `group`, zombies excluded.
+/// Linux-only (see above): cfg-gated with its two tests so macOS
+/// builds stay warning-free under `-D warnings`.
+#[cfg(target_os = "linux")]
 fn live_in_group(group: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
