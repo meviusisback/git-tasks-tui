@@ -735,6 +735,7 @@ fn start_herdr_launch(
         name,
         kind: plan.agent.id.name().to_string(),
         agent_args,
+        repo: plan.repo.clone(),
         tree: tree.clone(),
         label: format!("{}#{} {}", plan.repo, plan.number, plan.agent.id.name()),
         binding: app.herdr_bindings.get(&tree.display().to_string()).cloned(),
