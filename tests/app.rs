@@ -144,8 +144,9 @@ fn shift_arrows_move_between_boxes_spatially() {
         // Right from the list lands on the detail (the PR box on the
         // right), never in the agent box — even with a live agent.
         (List, Key::ShiftRight, Detail),
-        // ... and back: detail and list are a symmetric pair.
-        (Detail, Key::ShiftLeft, List),
+        // ... and back on the same row: top-right goes top-left,
+        // bottom-right goes bottom-left.
+        (Detail, Key::ShiftLeft, Repos),
         (Agent, Key::ShiftLeft, List),
         (List, Key::ShiftUp, Repos),
         (Agent, Key::ShiftUp, Detail),

@@ -3598,8 +3598,9 @@ impl App {
                 Pane::List => self.pane = Pane::Detail,
                 Pane::Detail | Pane::Agent => {}
             },
+            // Same row: top-left ⇄ top-right, bottom-left ⇄ bottom-right.
             Key::ShiftLeft => match self.pane {
-                Pane::Detail => self.pane = Pane::List,
+                Pane::Detail => self.pane = Pane::Repos,
                 Pane::Agent => self.pane = Pane::List,
                 Pane::Repos | Pane::List => {}
             },
