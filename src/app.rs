@@ -989,6 +989,8 @@ impl App {
         self.detail.clear();
         self.detail_for = None;
         self.detail_requested = None;
+        // A hidden tab must not keep owning the detail from off-screen.
+        self.ensure_active_visible();
         // ... but the new first row starts loading at once: the description
         // is on its way before anyone presses Enter.
         self.preload_detail();
@@ -1660,8 +1662,11 @@ impl App {
         } else {
             let next = idx.min(self.tabs.len() - 1);
             self.active_tab = Some(next);
+            // The neighbour may belong to another repo: never leave the
+            // detail owned from off-screen.
+            self.ensure_active_visible();
             // Load the newly active tab's body when missing.
-            if let Some(tab) = self.tabs.get(next).cloned()
+            if let Some(tab) = self.active_tab.and_then(|a| self.tabs.get(a)).cloned()
                 && let Some(item) = self
                     .items
                     .iter()
@@ -1682,9 +1687,10 @@ impl App {
 
     /// One-line label per tab, with the live title when the item is loaded.
     pub fn tab_labels(&self) -> Vec<String> {
-        self.tab_infos()
-            .into_iter()
-            .map(|info| info.label)
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| self.tab_info(i, tab).label)
             .collect()
     }
 
@@ -1702,51 +1708,69 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, tab)| only.is_none_or(|repo| tab.repo == repo))
-            .map(|(i, tab)| {
-                let found = self
-                    .items
-                    .iter()
-                    .find(|item| item.repo == tab.repo && item.number == tab.number)
-                    .cloned();
-                let agent = self
-                    .tab_agents
-                    .get(&Self::tab_key(&tab.repo, tab.number, &tab.tree))
-                    .cloned();
-                // A placed tab names its worktree and its agent: the tree
-                // is what tells two tabs on the same issue apart. An
-                // unplaced bookmark falls back to the issue title.
-                let label = if tab.tree.is_empty() {
-                    match found.as_ref() {
-                        Some(item) => {
-                            let short: String = item.title.chars().take(28).collect();
-                            format!("#{} {short}", tab.number)
-                        }
-                        None => format!("#{} {}", tab.number, tab.repo),
-                    }
-                } else {
-                    let short = tab.tree.rsplit('/').next().unwrap_or(&tab.tree).to_string();
-                    let running = agent.as_ref().is_some_and(|a| a.running);
-                    let name = agent
-                        .as_ref()
-                        .and_then(|a| a.record.as_ref())
-                        .map(|r| r.agent.clone())
-                        .map(|name| format!(" · {name}"))
-                        .unwrap_or_default();
-                    let dot = if running { " ◉" } else { "" };
-                    format!("#{} {short}{name}{dot}", tab.number)
-                };
-                TabInfo {
-                    index: i,
-                    label,
-                    kind: found.as_ref().map(|item| item.kind),
-                    active: Some(i) == self.active_tab,
-                    has_worktree: found.is_some_and(|item| {
-                        self.has_worktree(&item.repo, item.head_ref_name.as_deref())
-                    }),
-                    has_agent: agent.is_some_and(|agent| agent.running),
-                }
-            })
+            .map(|(i, tab)| self.tab_info(i, tab))
             .collect()
+    }
+
+    /// The strip only shows the filtered repo's tabs: an active tab the
+    /// filter hides would own the detail from off-screen — a repo on the
+    /// left, another repo's issue on the right. After every filter change
+    /// or close, land on the filter's first tab, or none when it has no
+    /// tabs. With no filter everything shows, so nothing moves.
+    fn ensure_active_visible(&mut self) {
+        let visible: Vec<usize> = self.tab_infos().iter().map(|i| i.index).collect();
+        if let Some(active) = self.active_tab {
+            if visible.contains(&active) {
+                return;
+            }
+        }
+        self.active_tab = visible.first().copied();
+    }
+
+    /// One tab's strip entry, by real index. Shared by the filtered strip
+    /// and the full label list, so both spell a tab the same way.
+    fn tab_info(&self, i: usize, tab: &Tab) -> TabInfo {
+        let found = self
+            .items
+            .iter()
+            .find(|item| item.repo == tab.repo && item.number == tab.number)
+            .cloned();
+        let agent = self
+            .tab_agents
+            .get(&Self::tab_key(&tab.repo, tab.number, &tab.tree))
+            .cloned();
+        // A placed tab names its worktree and its agent: the tree
+        // is what tells two tabs on the same issue apart. An
+        // unplaced bookmark falls back to the issue title.
+        let label = if tab.tree.is_empty() {
+            match found.as_ref() {
+                Some(item) => {
+                    let short: String = item.title.chars().take(28).collect();
+                    format!("#{} {short}", tab.number)
+                }
+                None => format!("#{} {}", tab.number, tab.repo),
+            }
+        } else {
+            let short = tab.tree.rsplit('/').next().unwrap_or(&tab.tree).to_string();
+            let running = agent.as_ref().is_some_and(|a| a.running);
+            let name = agent
+                .as_ref()
+                .and_then(|a| a.record.as_ref())
+                .map(|r| r.agent.clone())
+                .map(|name| format!(" · {name}"))
+                .unwrap_or_default();
+            let dot = if running { " ◉" } else { "" };
+            format!("#{} {short}{name}{dot}", tab.number)
+        };
+        TabInfo {
+            index: i,
+            label,
+            kind: found.as_ref().map(|item| item.kind),
+            active: Some(i) == self.active_tab,
+            has_worktree: found
+                .is_some_and(|item| self.has_worktree(&item.repo, item.head_ref_name.as_deref())),
+            has_agent: agent.is_some_and(|agent| agent.running),
+        }
     }
 
     /// The agent pane shows only while an agent is being arranged or is
@@ -1948,6 +1972,9 @@ impl App {
             })
             .collect();
         self.active_tab = state.active_tab.filter(|idx| *idx < self.tabs.len());
+        // A saved tab the saved filter hides must not own the detail from
+        // off-screen: land on the filter's own first tab, or none.
+        self.ensure_active_visible();
         self.last_agents = state.last_agents.clone();
         self.herdr_bindings = state.herdr_bindings.clone();
         // Direct agents outlive a restart: the new process is not their

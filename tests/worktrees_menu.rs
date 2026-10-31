@@ -993,23 +993,33 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
         gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
         gtasks::actions::RepoSlug::parse("o/other").expect("valid slug"),
     ]);
-    // Cursor onto o/other through keys, like a user: the filter follows,
-    // and the strip narrows to that repo's tabs — the o/r tab hides.
+    // Cursor onto o/r first: tab visible, detail owned — the markers are
+    // the detail title, the worktrees box row and the tabs strip. The
+    // query hides the list row so it adds none of its own.
+    app.query = "zzz".to_string();
     app.pane = gtasks::app::Pane::Repos;
-    app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     with_plain_icons(|| {
         let screen = render_200x30(&app);
-        // Two: the detail title (the tab owns the detail even though the
-        // filter hides its row) and the worktrees box row — the tabs
-        // strip shows only o/other's tabs, so a third would mean a leak.
         assert_eq!(
             screen.matches("◉").count(),
-            2,
-            "marker in detail + worktrees row, no tab marker: {screen}"
+            3,
+            "marker in detail + worktrees row + tabs: {screen}"
         );
         assert!(screen.contains("◉  #7"), "marker, gap, number: {screen}");
         assert!(screen.contains("fix-foo"), "the tree shows: {screen}");
+    });
+    // Cursor onto o/other, like a user: the filter follows, the strip
+    // narrows, and the hidden tab stops owning the detail — it goes
+    // blank instead of showing another repo's issue.
+    app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
+    with_plain_icons(|| {
+        let screen = render_200x30(&app);
+        assert_eq!(
+            screen.matches("◉").count(),
+            0,
+            "no marker anywhere: detail blank, strip narrowed: {screen}"
+        );
     });
     // And the strip knows it structurally, not just visually.
     let infos = app.tab_infos();
