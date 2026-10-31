@@ -19,6 +19,7 @@ fn test_inputs<'a>(profile: &'a str, roots: &'a [std::path::PathBuf]) -> PlanInp
         default_agent: AgentChoice {
             id: AgentId::Hermes,
             program: std::path::PathBuf::from("/bin/hermes"),
+            herdr: false,
         },
     }
 }

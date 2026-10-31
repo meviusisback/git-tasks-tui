@@ -241,19 +241,28 @@ impl AgentId {
 
 /// One menu row: the agent plus the resolved program that runs it. Resolved
 /// at menu time (not startup), so an install mid-session just appears.
+/// `herdr` rows launch unsandboxed through Herdr (`agent start` + an
+/// embedded attach) instead of spawning the binary direct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentChoice {
     pub id: AgentId,
     pub program: PathBuf,
+    pub herdr: bool,
 }
 
 impl AgentChoice {
     /// The menu line: hermes carries its profile (the only agent that has
-    /// one), the rest run as themselves.
+    /// one), the rest run as themselves. Herdr rows say so — they never
+    /// carry the sandbox wrapper, so they must never read as sandboxed.
     pub fn label(&self, profile: &str) -> String {
-        match self.id {
+        let base = match self.id {
             AgentId::Hermes => format!("hermes — profile {profile}"),
             other => other.name().to_string(),
+        };
+        if self.herdr {
+            format!("{base} · Herdr")
+        } else {
+            base
         }
     }
 }

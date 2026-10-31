@@ -150,6 +150,7 @@ fn plan(agent: AgentId) -> AgentPlan {
         agent: AgentChoice {
             id: agent,
             program: prog(),
+            herdr: false,
         },
         clone: PathBuf::from("/tmp/clones"),
     }
@@ -292,6 +293,7 @@ fn y_reopens_while_n_goes_back_to_choosing() {
     let preset = AgentChoice {
         id: AgentId::Omp,
         program: prog(),
+        herdr: false,
     };
     // The `g` flow already picked omp: `n` launches there, `y` resumes.
     let mut app = recorded("hermes");

@@ -145,3 +145,147 @@ fn a_dead_daemon_is_a_clean_failure_not_a_panic() {
         }
     }
 }
+
+#[test]
+fn the_g_menu_lists_every_agent_twice_with_herdr() {
+    use gtasks::app::{App, Key, Modal, Msg};
+    use gtasks::fetch::FetchOutcome;
+    use gtasks::model::{Item, ItemKind};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = App::default();
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
+    ]);
+    app.apply_outcome(FetchOutcome {
+        items: vec![Item {
+            number: 7,
+            title: "t".to_string(),
+            state: "OPEN".into(),
+            is_draft: None,
+            author: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            updated_at: "2026-10-20T10:00:00Z".into(),
+            created_at: String::new(),
+            url: "https://github.com/o/r/pull/7".to_string(),
+            head_ref_name: Some("fix-foo".to_string()),
+            base_ref_name: None,
+            review_decision: None,
+            mergeable: None,
+            status_check_rollup: Vec::new(),
+            closing_issues_references: Vec::new(),
+            repo: "o/r".to_string(),
+            kind: ItemKind::Pr,
+        }],
+        failures: Vec::new(),
+    });
+    let clone = tmp.path().join("r");
+    std::fs::create_dir(&clone).unwrap();
+    std::fs::create_dir(clone.join(".git")).unwrap();
+    app.clone_roots = vec![tmp.path().to_path_buf()];
+    let mut binaries = gtasks::binaries::Binaries::new(
+        std::path::PathBuf::from("/bin/gh"),
+        std::path::PathBuf::from("/usr/bin/git"),
+    );
+    binaries.hermes = Some(std::path::PathBuf::from("/bin/hermes"));
+    binaries.herdr = Some(std::path::PathBuf::from("/usr/sbin/herdr"));
+    app.binaries = Some(binaries);
+    app.agent_profile = "default".to_string();
+    app.update(Msg::Key(Key::Char('g')));
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("g must open the agent menu, got {:?}", app.modal);
+    };
+    // PATH in CI may or may not hold the other agents: hermes always does
+    // (configured above), so pin its pair and the shape of the rest.
+    let labels: Vec<String> = menu
+        .rows
+        .iter()
+        .map(|row| row.label(&menu.plan.profile))
+        .collect();
+    assert!(
+        labels.contains(&"hermes — profile default".to_string()),
+        "the direct row: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"hermes — profile default · Herdr".to_string()),
+        "the Herdr twin: {labels:?}"
+    );
+    let herdr_rows = menu.rows.iter().filter(|row| row.herdr).count();
+    let direct_rows = menu.rows.len() - herdr_rows;
+    assert_eq!(
+        herdr_rows, direct_rows,
+        "every agent appears twice: {labels:?}"
+    );
+    let direct_ids: Vec<_> = menu
+        .rows
+        .iter()
+        .filter(|row| !row.herdr)
+        .map(|row| row.id)
+        .collect();
+    let herdr_ids: Vec<_> = menu
+        .rows
+        .iter()
+        .filter(|row| row.herdr)
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(
+        herdr_ids, direct_ids,
+        "every installed agent grows exactly one twin"
+    );
+}
+
+#[test]
+fn no_herdr_binary_no_herdr_rows() {
+    use gtasks::app::{App, Key, Modal, Msg};
+    use gtasks::fetch::FetchOutcome;
+    use gtasks::model::{Item, ItemKind};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = App::default();
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
+    ]);
+    app.apply_outcome(FetchOutcome {
+        items: vec![Item {
+            number: 7,
+            title: "t".to_string(),
+            state: "OPEN".into(),
+            is_draft: None,
+            author: None,
+            labels: Vec::new(),
+            assignees: Vec::new(),
+            updated_at: "2026-10-20T10:00:00Z".into(),
+            created_at: String::new(),
+            url: "https://github.com/o/r/pull/7".to_string(),
+            head_ref_name: Some("fix-foo".to_string()),
+            base_ref_name: None,
+            review_decision: None,
+            mergeable: None,
+            status_check_rollup: Vec::new(),
+            closing_issues_references: Vec::new(),
+            repo: "o/r".to_string(),
+            kind: ItemKind::Pr,
+        }],
+        failures: Vec::new(),
+    });
+    let clone = tmp.path().join("r");
+    std::fs::create_dir(&clone).unwrap();
+    std::fs::create_dir(clone.join(".git")).unwrap();
+    app.clone_roots = vec![tmp.path().to_path_buf()];
+    let mut binaries = gtasks::binaries::Binaries::new(
+        std::path::PathBuf::from("/bin/gh"),
+        std::path::PathBuf::from("/usr/bin/git"),
+    );
+    binaries.hermes = Some(std::path::PathBuf::from("/bin/hermes"));
+    app.binaries = Some(binaries);
+    app.agent_profile = "default".to_string();
+    app.update(Msg::Key(Key::Char('g')));
+    let Some(Modal::AgentMenu(menu)) = app.modal.as_ref() else {
+        panic!("g must open the agent menu, got {:?}", app.modal);
+    };
+    assert!(
+        menu.rows.iter().all(|row| !row.herdr),
+        "without the CLI there is nothing to attach to"
+    );
+}

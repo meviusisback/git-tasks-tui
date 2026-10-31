@@ -61,6 +61,7 @@ fn plan(agent: &str) -> gtasks::agent::AgentPlan {
                 AgentId::Omp
             },
             program: PathBuf::from("/bin/hermes"),
+            herdr: false,
         },
         clone: PathBuf::from("/tmp/r"),
     }

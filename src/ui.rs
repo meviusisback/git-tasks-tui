@@ -1391,7 +1391,11 @@ fn draw_agent_menu(
             let mark = if i == menu.cursor { "▸" } else { " " };
             // Sandboxed launches are YOLO inside containment: the suffix
             // says so on the row itself, before anything is confirmed.
-            let label = if app.sandbox_agents {
+            // Herdr rows never carry the wrapper, so they read as Herdr
+            // even with the sandbox on — never as sandboxed.
+            let label = if row.herdr {
+                format!("{} · Herdr (unsandboxed)", row.label(&menu.plan.profile))
+            } else if app.sandbox_agents {
                 format!("{} · sandboxed", row.label(&menu.plan.profile))
             } else {
                 row.label(&menu.plan.profile)

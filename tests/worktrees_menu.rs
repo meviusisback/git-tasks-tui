@@ -475,6 +475,7 @@ fn the_detail_names_the_open_trees_and_who_ran_there() {
         agent: AgentChoice {
             id: AgentId::Hermes,
             program: PathBuf::from("/bin/hermes"),
+            herdr: false,
         },
         clone: tmp.path().join("r"),
     };
@@ -948,6 +949,7 @@ fn the_worktrees_box_floats_top_right_of_the_detail() {
             agent: AgentChoice {
                 id: AgentId::Hermes,
                 program: PathBuf::from("/bin/hermes"),
+                herdr: false,
             },
             clone: tmp.path().join("r"),
         },

@@ -17,6 +17,7 @@ fn hermes_choice() -> AgentChoice {
     AgentChoice {
         id: AgentId::Hermes,
         program: PathBuf::from("/bin/hermes"),
+        herdr: false,
     }
 }
 

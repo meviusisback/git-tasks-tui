@@ -2403,22 +2403,28 @@ impl App {
             Some(hermes) => AgentChoice {
                 id: AgentId::Hermes,
                 program: hermes,
+                herdr: false,
             },
             None => AgentChoice {
                 id: AgentId::Hermes,
                 program: std::path::PathBuf::from("hermes"),
+                herdr: false,
             },
         }
     }
 
     /// The installed agent binaries as menu rows, hermes first. Resolved now
-    /// (not at startup), so an install mid-session just appears.
+    /// (not at startup), so an install mid-session just appears. When the
+    /// Herdr CLI is around, every agent grows a second row launching it
+    /// unsandboxed through Herdr — the per-launch answer to a global
+    /// `sandbox_agents = true`.
     fn agent_choices(&self) -> Vec<AgentChoice> {
-        let mut rows = Vec::new();
+        let mut direct = Vec::new();
         if let Some(hermes) = self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
-            rows.push(AgentChoice {
+            direct.push(AgentChoice {
                 id: AgentId::Hermes,
                 program: hermes,
+                herdr: false,
             });
         }
         for id in AgentId::all() {
@@ -2426,8 +2432,24 @@ impl App {
                 continue;
             }
             if let Ok(program) = crate::binaries::resolve(id.binary()) {
-                rows.push(AgentChoice { id, program });
+                direct.push(AgentChoice {
+                    id,
+                    program,
+                    herdr: false,
+                });
             }
+        }
+        let mut rows = direct.clone();
+        if self
+            .binaries
+            .as_ref()
+            .and_then(|b| b.herdr.clone())
+            .is_some()
+        {
+            rows.extend(direct.iter().map(|choice| AgentChoice {
+                herdr: true,
+                ..choice.clone()
+            }));
         }
         rows
     }

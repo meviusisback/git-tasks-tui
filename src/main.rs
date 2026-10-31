@@ -576,10 +576,14 @@ fn launch_agent(
         // itself — launching the plain binary instead would silently drop
         // the containment the setting promises.
         // Herdr backend (never sandboxed: Herdr starts the canonical agent
-        // binary, never our wrapper — a sandboxed launch always stays direct).
+        // binary, never our wrapper — a sandboxed launch always stays direct),
+        // or the row the user picked (`X · Herdr` launches unsandboxed through
+        // Herdr even with the sandbox on: per-launch beats global).
         // The slow `herdr` calls run in a worker thread; the loop embeds
         // `herdr agent attach` (or falls back to direct) when it answers.
-        if app.agent_backend == gtasks::config::AgentBackend::Herdr && !app.sandbox_agents {
+        if plan.agent.herdr
+            || (app.agent_backend == gtasks::config::AgentBackend::Herdr && !app.sandbox_agents)
+        {
             match ctx.binaries.herdr.clone() {
                 Some(herdr) => {
                     return Some(start_herdr_launch(
