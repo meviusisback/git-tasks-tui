@@ -176,14 +176,14 @@ fn the_detail_renders_markdown_instead_of_raw_markers() {
 
 #[test]
 fn help_overlay_lists_the_full_keymap() {
-    // The overlay needs room: 14 keymap rows plus its border.
+    // The overlay needs room: keymap plus icon legend plus its border.
     let render_tall = |app: &App, view: &ViewModel| -> String {
-        let backend = TestBackend::new(100, 24);
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, app, view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let mut out = String::new();
-        for y in 0..24 {
+        for y in 0..40 {
             for x in 0..100 {
                 out.push_str(buffer[(x, y)].symbol());
             }
@@ -231,6 +231,32 @@ fn help_overlay_lists_the_full_keymap() {
         !screen.contains("drill into the repo"),
         "no claims about unimplemented drill-down: {screen}"
     );
+}
+
+#[test]
+fn help_overlay_explains_the_icons_in_english() {
+    let (mut app, view) = sample();
+    app.show_help = true;
+    // The legend needs room: keymap plus nine icon rows.
+    let screen = render_sized(&app, &view, 100, 50);
+    assert!(screen.contains("icons:"), "icon section: {screen}");
+    for meaning in [
+        "pull request",
+        "issue",
+        "repo",
+        "worktree on disk",
+        "changes requested",
+        "the open tab",
+        "a tab kept aside",
+        "running in that tab",
+        "close that tab",
+    ] {
+        assert!(
+            screen.contains(meaning),
+            "the legend says '{meaning}': {screen}"
+        );
+    }
+    assert!(screen.contains("CR "), "the CR mark shows: {screen}");
 }
 
 #[test]

@@ -1144,36 +1144,107 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 fn draw_help(frame: &mut Frame, area: Rect) {
+    use ratatui::text::{Line, Span};
     let area = centered_rect(75, 92, area);
     frame.render_widget(Clear, area);
-    let text: Vec<ratatui::text::Line<'static>> = HELP_NOW
+    let mut text: Vec<Line<'static>> = HELP_NOW
         .iter()
-        .map(|line| ratatui::text::Line::from(sanitize(line)))
-        .chain(std::iter::once(ratatui::text::Line::from("")))
-        .chain(std::iter::once(ratatui::text::Line::from(sanitize(
-            "coming in the next stages:",
-        ))))
-        .chain(if PLANNED.is_empty() {
-            vec![ratatui::text::Line::from(sanitize("  (nothing promised)"))]
-        } else {
-            PLANNED
-                .iter()
-                .map(|(key, what)| {
-                    ratatui::text::Line::from(sanitize(&format!("{key}          {what}")))
-                })
-                .collect()
-        })
+        .map(|line| Line::from(sanitize(line)))
+        .chain(std::iter::once(Line::from("")))
+        .chain(std::iter::once(Line::from(sanitize("icons:"))))
         .collect();
+    for (glyph, style, meaning) in icon_legend() {
+        text.push(Line::from(vec![
+            Span::styled(format!("  {glyph}"), style),
+            Span::raw(" "),
+            Span::styled(meaning.to_string(), theme::overlay_text()),
+        ]));
+    }
+    text.extend(
+        std::iter::once(Line::from(""))
+            .chain(std::iter::once(Line::from(sanitize(
+                "coming in the next stages:",
+            ))))
+            .chain(if PLANNED.is_empty() {
+                vec![Line::from(sanitize("  (nothing promised)"))]
+            } else {
+                PLANNED
+                    .iter()
+                    .map(|(key, what)| Line::from(sanitize(&format!("{key}          {what}"))))
+                    .collect()
+            }),
+    );
     let help = Paragraph::new(text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" keys — any key closes ")
+                .title(" keys + icons — any key closes ")
                 .border_style(theme::overlay())
                 .title_style(theme::overlay()),
         )
         .style(theme::overlay_text());
     frame.render_widget(help, area);
+}
+
+/// Icon legend rows: the glyph, its colour, what it means — in English.
+/// Glyphs depend on the host's Nerd Font at render time, so the rows are
+/// built live; without the font the colour alone marks the kind, and the
+/// row says so instead of showing a blank.
+fn icon_legend() -> Vec<(String, Style, &'static str)> {
+    use theme as t;
+    let pr = icons::kind_pr();
+    let issue = icons::kind_issue();
+    vec![
+        (
+            if pr.is_empty() {
+                "green #".to_string()
+            } else {
+                pr.to_string()
+            },
+            kind_style(Some(ItemKind::Pr)),
+            "pull request",
+        ),
+        (
+            if issue.is_empty() {
+                "yellow #".to_string()
+            } else {
+                issue.to_string()
+            },
+            kind_style(Some(ItemKind::Issue)),
+            "issue",
+        ),
+        (icons::repo().to_string(), theme::overlay_text(), "repo"),
+        (
+            worktree_marker_text().to_string(),
+            theme::worktree_marker(),
+            "worktree on disk for that branch",
+        ),
+        (
+            "CR ".to_string(),
+            Style::default().fg(t::ALERT),
+            "changes requested — the PR waits on us",
+        ),
+        (
+            "●".to_string(),
+            Style::default().fg(t::FOCUSED).add_modifier(Modifier::BOLD),
+            "the open tab",
+        ),
+        (
+            "○".to_string(),
+            Style::default().fg(t::SUBTEXT),
+            "a tab kept aside",
+        ),
+        (
+            "◉".to_string(),
+            Style::default().fg(t::FOCUSED),
+            "an agent is running in that tab",
+        ),
+        (
+            "[✕]".to_string(),
+            Style::default().fg(t::ALERT).add_modifier(Modifier::BOLD),
+            "close that tab",
+        ),
+    ]
 }
 
 fn draw_repo_menu(frame: &mut Frame, area: Rect, menu: &crate::app::RepoMenu) {
