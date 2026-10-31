@@ -841,13 +841,10 @@ fn queue_herdr_reattaches(app: &mut App, binaries: &Binaries) {
         {
             continue;
         }
-        if app
-            .tab_agents
-            .get(&(repo.clone(), number))
-            .is_some_and(|a| a.running)
-        {
-            continue;
-        }
+        // No running check here: at startup the sessions map is empty, so
+        // any running shadow is a detached leftover, never a live session.
+        // The attach replaces it on success; on failure the dead binding
+        // is dropped and the leftover stays visible instead of a blank.
         let cwd = Path::new(&tree);
         let alive = cwd.exists()
             && gtasks::herdr::agent_get(&herdr, cwd, &binding.name)
