@@ -25,10 +25,33 @@ fn job(program: &Path, tree: &Path) -> HerdrJob {
         name: agent_name("o/r", 7, "hermes", "coder"),
         kind: "hermes".to_string(),
         agent_args: vec!["-p".to_string(), "coder".to_string()],
+        repo: "o/r".to_string(),
         tree: tree.to_path_buf(),
         label: "o/r#7 hermes".to_string(),
         binding: None,
     }
+}
+
+/// A stub `herdr` CLI: `space` is the `workspace list` answer — `none` for
+/// no Space yet, `ours` for the repo's Space already there.
+fn space_stub(log: &std::path::Path, space: &str) -> String {
+    let spaces = match space {
+        "ours" => r#"[{"label":"o/r","workspace_id":"w3"}]"#.to_string(),
+        _ => "[]".to_string(),
+    };
+    format!(
+        r#"#!/bin/sh
+echo "$@" >> "{log}"
+if [ "$1" = "agent" ] && [ "$2" = "get" ]; then exit 1; fi
+if [ "$1" = "workspace" ] && [ "$2" = "list" ]; then echo '{{"result":{{"workspaces":{spaces}}}}}'; exit 0; fi
+if [ "$1" = "workspace" ] && [ "$2" = "create" ]; then echo '{{"result":{{"tab":{{"tab_id":"w9:t1"}},"root_pane":{{"pane_id":"w9:p1"}}}}}}'; exit 0; fi
+if [ "$1" = "tab" ] && [ "$2" = "create" ]; then echo '{{"result":{{"tab":{{"tab_id":"w3:t9"}},"root_pane":{{"pane_id":"w3:p9"}}}}}}'; exit 0; fi
+if [ "$1" = "tab" ] && [ "$2" = "rename" ]; then exit 0; fi
+if [ "$1" = "agent" ] && [ "$2" = "start" ]; then echo '{{"result":{{"type":"agent_started"}}}}'; exit 0; fi
+exit 1
+"#,
+        log = log.display()
+    )
 }
 
 #[test]
@@ -70,19 +93,10 @@ fn attach_argv_is_the_attach_client() {
 }
 
 #[test]
-fn a_fresh_tree_gets_a_tab_and_a_start() {
+fn a_fresh_tree_gets_a_space_and_a_start() {
     let tree = tempfile::tempdir().unwrap();
     let log = tree.path().join("calls.log");
-    let dir = stub_dir(&format!(
-        r#"#!/bin/sh
-echo "$@" >> "{}"
-if [ "$1" = "agent" ] && [ "$2" = "get" ]; then exit 1; fi
-if [ "$1" = "tab" ] && [ "$2" = "create" ]; then echo '{{"result":{{"tab":{{"tab_id":"w1:t9"}},"root_pane":{{"pane_id":"w1:p9"}}}}}}'; exit 0; fi
-if [ "$1" = "agent" ] && [ "$2" = "start" ]; then echo '{{"result":{{"type":"agent_started"}}}}'; exit 0; fi
-exit 1
-"#,
-        log.display()
-    ));
+    let dir = stub_dir(&space_stub(&log, "none"));
     let out = run_job(job(&dir.path().join("herdr"), tree.path()));
     let (name, tab_id, pane_id) = match out {
         gtasks::herdr::HerdrOutcome::Attached {
@@ -93,12 +107,45 @@ exit 1
         gtasks::herdr::HerdrOutcome::Failed(reason) => panic!("start failed: {reason}"),
     };
     assert_eq!(name, "g-r-7-hermes");
-    assert_eq!(tab_id, "w1:t9");
-    assert_eq!(pane_id, "w1:p9");
+    assert_eq!(tab_id, "w9:t1", "the fresh Space's own root tab");
+    assert_eq!(pane_id, "w9:p1", "no extra tab grown");
     let calls = std::fs::read_to_string(&log).unwrap();
     assert!(
-        calls.contains("agent start g-r-7-hermes --kind hermes --pane w1:p9 -- -p coder"),
+        calls.contains("workspace create --label o/r"),
+        "the Space is created named after the repo: {calls}"
+    );
+    assert!(
+        !calls.contains("tab create"),
+        "a fresh Space needs no extra tab: {calls}"
+    );
+    assert!(
+        calls.contains("agent start g-r-7-hermes --kind hermes --pane w9:p1 -- -p coder"),
         "kind, pane and our args ride along: {calls}"
+    );
+}
+
+#[test]
+fn an_existing_space_grows_a_tab() {
+    let tree = tempfile::tempdir().unwrap();
+    let log = tree.path().join("calls.log");
+    let dir = stub_dir(&space_stub(&log, "ours"));
+    let out = run_job(job(&dir.path().join("herdr"), tree.path()));
+    let (tab_id, pane_id) = match out {
+        gtasks::herdr::HerdrOutcome::Attached {
+            tab_id, pane_id, ..
+        } => (tab_id, pane_id),
+        gtasks::herdr::HerdrOutcome::Failed(reason) => panic!("start failed: {reason}"),
+    };
+    assert_eq!(tab_id, "w3:t9");
+    assert_eq!(pane_id, "w3:p9");
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        !calls.contains("workspace create"),
+        "the repo's Space is reused: {calls}"
+    );
+    assert!(
+        calls.contains("tab create --workspace w3"),
+        "the tab grows inside it: {calls}"
     );
 }
 
