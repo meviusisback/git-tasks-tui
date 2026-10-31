@@ -36,7 +36,8 @@ fn job(program: &Path, tree: &Path) -> HerdrJob {
 /// no Space yet, `ours` for the repo's Space already there.
 fn space_stub(log: &std::path::Path, space: &str) -> String {
     let spaces = match space {
-        "ours" => r#"[{"label":"o/r","workspace_id":"w3"}]"#.to_string(),
+        "ours" => r#"[{"label":"r","workspace_id":"w3"}]"#.to_string(),
+        "legacy" => r#"[{"label":"o/r","workspace_id":"w4"}]"#.to_string(),
         _ => "[]".to_string(),
     };
     format!(
@@ -111,8 +112,8 @@ fn a_fresh_tree_gets_a_space_and_a_start() {
     assert_eq!(pane_id, "w9:p1", "no extra tab grown");
     let calls = std::fs::read_to_string(&log).unwrap();
     assert!(
-        calls.contains("workspace create --label o/r"),
-        "the Space is created named after the repo: {calls}"
+        calls.contains("workspace create --label r"),
+        "the Space is created named after the repo, owner dropped: {calls}"
     );
     assert!(
         !calls.contains("tab create"),
@@ -334,5 +335,24 @@ fn no_herdr_binary_no_herdr_rows() {
     assert!(
         menu.rows.iter().all(|row| !row.herdr),
         "without the CLI there is nothing to attach to"
+    );
+}
+
+#[test]
+fn a_legacy_full_slug_space_is_reused() {
+    let tree = tempfile::tempdir().unwrap();
+    let log = tree.path().join("calls.log");
+    let dir = stub_dir(&space_stub(&log, "legacy"));
+    let out = run_job(job(&dir.path().join("herdr"), tree.path()));
+    match out {
+        gtasks::herdr::HerdrOutcome::Attached { tab_id, .. } => {
+            assert_eq!(tab_id, "w3:t9", "the old Space grows the tab");
+        }
+        gtasks::herdr::HerdrOutcome::Failed(reason) => panic!("start failed: {reason}"),
+    }
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        !calls.contains("workspace create"),
+        "no duplicate Space next to the legacy one: {calls}"
     );
 }
