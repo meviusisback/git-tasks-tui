@@ -864,3 +864,73 @@ fn the_view_carries_tabs_and_agent_to_the_screen() {
         view.agent
     );
 }
+
+#[test]
+fn switching_tabs_refreshes_the_agent_line() {
+    use gtasks::agent::{AgentRecord, AgentStatus};
+    let mut app = app_with_items();
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    app.tabs.push(Tab {
+        repo: "me/b".to_string(),
+        number: 2,
+    });
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            screen: Vec::new(),
+            scroll: 0,
+            record: Some(AgentRecord {
+                repo: "me/a".to_string(),
+                number: 1,
+                profile: "coder".to_string(),
+                agent: "hermes".to_string(),
+                worktree: std::path::PathBuf::from("/tmp/wt"),
+                seed_lines: 4,
+                status: AgentStatus::Running,
+            }),
+            dismissed_for: None,
+            context: None,
+            draft: None,
+        },
+    );
+    app.activate_tab(0);
+    assert!(
+        app.status.contains("agent hermes running on me/a#1"),
+        "the live tab names its agent: {}",
+        app.status
+    );
+    app.activate_tab(1);
+    assert!(
+        !app.status.contains("me/a#1"),
+        "the dead message does not stick to the new tab: {}",
+        app.status
+    );
+    assert!(
+        app.status.contains("from 2 repos") || app.status.contains("in me/"),
+        "back to the idle summary: {}",
+        app.status
+    );
+}
+
+#[test]
+fn switching_to_a_starting_agent_says_so() {
+    let mut app = app_with_items();
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    // Busy mark, no record yet: the Herdr thread has not answered.
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            ..Default::default()
+        },
+    );
+    app.activate_tab(0);
+    assert_eq!(app.status, "starting the agent…");
+}

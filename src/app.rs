@@ -1513,6 +1513,25 @@ impl App {
                     self.detail_requested = Some(key);
                 }
             }
+            // The status line names the live agent: refresh it on every
+            // switch, or a dead agent's message sticks to the new tab. No
+            // agent — back to the list summary, like everywhere else idle.
+            let live = self
+                .tab_agents
+                .get(&Self::tab_key(&tab.repo, tab.number))
+                .filter(|agent| agent.running);
+            match live {
+                Some(agent) => {
+                    self.status = match &agent.record {
+                        Some(record) => format!(
+                            "agent {} running on {}#{}",
+                            record.agent, record.repo, record.number
+                        ),
+                        None => "starting the agent…".to_string(),
+                    };
+                }
+                None => self.refresh_status(),
+            }
         }
     }
 
