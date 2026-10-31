@@ -172,7 +172,7 @@ fn the_menu_names_agent_live_and_issue() {
     app.remember_worktree_agent(&plan("omp"), &dead);
     // A running session in the live tree.
     app.tab_agents.insert(
-        ("o/r".to_string(), 7),
+        ("o/r".to_string(), 7, String::new()),
         gtasks::app::TabAgent {
             running: true,
             record: Some(gtasks::agent::AgentRecord {
@@ -227,7 +227,8 @@ fn tree_live_follows_running_records_only() {
         seed_lines: 0,
         status: AgentStatus::Running,
     });
-    app.tab_agents.insert(("o/r".to_string(), 7), agent);
+    app.tab_agents
+        .insert(("o/r".to_string(), 7, String::new()), agent);
     assert!(app.tree_live(&path), "the live tree is marked");
 }
 

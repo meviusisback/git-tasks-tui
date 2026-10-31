@@ -80,7 +80,8 @@ fn enter_in_the_list_opens_a_tab_and_the_detail_follows_it() {
 fn switching_tabs_jumps_across_a_filter() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // tab #1, pinned
-    // Narrow the list to me/b, then bookmark #2 as well.
+    // Narrow the list to me/b, then bookmark #2 as well. Drilling in
+    // lands on me/b's tab straight away.
     press(&mut app, Key::Esc); // back to the list
     press(&mut app, Key::Tab); // repos pane
     press(&mut app, Key::Down);
@@ -91,15 +92,21 @@ fn switching_tabs_jumps_across_a_filter() {
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
         Some(("me/b", 2))
     );
-    // Switch back: the detail jumps to the bookmark even though the
-    // list only shows me/b — and the repo selection is untouched.
+    // The strip only shows me/b's tab now — and `t` stays inside it.
+    assert_eq!(app.tab_infos().len(), 1, "only the repo's tab shows");
+    // Switch back: clear the filter first (Esc to the list, Esc to the
+    // repos pane, Esc on row 0), then `t` jumps across repos like before.
+    press(&mut app, Key::Esc); // back to the list
+    press(&mut app, Key::Esc); // back to the repos pane, filter kept
+    press(&mut app, Key::Esc); // row 0 clears the filter
+    assert_eq!(app.tab_infos().len(), 2, "all tabs show again");
     let cursor = app.repos_cursor;
     press(&mut app, Key::Char('t'));
     assert_eq!(app.active_tab, Some(0));
     assert_eq!(
         app.effective_item().map(|i| (i.repo.as_str(), i.number)),
         Some(("me/a", 1)),
-        "switching tabs jumps across the filter"
+        "switching tabs jumps across repos with no filter"
     );
     assert_eq!(app.repos_cursor, cursor, "the repo cursor stays");
     // Scrolling leaves the tab's detail alone: only another tab (or
@@ -119,10 +126,12 @@ fn the_active_tab_carries_a_background() {
     use ratatui::{Terminal, backend::TestBackend};
     let mut app = app_with_items();
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/b".to_string(),
         number: 2,
     });
@@ -338,10 +347,12 @@ fn t_cycles_tabs_forward_and_back() {
 fn activating_a_tab_keeps_the_repo_selection() {
     let mut app = app_with_items();
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/b".to_string(),
         number: 2,
     });
@@ -381,8 +392,10 @@ fn x_closes_the_tab_first_then_the_record() {
     // (not the record) first.
     press(&mut app, Key::Esc); // closing keeps the pane: back to the list
     press(&mut app, Key::Enter);
+    // The launch would have placed the bookmark on its tree.
+    app.tabs[0].tree = "/tmp/wt".to_string();
     app.tab_agents.insert(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, "/tmp/wt".to_string()),
         TabAgent {
             record: Some(AgentRecord {
                 repo: "me/a".to_string(),
@@ -558,7 +571,7 @@ fn the_agent_pane_shows_only_for_work_in_progress() {
     let mut app = app_with_items();
     assert!(!app.agent_active(), "idle: no pane");
     app.tab_agents = HashMap::from([(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             running: true,
             record: Some(AgentRecord {
@@ -575,7 +588,7 @@ fn the_agent_pane_shows_only_for_work_in_progress() {
     )]);
     assert!(app.agent_active(), "running: pane shows");
     app.tab_agents = HashMap::from([(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             record: Some(AgentRecord {
                 repo: "me/a".to_string(),
@@ -637,7 +650,7 @@ fn an_idle_tab_rents_no_agent_box() {
     press(&mut app, Key::Enter); // tab me/b#2, now active
     // An agent works in the other tab; the active one never ran.
     app.tab_agents.insert(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             running: true,
             ..Default::default()
@@ -674,7 +687,7 @@ fn the_detail_keeps_the_pr_while_its_agent_runs() {
     let mut app = app_with_items();
     press(&mut app, Key::Enter); // tab me/a#1, focus moves to the detail
     app.tab_agents.insert(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             running: true,
             record: Some(AgentRecord {
@@ -726,6 +739,7 @@ fn a_tab_without_its_issue_names_it_on_an_empty_list() {
     // nothing under the cursor the detail names it instead of a blank.
     app.items.clear();
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 11,
     });
@@ -805,7 +819,7 @@ fn the_live_agent_screen_reaches_the_box() {
     press(&mut app, Key::Enter);
     app.pane = gtasks::app::Pane::Agent;
     app.tab_agents.insert(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             running: true,
             screen: vec![vec![
@@ -870,15 +884,17 @@ fn switching_tabs_refreshes_the_agent_line() {
     use gtasks::agent::{AgentRecord, AgentStatus};
     let mut app = app_with_items();
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/b".to_string(),
         number: 2,
     });
     app.tab_agents.insert(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             running: true,
             screen: Vec::new(),
@@ -920,12 +936,13 @@ fn switching_tabs_refreshes_the_agent_line() {
 fn switching_to_a_starting_agent_says_so() {
     let mut app = app_with_items();
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
     // Busy mark, no record yet: the Herdr thread has not answered.
     app.tab_agents.insert(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             running: true,
             ..Default::default()
@@ -939,12 +956,13 @@ fn herdr_tab_with_binding(app: &mut App) {
     use gtasks::agent::{AgentRecord, AgentStatus};
     use gtasks::herdr::HerdrBinding;
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
     app.active_tab = Some(0);
     app.tab_agents.insert(
-        ("me/a".to_string(), 1),
+        ("me/a".to_string(), 1, String::new()),
         TabAgent {
             running: true,
             record: Some(AgentRecord {
@@ -996,13 +1014,14 @@ fn k_asks_before_stopping_the_herdr_agent() {
         .expect("the stop waits for the loop");
     assert_eq!(stop.tab_id, "w3:t9");
     assert_eq!(stop.tree, "/tmp/wt");
-    assert_eq!(stop.key, ("me/a".to_string(), 1));
+    assert_eq!(stop.key, ("me/a".to_string(), 1, String::new()));
 }
 
 #[test]
 fn k_without_a_binding_says_so() {
     let mut app = app_with_items();
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
@@ -1014,4 +1033,94 @@ fn k_without_a_binding_says_so() {
         "the status says so: {}",
         app.status
     );
+}
+
+fn placed_tab(app: &mut App, repo: &str, number: u64, tree: &str) {
+    app.tabs.push(Tab {
+        repo: repo.to_string(),
+        number,
+        tree: tree.to_string(),
+    });
+}
+
+#[test]
+fn two_trees_on_the_same_issue_are_two_tabs() {
+    let mut app = app_with_items();
+    placed_tab(&mut app, "me/a", 1, "/wt/a1");
+    placed_tab(&mut app, "me/a", 1, "/wt/a2");
+    for (tree, agent) in [("/wt/a1", "omp"), ("/wt/a2", "hermes")] {
+        app.tab_agents.insert(
+            ("me/a".to_string(), 1, tree.to_string()),
+            TabAgent {
+                running: true,
+                record: Some(gtasks::agent::AgentRecord {
+                    repo: "me/a".to_string(),
+                    number: 1,
+                    profile: "coder".to_string(),
+                    agent: agent.to_string(),
+                    worktree: std::path::PathBuf::from(tree),
+                    seed_lines: 1,
+                    status: gtasks::agent::AgentStatus::Running,
+                }),
+                ..Default::default()
+            },
+        );
+    }
+    app.active_tab = Some(0);
+    let labels: Vec<String> = app.tab_infos().into_iter().map(|i| i.label).collect();
+    assert_eq!(labels.len(), 2, "both trees show: {labels:?}");
+    assert!(
+        labels[0].contains("a1") && labels[0].contains("omp"),
+        "first tab names its tree and agent: {}",
+        labels[0]
+    );
+    assert!(
+        labels[1].contains("a2") && labels[1].contains("hermes"),
+        "second tab names its tree and agent: {}",
+        labels[1]
+    );
+    // Switching tabs switches boxes.
+    app.activate_tab(1);
+    assert_eq!(
+        app.active_key(),
+        Some(("me/a".to_string(), 1, "/wt/a2".to_string()))
+    );
+    assert!(
+        app.status.contains("agent hermes running on me/a#1"),
+        "the status follows the tab: {}",
+        app.status
+    );
+}
+
+#[test]
+fn the_strip_shows_only_the_filtered_repo() {
+    let mut app = app_with_items();
+    placed_tab(&mut app, "me/a", 1, "/wt/a");
+    placed_tab(&mut app, "me/b", 2, "/wt/b");
+    assert_eq!(app.tab_infos().len(), 2);
+    app.repo_filter =
+        gtasks::app::RepoFilter::One(gtasks::actions::RepoSlug::parse("me/a").expect("valid slug"));
+    let infos = app.tab_infos();
+    assert_eq!(infos.len(), 1, "only the repo's tab shows");
+    assert_eq!(infos[0].index, 0, "the click still lands on the real tab");
+    assert!(infos[0].label.contains('1'));
+    // Cycling stays inside the filter.
+    app.active_tab = Some(0);
+    app.next_tab();
+    assert_eq!(app.active_tab, Some(0), "nowhere else to go in this repo");
+}
+
+#[test]
+fn drilling_into_a_repo_lands_on_its_tab() {
+    let mut app = app_with_items();
+    placed_tab(&mut app, "me/b", 2, "/wt/b");
+    app.active_tab = None;
+    // Down to me/b (row 0 is All, the filter follows the cursor),
+    // drilled in with Enter.
+    app.pane = gtasks::app::Pane::Repos;
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Enter);
+    assert_eq!(app.pane, gtasks::app::Pane::List);
+    assert_eq!(app.active_tab, Some(0), "the repo's tab activates");
 }

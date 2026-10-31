@@ -13,8 +13,8 @@ disagree, the handler is right and this file is a bug.
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while the active tab's agent operates |
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
-| `Enter` | in the repos pane: drill into that repo's items; in the list: bookmark the row — open its tab, show it and move the focus right (the open tab owns the detail; without tabs the detail follows the list); in the search box: leave the box |
-| `t` / `T` | next / previous tab — the open tab owns the detail (its issue shows even across a repo filter, even closed) and its agent comes back below; scrolling never drags the detail off a tab. Never touches the repo selection on the left |
+| `Enter` | in the repos pane: drill into that repo's items (the strip narrows to that repo's tabs and lands on its first one); in the list: bookmark the row — open its tab, show it and move the focus right (the open tab owns the detail; without tabs the detail follows the list); in the search box: leave the box |
+| `t` / `T` | next / previous tab among the shown ones — with a repo drilled in, only that repo's tabs cycle. The open tab owns the detail (its issue shows even across a repo filter, even closed) and its agent comes back below; scrolling never drags the detail off a tab. Never touches the repo selection on the left |
 | `x` / `X` | close the active tab first, then the agent record |
 | `K` | stop the active tab's Herdr agent Herdr-side (asks first; the tab stays open, the next launch starts fresh) |
 | `w` | focus the agent pane (worktree + agent instructions live there) |

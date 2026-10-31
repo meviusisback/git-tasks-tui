@@ -507,7 +507,7 @@ fn the_detail_names_the_open_trees_and_who_ran_there() {
 
     // A live session in that tree marks it running.
     app.tab_agents.insert(
-        ("o/r".to_string(), 7),
+        ("o/r".to_string(), 7, path.display().to_string()),
         gtasks::app::TabAgent {
             running: true,
             record: Some(AgentRecord {
@@ -982,6 +982,7 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
     let (mut app, tmp) = pr_app();
     plant_worktree(&tmp.path().join("wt"), "fix-foo");
     app.tabs.push(gtasks::app::Tab {
+        tree: String::new(),
         repo: "o/r".to_string(),
         number: 7,
     });
@@ -992,25 +993,25 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
         gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
         gtasks::actions::RepoSlug::parse("o/other").expect("valid slug"),
     ]);
-    // Cursor onto o/other through keys, like a user: the filter follows.
+    // Cursor onto o/other through keys, like a user: the filter follows,
+    // and the strip narrows to that repo's tabs — the o/r tab hides.
     app.pane = gtasks::app::Pane::Repos;
     app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     with_plain_icons(|| {
         let screen = render_200x30(&app);
-        // Three: the detail title (the tab owns the detail even though the
-        // filter hides its row), the worktrees box row, and the tabs
-        // strip — so a fourth would mean a leak.
+        // Two: the detail title (the tab owns the detail even though the
+        // filter hides its row) and the worktrees box row — the tabs
+        // strip shows only o/other's tabs, so a third would mean a leak.
         assert_eq!(
             screen.matches("◉").count(),
-            3,
-            "marker in detail + worktrees row + tabs: {screen}"
+            2,
+            "marker in detail + worktrees row, no tab marker: {screen}"
         );
         assert!(screen.contains("◉  #7"), "marker, gap, number: {screen}");
         assert!(screen.contains("fix-foo"), "the tree shows: {screen}");
     });
     // And the strip knows it structurally, not just visually.
     let infos = app.tab_infos();
-    assert_eq!(infos.len(), 1);
-    assert!(infos[0].has_worktree);
+    assert!(infos.is_empty(), "the o/r tab hides under o/other");
 }
