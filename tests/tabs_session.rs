@@ -1124,3 +1124,51 @@ fn drilling_into_a_repo_lands_on_its_tab() {
     assert_eq!(app.pane, gtasks::app::Pane::List);
     assert_eq!(app.active_tab, Some(0), "the repo's tab activates");
 }
+
+#[test]
+fn moving_to_an_empty_repo_never_shows_another_repos_issue() {
+    // The screenshot: #1's tab open on me/a, cursor moved down to me/b.
+    // The hidden tab must not own the detail from off-screen — the
+    // filter's first tab (none here) takes over.
+    let mut app = app_with_items();
+    placed_tab(&mut app, "me/a", 1, "/wt/a1");
+    app.active_tab = Some(0);
+    // Empty me/b out, like the screenshot's repo with zero rows.
+    app.items.retain(|i| i.repo != "me/b");
+    // Down to me/a, down to me/b (row 0 is All): the filter follows.
+    app.pane = gtasks::app::Pane::Repos;
+    press(&mut app, Key::Down);
+    press(&mut app, Key::Down);
+    assert_eq!(app.active_tab, None, "no tab of me/b: none active");
+    assert!(
+        app.effective_item().is_none(),
+        "the detail must go blank, not linger on #1"
+    );
+    assert!(app.tab_infos().is_empty());
+    // And back up: me/a's tab takes over again by itself.
+    press(&mut app, Key::Up);
+    assert_eq!(app.active_tab, Some(0));
+    assert_eq!(
+        app.effective_item().map(|i| i.number),
+        Some(1),
+        "back on me/a, its tab owns the detail again"
+    );
+}
+
+#[test]
+fn closing_names_the_tab_you_land_on() {
+    let mut app = app_with_items();
+    placed_tab(&mut app, "me/a", 1, "/wt/a1");
+    placed_tab(&mut app, "me/b", 2, "/wt/b");
+    app.active_tab = Some(1);
+    // Drilled into me/a: closing the hidden #2 lands on #1, and says so.
+    app.repo_filter =
+        gtasks::app::RepoFilter::One(gtasks::actions::RepoSlug::parse("me/a").expect("valid slug"));
+    app.close_tab_or_record();
+    assert_eq!(app.active_tab, Some(0));
+    assert!(
+        app.status.starts_with("closed tab — now on #1"),
+        "status names the landing tab: {}",
+        app.status
+    );
+}
