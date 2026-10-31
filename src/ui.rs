@@ -875,9 +875,13 @@ pub fn worktrees_box_rect(detail_area: Rect, view: &ViewModel) -> Option<Rect> {
 }
 
 /// One head line per tree, without the marker glyph (it leads the box
-/// rows at render time): `branch · agent · running`.
+/// rows at render time): `branch · agent · running`. A drifted tree shows
+/// the branch it really sits on, flagged as not the item's branch.
 fn tree_head_text(tree: &crate::app::ItemTree) -> String {
     let mut head = tree.branch.clone();
+    if tree.drifted {
+        head.push_str(" · not the item's branch");
+    }
     match &tree.agent {
         Some(agent) => head.push_str(&format!(" · {agent}")),
         None => head.push_str(" · no agent yet"),

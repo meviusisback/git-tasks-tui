@@ -638,6 +638,10 @@ pub struct ItemTree {
     pub path: std::path::PathBuf,
     pub agent: Option<String>,
     pub live: bool,
+    /// The tree sits on another branch than the item asked for (renamed
+    /// outside the app, like the PR 10 tree): the list marker points at
+    /// the directory, the box names the drift instead of going silent.
+    pub drifted: bool,
 }
 
 /// One tab's agent side: the screen the box renders, whether its session
@@ -2853,9 +2857,34 @@ impl App {
                     path,
                     agent,
                     live,
+                    drifted: false,
                 }
             })
             .collect();
+        // A directory at the expected path with a `.git` entry, but on
+        // another branch (or unreadable): the list marker already points
+        // at it, so the box names the drift instead of showing nothing —
+        // the tree exists, it just is not on the asked branch.
+        if let Ok(expected) =
+            crate::worktree::resolve_in(root, std::path::Path::new(""), &slug, &want)
+            && std::fs::symlink_metadata(expected.join(".git")).is_ok()
+            && !out.iter().any(|tree| tree.path == expected)
+        {
+            let branch = crate::worktree::worktree_branch(&expected)
+                .map(|found| found.as_str().to_string())
+                .unwrap_or_else(|| "unknown branch".to_string());
+            let agent = self
+                .last_agents
+                .get(&expected.display().to_string())
+                .map(|last| last.agent.clone());
+            out.push(ItemTree {
+                branch,
+                path: expected,
+                agent,
+                live: false,
+                drifted: true,
+            });
+        }
         out.sort_by(|a, b| a.branch.cmp(&b.branch).then(a.path.cmp(&b.path)));
         out
     }

@@ -613,6 +613,33 @@ fn open_prs_with_changes_requested_show_a_red_cr() {
 }
 
 #[test]
+fn a_tree_on_another_branch_is_named_not_hidden() {
+    let (app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    plant_worktree(&root, "fix-foo");
+    // The tree drifted: renamed outside the app, like the PR 10 tree.
+    let gitdir = root.join("gitdir-").join("fix-foo");
+    std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/other-branch\n").unwrap();
+    // The list marker still points at the directory that exists.
+    assert!(
+        app.has_worktree("o/r", Some("fix-foo")),
+        "the directory is there, the marker shows"
+    );
+    // The box names the drift instead of going silent.
+    let trees = app.item_trees("o/r", "fix-foo");
+    assert_eq!(trees.len(), 1, "one drifted tree: {trees:?}");
+    assert!(trees[0].drifted);
+    assert_eq!(trees[0].branch, "other-branch");
+    assert!(
+        gtasks::ui::view_for(&app)
+            .trees
+            .iter()
+            .any(|tree| tree.drifted),
+        "the detail box carries it"
+    );
+}
+
+#[test]
 fn the_close_mark_closes_instead_of_switching() {
     use gtasks::ui::{tab_at, tab_close_at, tabs_row};
     let (mut app, _tmp) = pr_app();
