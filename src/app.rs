@@ -158,6 +158,16 @@ pub struct PendingAction {
     pub argv: CheckedArgv,
 }
 
+/// What the loop closes Herdr-side on `y` to the `K` question: the Herdr
+/// tab, the local shadow key, and the reattach binding's tree.
+#[derive(Debug, Clone)]
+pub struct HerdrStop {
+    pub tab_id: String,
+    pub key: (String, u64),
+    pub tree: String,
+    pub name: String,
+}
+
 /// What `y` will run when the confirmation dialog is open. One dialog, one
 /// pending — an action and an agent launch can never wait together, so the
 /// key that confirms cannot run the wrong one.
@@ -192,6 +202,19 @@ pub enum Pending {
     /// new-branch flow for that repo instead of an empty list.
     NewBranch {
         repo: String,
+    },
+    /// `K` on a tab with a Herdr agent, confirmed with `y`: the loop
+    /// closes the Herdr-side tab and forgets the binding, so the next
+    /// launch starts fresh instead of reattaching to a dead tab.
+    StopHerdr {
+        /// Herdr tab id to close.
+        tab_id: String,
+        /// The tab's key, to drop the local shadow.
+        key: (String, u64),
+        /// The tree path, to drop the reattach binding.
+        tree: String,
+        /// For the status line.
+        name: String,
     },
 }
 
@@ -621,6 +644,7 @@ pub struct App {
     pub rename_go: Option<crate::worktree::WorktreeRename>,
     /// `y` on the delete question, consumed by the loop.
     pub delete_go: Option<crate::worktree::WorktreeDelete>,
+    pub stop_herdr_go: Option<HerdrStop>,
     /// Set by `y` on the merge cleanup question, consumed by the loop: the
     /// merged PR's local trees plus its head branch.
     pub cleanup_go: Option<crate::worktree::CleanupOrder>,
@@ -740,6 +764,7 @@ impl Default for App {
             agent_place: None,
             rename_go: None,
             delete_go: None,
+            stop_herdr_go: None,
             cleanup_go: None,
             clone_go: None,
             worktree_root: None,
@@ -1485,6 +1510,25 @@ impl App {
                 {
                     self.detail_requested = Some(key);
                 }
+            }
+            // The status line names the live agent: refresh it on every
+            // switch, or a dead agent's message sticks to the new tab. No
+            // agent — back to the list summary, like everywhere else idle.
+            let live = self
+                .tab_agents
+                .get(&Self::tab_key(&tab.repo, tab.number))
+                .filter(|agent| agent.running);
+            match live {
+                Some(agent) => {
+                    self.status = match &agent.record {
+                        Some(record) => format!(
+                            "agent {} running on {}#{}",
+                            record.agent, record.repo, record.number
+                        ),
+                        None => "starting the agent…".to_string(),
+                    };
+                }
+                None => self.refresh_status(),
             }
         }
     }
@@ -3055,6 +3099,54 @@ impl App {
         self.close_agent_record();
     }
 
+    /// `K`: stop the active tab's Herdr agent Herdr-side, after a
+    /// question. The tab stays open (this is not `x`): the Herdr tab
+    /// closes, and the local shadow plus the reattach binding go with it,
+    /// so the next launch starts fresh. Without a Herdr binding there is
+    /// nothing Herdr-side to stop.
+    pub fn ask_stop_herdr(&mut self) {
+        let Some(idx) = self.active_tab else {
+            self.status = "no tabs — Enter opens one".to_string();
+            return;
+        };
+        let Some(tab) = self.tabs.get(idx).cloned() else {
+            self.status = "no tabs — Enter opens one".to_string();
+            return;
+        };
+        let key = Self::tab_key(&tab.repo, tab.number);
+        let tree = self
+            .tab_agents
+            .get(&key)
+            .and_then(|agent| agent.record.as_ref())
+            .map(|record| record.worktree.display().to_string());
+        let binding = tree
+            .as_deref()
+            .and_then(|tree| self.herdr_bindings.get(tree));
+        match (binding, tree) {
+            (Some(binding), Some(tree)) => {
+                self.pending = Some(Pending::StopHerdr {
+                    tab_id: binding.tab_id.clone(),
+                    key,
+                    tree,
+                    name: binding.name.clone(),
+                });
+                self.modal = Some(Modal::Confirm(format!(
+                    "stop the Herdr agent {}? (y = stop it · n = keep it running)",
+                    binding.name
+                )));
+            }
+            _ => {
+                let running = self.tab_agents.get(&key).is_some_and(|a| a.running);
+                self.status = if running {
+                    "the agent here runs direct, not on Herdr — x closes it with the tab"
+                        .to_string()
+                } else {
+                    "no Herdr agent in this tab".to_string()
+                };
+            }
+        }
+    }
+
     /// The kind of `(repo, number)` on the current list, for body fetches:
     /// issues need `gh issue view`, PRs need `gh pr view`. The detail
     /// request only carries repo+number, so the kind is read back here —
@@ -3487,6 +3579,22 @@ impl App {
                         Some(Pending::Delete(order)) => {
                             self.delete_go = Some(order);
                         }
+                        // Stopping a Herdr agent is a write too (to the
+                        // Herdr daemon, via the loop): `y` moves the
+                        // agreed stop there.
+                        Some(Pending::StopHerdr {
+                            tab_id,
+                            key,
+                            tree,
+                            name,
+                        }) => {
+                            self.stop_herdr_go = Some(HerdrStop {
+                                tab_id,
+                                key,
+                                tree,
+                                name,
+                            });
+                        }
                         // A clone is a write too (network, minutes): `y`
                         // moves the agreed repo+directory there; the loop
                         // clones in a thread and continues the flow that
@@ -3580,6 +3688,11 @@ impl App {
             // `x`/`X` close the active tab first, then the agent record.
             // Tabs are the newest layer; without tabs this is the old `x`.
             Key::Char('x') | Key::Char('X') => self.close_tab_or_record(),
+            // `K` stops the active tab's Herdr agent Herdr-side: the tab
+            // stays, the agent dies, and the binding is forgotten so the
+            // next launch starts fresh. A direct agent needs no key —
+            // `x` already kills it with its tab.
+            Key::Char('K') => self.ask_stop_herdr(),
             // `t`/`T` cycle tabs, like a browser. Without tabs it says so
             // instead of staying silent.
             Key::Char('t') => {

@@ -363,6 +363,29 @@ fn rename_worktree(
     }
 }
 
+/// Stop a Herdr agent from a confirmed `K`: close its Herdr-side tab and
+/// forget the local shadow plus the reattach binding, so the next launch
+/// starts fresh. The gtasks tab stays open — this is not `x`.
+fn stop_herdr_agent(app: &mut App, binaries: &Binaries, stop: gtasks::app::HerdrStop) {
+    let Some(herdr) = binaries.herdr.clone() else {
+        app.status = "the herdr CLI is missing".to_string();
+        return;
+    };
+    // The daemon owns the agent: closing its tab kills the process. The
+    // local shadow and the reattach binding die with it, so the next
+    // launch starts fresh instead of attaching to a corpse.
+    match gtasks::herdr::tab_close(&herdr, std::path::Path::new(&stop.tree), &stop.tab_id) {
+        Ok(()) => {
+            app.herdr_bindings.remove(&stop.tree);
+            app.tab_agents.remove(&stop.key);
+            app.status = format!("Herdr agent {} stopped", stop.name);
+        }
+        Err(err) => {
+            app.status = format!("could not stop the Herdr agent: {err:#}");
+        }
+    }
+}
+
 /// Delete a worktree from a confirmed order. The branch is kept on purpose.
 /// Refused while a live session works inside; a finished record for the
 /// tree is cleared, so no card points at a deleted directory.
@@ -1845,6 +1868,10 @@ fn run_tui() -> anyhow::Result<()> {
         if let Some(order) = app.delete_go.take() {
             needs_draw = true;
             delete_worktree(&mut app, &binaries, order, &sessions);
+        }
+        if let Some(stop) = app.stop_herdr_go.take() {
+            needs_draw = true;
+            stop_herdr_agent(&mut app, &binaries, stop);
         }
         if let Some(order) = app.cleanup_go.take() {
             needs_draw = true;

@@ -16,6 +16,7 @@ disagree, the handler is right and this file is a bug.
 | `Enter` | in the repos pane: drill into that repo's items; in the list: bookmark the row — open its tab, show it and move the focus right (the open tab owns the detail; without tabs the detail follows the list); in the search box: leave the box |
 | `t` / `T` | next / previous tab — the open tab owns the detail (its issue shows even across a repo filter, even closed) and its agent comes back below; scrolling never drags the detail off a tab. Never touches the repo selection on the left |
 | `x` / `X` | close the active tab first, then the agent record |
+| `K` | stop the active tab's Herdr agent Herdr-side (asks first; the tab stays open, the next launch starts fresh) |
 | `w` | focus the agent pane (worktree + agent instructions live there) |
 | `R` | repo selection menu (the rows re-read from GitHub on open, so new repos join without a restart): `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |

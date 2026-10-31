@@ -864,3 +864,150 @@ fn the_view_carries_tabs_and_agent_to_the_screen() {
         view.agent
     );
 }
+
+#[test]
+fn switching_tabs_refreshes_the_agent_line() {
+    use gtasks::agent::{AgentRecord, AgentStatus};
+    let mut app = app_with_items();
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    app.tabs.push(Tab {
+        repo: "me/b".to_string(),
+        number: 2,
+    });
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            screen: Vec::new(),
+            scroll: 0,
+            record: Some(AgentRecord {
+                repo: "me/a".to_string(),
+                number: 1,
+                profile: "coder".to_string(),
+                agent: "hermes".to_string(),
+                worktree: std::path::PathBuf::from("/tmp/wt"),
+                seed_lines: 4,
+                status: AgentStatus::Running,
+            }),
+            dismissed_for: None,
+            context: None,
+            draft: None,
+        },
+    );
+    app.activate_tab(0);
+    assert!(
+        app.status.contains("agent hermes running on me/a#1"),
+        "the live tab names its agent: {}",
+        app.status
+    );
+    app.activate_tab(1);
+    assert!(
+        !app.status.contains("me/a#1"),
+        "the dead message does not stick to the new tab: {}",
+        app.status
+    );
+    assert!(
+        app.status.contains("from 2 repos") || app.status.contains("in me/"),
+        "back to the idle summary: {}",
+        app.status
+    );
+}
+
+#[test]
+fn switching_to_a_starting_agent_says_so() {
+    let mut app = app_with_items();
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    // Busy mark, no record yet: the Herdr thread has not answered.
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            ..Default::default()
+        },
+    );
+    app.activate_tab(0);
+    assert_eq!(app.status, "starting the agent…");
+}
+
+fn herdr_tab_with_binding(app: &mut App) {
+    use gtasks::agent::{AgentRecord, AgentStatus};
+    use gtasks::herdr::HerdrBinding;
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    app.active_tab = Some(0);
+    app.tab_agents.insert(
+        ("me/a".to_string(), 1),
+        TabAgent {
+            running: true,
+            record: Some(AgentRecord {
+                repo: "me/a".to_string(),
+                number: 1,
+                profile: "coder".to_string(),
+                agent: "hermes".to_string(),
+                worktree: std::path::PathBuf::from("/tmp/wt"),
+                seed_lines: 4,
+                status: AgentStatus::Running,
+            }),
+            ..Default::default()
+        },
+    );
+    app.herdr_bindings.insert(
+        "/tmp/wt".to_string(),
+        HerdrBinding {
+            name: "g-a-1-hermes".to_string(),
+            tab_id: "w3:t9".to_string(),
+            pane_id: "w3:p9".to_string(),
+        },
+    );
+}
+
+#[test]
+fn k_asks_before_stopping_the_herdr_agent() {
+    use gtasks::app::Modal;
+    let mut app = app_with_items();
+    herdr_tab_with_binding(&mut app);
+    press(&mut app, Key::Char('K'));
+    match &app.modal {
+        Some(Modal::Confirm(question)) => assert!(
+            question.contains("g-a-1-hermes"),
+            "the question names the agent: {question}"
+        ),
+        other => panic!("K must ask first, got: {other:?}"),
+    }
+    // `y` does not stop anything itself — it hands the agreed stop to the
+    // loop, which owns the Herdr CLI call.
+    press(&mut app, Key::Char('y'));
+    assert!(app.modal.is_none());
+    let stop = app
+        .stop_herdr_go
+        .as_ref()
+        .expect("the stop waits for the loop");
+    assert_eq!(stop.tab_id, "w3:t9");
+    assert_eq!(stop.tree, "/tmp/wt");
+    assert_eq!(stop.key, ("me/a".to_string(), 1));
+}
+
+#[test]
+fn k_without_a_binding_says_so() {
+    let mut app = app_with_items();
+    app.tabs.push(Tab {
+        repo: "me/a".to_string(),
+        number: 1,
+    });
+    app.active_tab = Some(0);
+    press(&mut app, Key::Char('K'));
+    assert!(app.modal.is_none(), "nothing to confirm without a binding");
+    assert!(
+        app.status.contains("no Herdr agent"),
+        "the status says so: {}",
+        app.status
+    );
+}
