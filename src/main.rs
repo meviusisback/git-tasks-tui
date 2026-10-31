@@ -735,6 +735,7 @@ fn start_herdr_launch(
         name,
         kind: plan.agent.id.name().to_string(),
         agent_args,
+        repo: plan.repo.clone(),
         tree: tree.clone(),
         label: format!("{}#{} {}", plan.repo, plan.number, plan.agent.id.name()),
         binding: app.herdr_bindings.get(&tree.display().to_string()).cloned(),
@@ -1836,6 +1837,49 @@ fn run_tui() -> anyhow::Result<()> {
                 timeout,
                 &mut herdr_pending,
             );
+        }
+        // A dedicated branch agreed in the name prompt: cut it in the
+        // tree, then continue the launch (preset agent launches there,
+        // otherwise the agent menu opens for that tree). A taken name
+        // fails here with the reason on screen — nothing launches
+        // half-placed on the default branch.
+        if let Some((mut plan, path, branch, preset)) = app.branch_go.take() {
+            needs_draw = true;
+            match gtasks::worktree::BranchName::parse(&branch) {
+                Ok(name) => {
+                    let argv = gtasks::worktree::checkout_new_branch_argv(&binaries, &path, &name);
+                    match gtasks::worktree::run_mutation(&argv, timeout) {
+                        Ok(out) if out.status.success() => {
+                            plan.branch = name.as_str().to_string();
+                            match preset {
+                                Some(agent) => {
+                                    plan.agent = agent;
+                                    start_placed(
+                                        &mut app,
+                                        plan,
+                                        path,
+                                        term_size,
+                                        &mut sessions,
+                                        &binaries,
+                                        timeout,
+                                        &mut herdr_pending,
+                                    );
+                                }
+                                None => app.offer_agent_for_tree(plan, path),
+                            }
+                        }
+                        _ => {
+                            app.status = format!(
+                                "cannot create branch {branch} in {} — working on the default branch stays an explicit n",
+                                path.display()
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    app.status = format!("bad branch name: {err:#}");
+                }
+            }
         }
         if let Some(order) = app.rename_go.take() {
             needs_draw = true;

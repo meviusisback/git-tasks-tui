@@ -1691,6 +1691,9 @@ fn draw_name_input(frame: &mut Frame, area: Rect, input: &crate::app::NameInput)
         crate::app::NamePurpose::Create { .. } => {
             " name the worktree — Enter confirm · Esc cancel "
         }
+        crate::app::NamePurpose::BranchOut { .. } => {
+            " name the dedicated branch — Enter confirm · Esc cancel "
+        }
         crate::app::NamePurpose::Rename { .. } => {
             " rename the worktree — Enter confirm · Esc cancel "
         }

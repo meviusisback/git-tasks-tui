@@ -193,6 +193,15 @@ pub enum Pending {
     NewBranch {
         repo: String,
     },
+    /// `Enter` on a tree sitting on the clone's default branch, confirmed
+    /// with `y`: name the dedicated branch, then the loop cuts it there and
+    /// launches.
+    BranchOut {
+        plan: AgentPlan,
+        path: std::path::PathBuf,
+        preset: Option<crate::agent::AgentChoice>,
+        suggestion: String,
+    },
 }
 
 /// Everything that can change the state.
@@ -352,6 +361,14 @@ pub enum NamePurpose {
     Create {
         agent: Option<crate::agent::AgentChoice>,
         plan: AgentPlan,
+    },
+    /// Name the dedicated branch for a tree sitting on the default branch:
+    /// confirming queues the cut, then the launch continues (preset agent
+    /// launches there, otherwise the agent menu opens for that tree).
+    BranchOut {
+        plan: AgentPlan,
+        path: std::path::PathBuf,
+        preset: Option<crate::agent::AgentChoice>,
     },
     Rename {
         order: RenameDraft,
@@ -629,6 +646,15 @@ pub struct App {
     /// continue when it lands. The loop clones in a thread (network can
     /// take minutes) and continues the flow that asked when done.
     pub clone_go: Option<(String, std::path::PathBuf, CloneThen)>,
+    /// Set by `y` on the dedicated-branch question, consumed by the loop:
+    /// cut the branch in the tree, then continue the launch (preset agent
+    /// launches there, otherwise the agent menu opens for that tree).
+    pub branch_go: Option<(
+        AgentPlan,
+        std::path::PathBuf,
+        String,
+        Option<crate::agent::AgentChoice>,
+    )>,
     /// Where worktrees live (configured root, or the default). The list
     /// icons and the worktree picker read it; `None` (unresolvable home)
     /// means no icons, and the picker explains instead of guessing.
@@ -742,6 +768,7 @@ impl Default for App {
             delete_go: None,
             cleanup_go: None,
             clone_go: None,
+            branch_go: None,
             worktree_root: None,
             detail: String::new(),
             detail_for: None,
@@ -1855,6 +1882,31 @@ impl App {
         }
     }
 
+    /// The clone's default branch through the app's binaries, if the clone
+    /// names one. Reads are local and instant; a missing remote just means
+    /// no question.
+    fn default_branch_of(&self, clone: &std::path::Path) -> Option<String> {
+        let binaries = self.binaries.as_ref()?;
+        crate::worktree::default_branch(binaries, clone, std::time::Duration::from_secs(10))
+    }
+
+    /// Open the agent menu with a tree preset: the `W`-flow continuation
+    /// after a row is picked and no agent was chosen yet. Also the loop's
+    /// continuation after it cuts a dedicated branch.
+    pub fn offer_agent_for_tree(&mut self, plan: AgentPlan, path: std::path::PathBuf) {
+        let rows = self.agent_choices();
+        if rows.is_empty() {
+            self.status = "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
+        } else {
+            self.modal = Some(Modal::AgentMenu(AgentMenu {
+                rows,
+                cursor: 0,
+                plan,
+                place: Some(path),
+            }));
+        }
+    }
+
     /// `Enter` on a worktree row: work on it. Inside the `g` flow the agent
     /// is already picked and the loop launches on the row's path; opened
     /// directly with `W`, the agent menu comes first with the tree preset.
@@ -1913,6 +1965,41 @@ impl App {
                     }
                 }
             }
+            // The tree sits on the clone's default branch: working here
+            // would commit straight onto it. Offer a dedicated branch
+            // first — `y` names it (the item's branch suggested), `n`
+            // works on the default branch as asked.
+            if let Some(default) = self.default_branch_of(&menu.plan.clone) {
+                if row.branch.as_str() == default {
+                    let suggestion = if menu.plan.branch != row.branch.as_str()
+                        && crate::worktree::BranchName::parse(&menu.plan.branch).is_ok()
+                    {
+                        menu.plan.branch.clone()
+                    } else {
+                        let short = menu
+                            .plan
+                            .repo
+                            .split('/')
+                            .next_back()
+                            .unwrap_or(&menu.plan.repo);
+                        format!("{short}-dev")
+                    };
+                    let question = format!(
+                        "tree {} is on {} (the default branch) — create a dedicated branch here? (y = name it · n = work on {} anyway)",
+                        row.path.display(),
+                        default,
+                        default
+                    );
+                    self.modal = Some(Modal::Confirm(question));
+                    self.pending = Some(Pending::BranchOut {
+                        plan: menu.plan,
+                        path: row.path,
+                        preset: menu.agent,
+                        suggestion,
+                    });
+                    return;
+                }
+            }
             match menu.agent {
                 Some(agent) => {
                     let mut plan = menu.plan;
@@ -1921,21 +2008,10 @@ impl App {
                     self.agent_place = Some((plan, row.path));
                 }
                 None => {
-                    let rows = self.agent_choices();
-                    if rows.is_empty() {
-                        self.status =
-                            "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
-                        return;
-                    }
                     let mut plan = menu.plan;
                     plan.branch = row.branch.as_str().to_string();
                     let place = row.path;
-                    self.modal = Some(Modal::AgentMenu(AgentMenu {
-                        rows,
-                        cursor: 0,
-                        plan,
-                        place: Some(place),
-                    }));
+                    self.offer_agent_for_tree(plan, place);
                 }
             }
         }
@@ -2076,6 +2152,21 @@ impl App {
                         self.status = format!("bad worktree name: {err:#}");
                         self.modal = Some(Modal::NameInput(NameInput {
                             purpose: NamePurpose::Create { agent, plan },
+                            value: input.value,
+                        }));
+                    }
+                }
+            }
+            NamePurpose::BranchOut { plan, path, preset } => {
+                let name = input.value.trim();
+                match crate::worktree::BranchName::parse(name) {
+                    Ok(branch) => {
+                        self.branch_go = Some((plan, path, branch.as_str().to_string(), preset));
+                    }
+                    Err(err) => {
+                        self.status = format!("bad branch name: {err:#}");
+                        self.modal = Some(Modal::NameInput(NameInput {
+                            purpose: NamePurpose::BranchOut { plan, path, preset },
                             value: input.value,
                         }));
                     }
@@ -3427,6 +3518,19 @@ impl App {
                                     }
                                 }
                             },
+                            Pending::BranchOut {
+                                plan,
+                                path,
+                                preset,
+                                suggestion: _,
+                            } => match preset {
+                                Some(agent) => {
+                                    let mut plan = plan;
+                                    plan.agent = agent;
+                                    self.agent_place = Some((plan, path));
+                                }
+                                None => self.offer_agent_for_tree(plan, path),
+                            },
                             other => self.pending = Some(other),
                         }
                     }
@@ -3499,6 +3603,21 @@ impl App {
                         // still asks before anything touches the disk.
                         Some(Pending::NewBranch { repo }) => {
                             self.open_repo_worktree_for(&repo);
+                        }
+                        // A dedicated branch for a default-branch tree: `y`
+                        // names it (editable suggestion), `n` works on the
+                        // default branch as asked — the question was the
+                        // protection, not a refusal.
+                        Some(Pending::BranchOut {
+                            plan,
+                            path,
+                            preset,
+                            suggestion,
+                        }) => {
+                            self.modal = Some(Modal::NameInput(NameInput {
+                                value: suggestion,
+                                purpose: NamePurpose::BranchOut { plan, path, preset },
+                            }));
                         }
                         // Nothing was asked: never claim success for it.
                         None => self.status = "nothing to run".into(),
