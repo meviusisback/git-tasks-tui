@@ -745,7 +745,10 @@ fn start_herdr_launch(
     });
     // Busy until the attach lands: `g` refuses onto a running agent, and
     // without this mark the still-empty tab would accept a second launch.
+    // The tab itself is created now, not at attach: otherwise the poll
+    // mistakes every fresh launch for a tab closed mid-start.
     let key = App::tab_key(&plan.repo, plan.number);
+    ensure_tab(app, plan);
     let entry = app.tab_agents.entry(key).or_default();
     entry.running = true;
     entry.context = Some(gtasks::app::AgentContext {
@@ -931,23 +934,11 @@ fn launch_direct_after_herdr(
     app.agent_backend = gtasks::config::AgentBackend::Herdr;
 }
 
-/// File a freshly spawned box session under its tab: tabs, screen, record,
-/// context, draft and status. Shared by the direct spawn and the Herdr
-/// attach — after spawning both are just a pty child in a tab.
-#[allow(clippy::too_many_arguments)]
-fn finish_launch(
-    app: &mut App,
-    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
-    plan: &AgentPlan,
-    path: &Path,
-    sess: EmbeddedSession,
-    seed_lines: usize,
-    draft: Option<String>,
-    status: String,
-) {
-    let key = App::tab_key(&plan.repo, plan.number);
-    // The agent lives in its item's tab: ensure the tab, show it, and
-    // file this session under it. Other tabs keep running.
+/// The agent lives in its item's tab: ensure the tab and show it. The box
+/// session itself is filed later (direct) or at attach (Herdr) — the tab
+/// must already exist while Herdr starts, or the poll mistakes a fresh
+/// launch for a tab closed mid-start and drops the session.
+fn ensure_tab(app: &mut App, plan: &AgentPlan) {
     if !app
         .tabs
         .iter()
@@ -965,6 +956,24 @@ fn finish_launch(
     {
         app.activate_tab(idx);
     }
+}
+
+/// File a freshly spawned box session under its tab: tabs, screen, record,
+/// context, draft and status. Shared by the direct spawn and the Herdr
+/// attach — after spawning both are just a pty child in a tab.
+#[allow(clippy::too_many_arguments)]
+fn finish_launch(
+    app: &mut App,
+    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    plan: &AgentPlan,
+    path: &Path,
+    sess: EmbeddedSession,
+    seed_lines: usize,
+    draft: Option<String>,
+    status: String,
+) {
+    let key = App::tab_key(&plan.repo, plan.number);
+    ensure_tab(app, plan);
     let screen = sess.snapshot();
     let entry = app.tab_agents.entry(key.clone()).or_default();
     entry.running = true;
@@ -1713,7 +1722,12 @@ fn run_tui() -> anyhow::Result<()> {
                     .any(|i| &i.repo == repo && i.number == *number)
         });
         if let Some((repo, number)) = want_item {
-            if !have_item
+            // Number 0 is a repo-level tree, not a GitHub item: `gh issue
+            // view 0` and `gh pr view 0` can only fail, so asking every
+            // tick just paints an error on a healthy tab. The detail falls
+            // back to the tree context on its own.
+            if number > 0
+                && !have_item
                 && item_pending.is_none()
                 && app.item_requested != Some((repo.clone(), number))
             {
