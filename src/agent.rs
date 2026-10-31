@@ -696,6 +696,85 @@ pub fn owns_tree(pid: u32, tree: &str) -> bool {
     }
 }
 
+/// Basenames we launch: argv[0] of a direct agent is one of these, or one
+/// of these plus `-sandboxed` for the wrapped form.
+pub fn agent_program_name(base: &str) -> Option<&'static str> {
+    const NAMES: [&str; 5] = ["hermes", "pi", "omp", "opencode", "agy"];
+    NAMES.iter().find_map(|name| {
+        if base == *name || base.starts_with(&format!("{name}-")) {
+            Some(*name)
+        } else {
+            None
+        }
+    })
+}
+
+/// Does this NUL-separated command line belong to one of our agents
+/// working in `tree`? Pure matching, so tests pin it without processes.
+/// Returns the agent name for the record.
+pub fn match_orphan_cmdline(cmdline: &str, tree: &str) -> Option<&'static str> {
+    let argv0 = cmdline.split('\0').next().unwrap_or("");
+    let base = argv0.rsplit('/').next().unwrap_or(argv0);
+    let agent = agent_program_name(base)?;
+    if cmdline.replace('\0', " ").contains(tree) {
+        Some(agent)
+    } else {
+        None
+    }
+}
+
+/// The ppid from a `/proc/pid/stat` line (`pid (comm) state ppid ...`).
+/// `comm` may hold spaces and parens, so everything up to the LAST `)`
+/// is the name. Pure, so tests pin it.
+pub fn parse_stat_ppid(stat: &str) -> Option<u32> {
+    let after = stat.rfind(')')?;
+    let mut fields = stat[after + 1..].split_whitespace();
+    let _state = fields.next()?;
+    fields.next()?.parse().ok()
+}
+
+/// One /proc walk (Linux only): orphaned agents as `(pid, agent,
+/// cmdline)`. Only orphans count — ppid 1, reparented after their gtasks
+/// died. A live gtasks elsewhere keeps its children (ppid != 1), and
+/// subagents keep theirs, so neither is ever mistaken for a restartable
+/// session.
+#[cfg(target_os = "linux")]
+pub fn orphaned_agents() -> Vec<(u32, &'static str, String)> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir("/proc") {
+        Ok(entries) => entries,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let pid: u32 = match entry.file_name().to_string_lossy().parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        if parse_stat_ppid(&stat) != Some(1) {
+            continue;
+        }
+        let cmdline = std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        if cmdline.is_empty() {
+            continue;
+        }
+        // The tree match happens per-tab at restore: here every orphaned
+        // agent counts, whatever tree it works in (empty matches all).
+        if let Some(agent) = match_orphan_cmdline(&cmdline, "") {
+            out.push((pid, agent, cmdline.replace('\0', " ")));
+        }
+    }
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn orphaned_agents() -> Vec<(u32, &'static str, String)> {
+    Vec::new()
+}
+
 /// Resume argv: reopen the previous session, send nothing. Every shape is
 /// the agent's own "continue" flag with no prompt attached — the session
 /// comes back as it was, and the user types anything new themselves.

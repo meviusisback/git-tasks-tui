@@ -113,3 +113,72 @@ fn restore_re_shows_the_tab_whose_pid_is_alive() {
         number: 0,
     };
 }
+
+#[test]
+fn agent_program_names() {
+    use gtasks::agent::agent_program_name;
+    assert_eq!(agent_program_name("omp"), Some("omp"));
+    assert_eq!(agent_program_name("omp-sandboxed"), Some("omp"));
+    assert_eq!(agent_program_name("/usr/bin/hermes"), None);
+    assert_eq!(agent_program_name("hermes"), Some("hermes"));
+    assert_eq!(agent_program_name("grep"), None);
+    assert_eq!(agent_program_name("ompfoo"), None);
+    assert_eq!(agent_program_name("myomp"), None);
+}
+
+#[test]
+fn orphan_cmdline_matching() {
+    use gtasks::agent::match_orphan_cmdline;
+    // NUL-separated, as the kernel serves it.
+    let tree = "/wt/o/r/issue--7";
+    assert_eq!(
+        match_orphan_cmdline("omp\0--cwd\0/wt/o/r/issue--7\0", tree),
+        Some("omp")
+    );
+    assert_eq!(
+        match_orphan_cmdline(
+            "/home/a/.local/bin/hermes-sandboxed\0-p\0coder\0chat\0--in\0/wt/o/r/issue--7\0",
+            tree
+        ),
+        Some("hermes")
+    );
+    // Right binary, wrong tree.
+    assert_eq!(
+        match_orphan_cmdline("omp\0--cwd\0/other/tree\0", tree),
+        None
+    );
+    // Wrong binary, right tree (a grep through the tree is not an agent).
+    assert_eq!(
+        match_orphan_cmdline("grep\0omp\0/wt/o/r/issue--7/file\0", tree),
+        None
+    );
+    assert_eq!(match_orphan_cmdline("", tree), None);
+}
+
+#[test]
+fn stat_ppid_parsing() {
+    use gtasks::agent::parse_stat_ppid;
+    assert_eq!(parse_stat_ppid("123 (sleep) S 1 0 0"), Some(1));
+    // comm with spaces and parens: the LAST `)` ends the name.
+    assert_eq!(parse_stat_ppid("9 (my (odd) proc) S 7 0 0"), Some(7));
+    assert_eq!(parse_stat_ppid("garbage"), None);
+    assert_eq!(parse_stat_ppid("1 (x)"), None);
+}
+
+/// A normal child is never reported as an orphan, on any platform.
+#[test]
+fn parented_children_are_not_orphans() {
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleep on PATH");
+    let plain = child.id();
+    assert!(
+        !gtasks::agent::orphaned_agents()
+            .iter()
+            .any(|(pid, _, _)| *pid == plain),
+        "a parented child is not an orphan"
+    );
+    child.kill().ok();
+    let _ = child.wait();
+}
