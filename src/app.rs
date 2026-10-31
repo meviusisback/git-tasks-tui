@@ -589,6 +589,14 @@ pub struct App {
     /// re-shows them instead of forgetting them. Persisted with the
     /// session; pids are verified before use.
     pub live_direct: HashMap<String, crate::agent::LiveDirect>,
+    /// Herdr bindings to reattach at startup: a restart re-embeds the
+    /// live agents instead of leaving blank tabs. Fed one per tick into
+    /// the normal resume flow (with `no_fallback`, so a dead agent only
+    /// drops its binding — nothing ever launches unasked).
+    pub herdr_reattach_queue: Vec<(AgentPlan, std::path::PathBuf)>,
+    /// This resume came from the startup queue, not from the user: the
+    /// Herdr wait must not fall back to a direct launch.
+    pub auto_reattach: bool,
     /// Why the last launch fell back to direct despite the herdr backend:
     /// consumed by the direct tail, which prints it on top of the outcome.
     pub herdr_fallback_note: Option<String>,
@@ -762,6 +770,8 @@ impl Default for App {
             last_agents: HashMap::new(),
             herdr_bindings: HashMap::new(),
             live_direct: HashMap::new(),
+            herdr_reattach_queue: Vec::new(),
+            auto_reattach: false,
             herdr_fallback_note: None,
             agent_requested: None,
             agent_go: None,
@@ -2549,8 +2559,9 @@ impl App {
     /// (not at startup), so an install mid-session just appears. When the
     /// Herdr CLI is around, every agent grows a second row launching it
     /// unsandboxed through Herdr — the per-launch answer to a global
-    /// `sandbox_agents = true`.
-    fn agent_choices(&self) -> Vec<AgentChoice> {
+    /// `sandbox_agents = true`. Public for the startup reattach, which
+    /// rebuilds a resume plan from a binding without a menu.
+    pub fn agent_choices(&self) -> Vec<AgentChoice> {
         let mut direct = Vec::new();
         if let Some(hermes) = self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
             direct.push(AgentChoice {

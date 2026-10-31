@@ -168,6 +168,10 @@ exit 1
         name: "g-r-7-hermes".to_string(),
         tab_id: "w1:t1".to_string(),
         pane_id: "w1:p2".to_string(),
+        repo: "o/r".to_string(),
+        number: 7,
+        kind: "hermes".to_string(),
+        profile: "coder".to_string(),
     });
     let out = run_job(j);
     match out {
@@ -354,5 +358,64 @@ fn a_legacy_full_slug_space_is_reused() {
     assert!(
         !calls.contains("workspace create"),
         "no duplicate Space next to the legacy one: {calls}"
+    );
+}
+
+#[test]
+fn old_bindings_without_new_fields_still_parse() {
+    let binding: gtasks::herdr::HerdrBinding =
+        serde_json::from_str(r#"{"name":"g","tab_id":"t","pane_id":"p"}"#)
+            .expect("old state files keep loading");
+    assert_eq!(binding.repo, "");
+    assert_eq!(binding.number, 0);
+}
+
+#[test]
+fn reattach_plan_needs_a_known_kind() {
+    use gtasks::agent::AgentChoice;
+    let choice = AgentChoice {
+        id: gtasks::agent::AgentId::Omp,
+        program: std::path::PathBuf::from("/bin/omp"),
+        herdr: true,
+    };
+    let binding = gtasks::herdr::HerdrBinding {
+        name: "g".to_string(),
+        tab_id: "t".to_string(),
+        pane_id: "p".to_string(),
+        repo: "o/r".to_string(),
+        number: 7,
+        kind: "omp".to_string(),
+        profile: "coder".to_string(),
+    };
+    let plan = gtasks::herdr::reattach_plan(
+        &binding,
+        "o/r",
+        7,
+        "issue-7",
+        "coder",
+        choice,
+        std::path::PathBuf::from("/clone"),
+    )
+    .expect("known kind builds");
+    assert_eq!(plan.branch, "issue-7");
+    assert!(plan.url.is_empty(), "a resume sends no seed body");
+    let mut stale = binding.clone();
+    stale.kind = "nope".to_string();
+    assert!(
+        gtasks::herdr::reattach_plan(
+            &stale,
+            "o/r",
+            7,
+            "issue-7",
+            "coder",
+            AgentChoice {
+                id: gtasks::agent::AgentId::Omp,
+                program: std::path::PathBuf::from("/bin/omp"),
+                herdr: true,
+            },
+            std::path::PathBuf::from("/clone"),
+        )
+        .is_none(),
+        "a stale kind never becomes a launch"
     );
 }

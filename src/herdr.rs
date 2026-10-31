@@ -104,6 +104,44 @@ pub struct HerdrBinding {
     pub name: String,
     pub tab_id: String,
     pub pane_id: String,
+    /// Which tab this agent works for: the restart reattaches it without
+    /// asking. Empty/zero on bindings saved before the field existed —
+    /// those resolve by matching the tree against the open tabs' trees.
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub number: u64,
+    /// Agent kind (`omp`, `hermes`, …) and profile, to rebuild the resume
+    /// plan without guessing from the name.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub profile: String,
+}
+
+/// The resume plan for an automatic reattach: same shape as a `g` resume,
+/// built from the binding instead of the menu. The branch is read live
+/// from the tree (a renamed tree must not trigger the drift question),
+/// and an unknown kind refuses — a stale binding never becomes a launch.
+pub fn reattach_plan(
+    binding: &HerdrBinding,
+    repo: &str,
+    number: u64,
+    branch: &str,
+    profile: &str,
+    choice: crate::agent::AgentChoice,
+    clone: std::path::PathBuf,
+) -> Option<crate::agent::AgentPlan> {
+    crate::agent::AgentId::from_name(&binding.kind)?;
+    Some(crate::agent::AgentPlan {
+        repo: repo.to_string(),
+        number,
+        url: String::new(),
+        branch: branch.to_string(),
+        profile: profile.to_string(),
+        agent: choice,
+        clone,
+    })
 }
 
 /// One Herdr-side start, owned by the worker thread: the main thread only
@@ -145,6 +183,10 @@ pub struct HerdrPending {
     pub lines: usize,
     pub seed: crate::agent::SeedFile,
     pub resume: bool,
+    /// An automatic reattach at startup must never fall back to a direct
+    /// launch: the user asked for nothing, so a dead agent only drops its
+    /// binding with a status line. User-invoked resumes keep the fallback.
+    pub no_fallback: bool,
 }
 
 /// The box child for a Herdr agent: `herdr agent attach <name>`. Input typed
