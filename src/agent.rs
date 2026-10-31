@@ -222,6 +222,12 @@ impl AgentId {
         ]
     }
 
+    /// The id behind a stored kind string (`omp`, `hermes`, …). Unknown
+    /// names stay unknown — a stale record never becomes a wrong agent.
+    pub fn from_name(name: &str) -> Option<AgentId> {
+        AgentId::all().into_iter().find(|id| id.name() == name)
+    }
+
     /// The binary name on `PATH`.
     pub fn binary(self) -> &'static str {
         match self {
@@ -733,11 +739,23 @@ pub fn parse_stat_ppid(stat: &str) -> Option<u32> {
     fields.next()?.parse().ok()
 }
 
+/// The parent owns this process tree: a ppid whose own command line names
+/// gtasks or one of our agents means the candidate below it is a live
+/// session (or a subagent), never a restartable orphan. An orphaned agent
+/// reparents to whatever ancestor lived — init, or the shell gtasks was
+/// started from — so only the parent's identity decides, never its pid.
+/// Pure, so tests pin it.
+pub fn parent_is_ours(parent_cmdline: &str) -> bool {
+    let argv0 = parent_cmdline.split('\0').next().unwrap_or("");
+    let base = argv0.rsplit('/').next().unwrap_or(argv0);
+    base.starts_with("gtasks") || agent_program_name(base).is_some()
+}
+
 /// One /proc walk (Linux only): orphaned agents as `(pid, agent,
-/// cmdline)`. Only orphans count — ppid 1, reparented after their gtasks
-/// died. A live gtasks elsewhere keeps its children (ppid != 1), and
-/// subagents keep theirs, so neither is ever mistaken for a restartable
-/// session.
+/// cmdline)`. Only orphans count: a candidate whose parent is still gtasks
+/// or another agent is a live session (or a subagent), never a restartable
+/// orphan. The reparented rest — init, the shell gtasks started from —
+/// all count, whatever their pid.
 #[cfg(target_os = "linux")]
 pub fn orphaned_agents() -> Vec<(u32, &'static str, String)> {
     let mut out = Vec::new();
@@ -754,7 +772,15 @@ pub fn orphaned_agents() -> Vec<(u32, &'static str, String)> {
             continue;
         }
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-        if parse_stat_ppid(&stat) != Some(1) {
+        let ppid = match parse_stat_ppid(&stat) {
+            Some(ppid) => ppid,
+            None => continue,
+        };
+        // The parent's identity decides: a live gtasks or agent above
+        // means this process is spoken for.
+        let parent_cmdline =
+            std::fs::read_to_string(format!("/proc/{ppid}/cmdline")).unwrap_or_default();
+        if parent_is_ours(&parent_cmdline) {
             continue;
         }
         let cmdline = std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();

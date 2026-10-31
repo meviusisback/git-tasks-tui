@@ -182,3 +182,15 @@ fn parented_children_are_not_orphans() {
     child.kill().ok();
     let _ = child.wait();
 }
+
+#[test]
+fn parent_identity_decides() {
+    use gtasks::agent::parent_is_ours;
+    assert!(parent_is_ours("gtasks\0"));
+    assert!(parent_is_ours("/home/a/.local/bin/gtasks-fixes\0"));
+    assert!(parent_is_ours("omp\0--cwd\0/tree\0"));
+    assert!(parent_is_ours("/bin/hermes-sandboxed\0chat\0"));
+    assert!(!parent_is_ours("/usr/bin/bash\0"));
+    assert!(!parent_is_ours(""));
+    assert!(!parent_is_ours("init\0"));
+}

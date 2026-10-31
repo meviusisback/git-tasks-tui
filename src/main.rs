@@ -789,6 +789,7 @@ fn start_herdr_launch(
         lines,
         seed,
         resume,
+        no_fallback: false,
     }
 }
 
@@ -796,6 +797,130 @@ fn start_herdr_launch(
 /// the reason on top. A tab closed while the thread worked does not come
 /// back: the Herdr agent keeps running (that is the point of Herdr) and
 /// the binding is recorded, so reopening the tree re-attaches.
+/// At startup, reattach the Herdr agents behind the open tabs: the daemon
+/// owns them, so a restart only lost the view, never the agent. Only live
+/// agents queue (one synchronous `agent get` per binding, once per
+/// startup); a dead one drops its binding with a status line instead of
+/// haunting the next launch. Bindings whose tab is not open are left
+/// alone — reopening the tree still finds them.
+fn queue_herdr_reattaches(app: &mut App, binaries: &Binaries) {
+    let Some(herdr) = binaries.herdr.clone() else {
+        return;
+    };
+    if app.herdr_bindings.is_empty() {
+        return;
+    }
+    // Every open tab's trees, once: bindings saved before repo/number
+    // resolve through this instead of stored fields.
+    let mut tree_tabs: HashMap<String, (String, u64)> = HashMap::new();
+    if let Some(root) = app.worktree_root.clone() {
+        for tab in &app.tabs {
+            if let Ok(slug) = RepoSlug::parse(&tab.repo) {
+                for tree in gtasks::worktree::list_worktrees(&root, &slug) {
+                    tree_tabs
+                        .entry(tree.display().to_string())
+                        .or_insert((tab.repo.clone(), tab.number));
+                }
+            }
+        }
+    }
+    let mut gone = Vec::new();
+    for (tree, binding) in app.herdr_bindings.clone() {
+        let tabkey = if !binding.repo.is_empty() {
+            Some((binding.repo.clone(), binding.number))
+        } else {
+            tree_tabs.get(&tree).cloned()
+        };
+        let Some((repo, number)) = tabkey else {
+            continue;
+        };
+        if !app
+            .tabs
+            .iter()
+            .any(|t| t.repo == repo && t.number == number)
+        {
+            continue;
+        }
+        if app
+            .tab_agents
+            .get(&(repo.clone(), number))
+            .is_some_and(|a| a.running)
+        {
+            continue;
+        }
+        let cwd = Path::new(&tree);
+        let alive = cwd.exists()
+            && gtasks::herdr::agent_get(&herdr, cwd, &binding.name)
+                .ok()
+                .flatten()
+                .is_some();
+        if !alive {
+            gone.push(binding.name.clone());
+            app.herdr_bindings.remove(&tree);
+            continue;
+        }
+        let profile = if !binding.profile.is_empty() {
+            binding.profile.clone()
+        } else {
+            app.last_agents
+                .get(&tree)
+                .map(|last| last.profile.clone())
+                .unwrap_or_else(|| app.agent_profile.clone())
+        };
+        let kind = if !binding.kind.is_empty() {
+            binding.kind.clone()
+        } else {
+            app.last_agents
+                .get(&tree)
+                .map(|last| last.agent.clone())
+                .unwrap_or_default()
+        };
+        let Some(choice) = app
+            .agent_choices()
+            .into_iter()
+            .find(|c| c.id.name() == kind && c.herdr)
+        else {
+            continue;
+        };
+        let Some(branch) = gtasks::worktree::worktree_branch(cwd) else {
+            continue;
+        };
+        let Ok(clone) = gtasks::agent::find_clone(&app.clone_roots, &repo) else {
+            continue;
+        };
+        if let Some(plan) = gtasks::herdr::reattach_plan(
+            &binding,
+            &repo,
+            number,
+            branch.as_str(),
+            &profile,
+            choice,
+            clone,
+        ) {
+            app.herdr_reattach_queue.push((plan, PathBuf::from(&tree)));
+        }
+    }
+    if !gone.is_empty() {
+        app.status = format!("Herdr agents gone: {} — bindings dropped", gone.join(", "));
+        app.session_dirty = true;
+    }
+}
+
+/// A Herdr agent that died on its own: forget the binding (reopening the
+/// tree starts fresh) and say so. Only for automatic reattaches — a user
+/// who asked to reopen keeps the direct fallback instead.
+fn drop_dead_binding(app: &mut App, pending: gtasks::herdr::HerdrPending, reason: &str) {
+    app.herdr_bindings
+        .remove(&pending.path.display().to_string());
+    app.tab_agents
+        .remove(&App::tab_key(&pending.plan.repo, pending.plan.number));
+    app.session_dirty = true;
+    app.status = format!(
+        "the Herdr agent {} is gone ({reason}) — reopen the tree to start fresh",
+        pending.plan.agent.id.name(),
+    );
+}
+
 fn poll_herdr_launch(
     app: &mut App,
     binaries: &Binaries,
@@ -812,28 +937,9 @@ fn poll_herdr_launch(
             *slot = Some(pending);
         }
         Err(TryRecvError::Disconnected) => {
-            launch_direct_after_herdr(
-                app,
-                binaries,
-                term_size,
-                sessions,
-                timeout,
-                pending,
-                slot,
-                "the Herdr worker died",
-            );
-        }
-        Ok(gtasks::herdr::HerdrOutcome::Failed(reason)) => {
-            launch_direct_after_herdr(
-                app, binaries, term_size, sessions, timeout, pending, slot, &reason,
-            );
-        }
-        Ok(gtasks::herdr::HerdrOutcome::Attached {
-            name,
-            tab_id,
-            pane_id,
-        }) => {
-            let Some(herdr) = binaries.herdr.clone() else {
+            if pending.no_fallback {
+                drop_dead_binding(app, pending, "the Herdr worker died");
+            } else {
                 launch_direct_after_herdr(
                     app,
                     binaries,
@@ -842,8 +948,39 @@ fn poll_herdr_launch(
                     timeout,
                     pending,
                     slot,
-                    "the herdr CLI is missing",
+                    "the Herdr worker died",
                 );
+            }
+        }
+        Ok(gtasks::herdr::HerdrOutcome::Failed(reason)) => {
+            if pending.no_fallback {
+                drop_dead_binding(app, pending, &reason);
+            } else {
+                launch_direct_after_herdr(
+                    app, binaries, term_size, sessions, timeout, pending, slot, &reason,
+                );
+            }
+        }
+        Ok(gtasks::herdr::HerdrOutcome::Attached {
+            name,
+            tab_id,
+            pane_id,
+        }) => {
+            let Some(herdr) = binaries.herdr.clone() else {
+                if pending.no_fallback {
+                    drop_dead_binding(app, pending, "the herdr CLI is missing");
+                } else {
+                    launch_direct_after_herdr(
+                        app,
+                        binaries,
+                        term_size,
+                        sessions,
+                        timeout,
+                        pending,
+                        slot,
+                        "the herdr CLI is missing",
+                    );
+                }
                 return;
             };
             let argv = gtasks::herdr::attach_argv(&herdr, &pending.path, &name);
@@ -876,6 +1013,10 @@ fn poll_herdr_launch(
                             name: name.clone(),
                             tab_id,
                             pane_id,
+                            repo: pending.plan.repo.clone(),
+                            number: pending.plan.number,
+                            kind: pending.plan.agent.id.name().to_string(),
+                            profile: pending.plan.profile.clone(),
                         },
                     );
                     app.session_dirty = true;
@@ -1284,6 +1425,8 @@ fn run_tui() -> anyhow::Result<()> {
     // open tabs come back from `state.json`. Unknown values fall back
     // instead of breaking startup.
     app.restore_session(&state);
+    // The daemon kept the Herdr agents: reattach the open tabs' views.
+    queue_herdr_reattaches(&mut app, &binaries);
     // The items cache paints instantly; the fetch below refreshes in the
     // background. A broken cache is ignored — the fetch is the source of
     // truth, the cache only speed.
@@ -1835,8 +1978,23 @@ fn run_tui() -> anyhow::Result<()> {
                 &mut herdr_pending,
             );
         }
+        // Automatic Herdr reattaches feed the normal resume flow one per
+        // tick, behind anything the user asked for: `agent_resume` stays
+        // the single funnel, so validation, takeover and status behave
+        // exactly like a manual reopen.
+        if app.agent_resume.is_none() && herdr_pending.is_none() {
+            if let Some((plan, path)) = app.herdr_reattach_queue.pop() {
+                app.agent_resume = Some((plan, path));
+                app.auto_reattach = true;
+                needs_draw = true;
+            }
+        }
         if let Some((plan, path)) = app.agent_resume.take() {
             needs_draw = true;
+            // A startup reattach must never fall back to a direct launch:
+            // the user asked for nothing.
+            let auto = app.auto_reattach;
+            app.auto_reattach = false;
             // Taking over a detached agent: the old process is not ours
             // anymore and its output is already lost (its pty died with
             // the old gtasks). Stop it before reopening the session, or
@@ -1851,7 +2009,7 @@ fn run_tui() -> anyhow::Result<()> {
                     took_over = Some(pid);
                 }
             }
-            if let Some(pending) = launch_agent(
+            if let Some(mut pending) = launch_agent(
                 &mut app,
                 &plan,
                 &path,
@@ -1863,6 +2021,9 @@ fn run_tui() -> anyhow::Result<()> {
                 },
                 true,
             ) {
+                if auto {
+                    pending.no_fallback = true;
+                }
                 herdr_pending = Some(pending);
             }
             // The relaunch sets its own status inside; keep the takeover

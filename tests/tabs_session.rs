@@ -965,6 +965,10 @@ fn herdr_tab_with_binding(app: &mut App) {
             name: "g-a-1-hermes".to_string(),
             tab_id: "w3:t9".to_string(),
             pane_id: "w3:p9".to_string(),
+            repo: "me/a".to_string(),
+            number: 1,
+            kind: "hermes".to_string(),
+            profile: "coder".to_string(),
         },
     );
 }
