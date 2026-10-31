@@ -49,6 +49,12 @@ pub struct State {
     /// extra `agent get`, never a wrong session.
     #[serde(default)]
     pub herdr_bindings: HashMap<String, crate::herdr::HerdrBinding>,
+    /// Direct agents still alive the last time the session was saved, by
+    /// tree path: a restart re-shows the tab's agent instead of losing it.
+    /// Pids are verified before use (`owns_tree`), so a recycled pid is
+    /// inert, never a wrong agent.
+    #[serde(default)]
+    pub live_direct: HashMap<String, crate::agent::LiveDirect>,
 }
 
 impl Default for State {
@@ -70,6 +76,7 @@ impl Default for State {
             row_pct: 38,
             last_agents: HashMap::new(),
             herdr_bindings: HashMap::new(),
+            live_direct: HashMap::new(),
         }
     }
 }

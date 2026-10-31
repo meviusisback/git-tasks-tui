@@ -652,6 +652,50 @@ pub struct LastAgent {
     pub profile: String,
 }
 
+/// A direct agent still alive when gtasks quits: its pid, by tree path,
+/// so a restart finds the process instead of forgetting it. Parent and
+/// child is a runtime accident — this is the record that survives it.
+/// Removed on clean exit; a stale pid is inert (see `owns_tree`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveDirect {
+    pub pid: u32,
+    pub repo: String,
+    pub number: u64,
+    pub agent: String,
+    pub profile: String,
+}
+
+/// Is `pid` still our agent working in `tree`? A bare "process exists"
+/// check is not enough: pids get reused, and a recycled pid belonging
+/// to something else must never count as our agent.
+pub fn owns_tree(pid: u32, tree: &str) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    // Signal 0 touches nothing: it only asks whether the process exists.
+    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+    if !alive {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let cmdline = std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        if cmdline.is_empty() {
+            // Just forked, not exec'd yet (or already a zombie): without
+            // an argv there is nothing to match against, so no.
+            return false;
+        }
+        // NUL-separated argv: our agent was started with the tree as its
+        // working directory, so the tree path is in its command line.
+        cmdline.replace('\0', " ").contains(tree)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = tree;
+        alive
+    }
+}
+
 /// Resume argv: reopen the previous session, send nothing. Every shape is
 /// the agent's own "continue" flag with no prompt attached — the session
 /// comes back as it was, and the user types anything new themselves.
