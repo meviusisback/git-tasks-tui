@@ -613,6 +613,35 @@ fn open_prs_with_changes_requested_show_a_red_cr() {
 }
 
 #[test]
+fn the_box_sanitizes_hostile_paths() {
+    let (app, tmp) = pr_app();
+    let root = tmp.path().join("wt");
+    // A directory name carrying an escape sequence, with a valid `.git`
+    // pointer so the tree lists under the item's branch.
+    let hostile = root.join("o").join("r").join("bad\x1b[2Jname");
+    std::fs::create_dir_all(&hostile).unwrap();
+    let gitdir = root.join("gitdir-hostile");
+    std::fs::create_dir_all(&gitdir).unwrap();
+    std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/fix-foo\n").unwrap();
+    std::fs::write(
+        hostile.join(".git"),
+        format!("gitdir: {}\n", gitdir.display()),
+    )
+    .unwrap();
+    with_plain_icons(|| {
+        let screen = render_200x30(&app);
+        assert!(
+            screen.contains("bad[2Jname"),
+            "the escape dies at render: {screen}"
+        );
+        assert!(
+            !screen.contains('\x1b'),
+            "no raw escape reaches the terminal"
+        );
+    });
+}
+
+#[test]
 fn a_tree_on_another_branch_is_named_not_hidden() {
     let (app, tmp) = pr_app();
     let root = tmp.path().join("wt");

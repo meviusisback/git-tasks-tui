@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use gtasks::agent::{AgentChoice, AgentId, AgentPlan, LastAgent, agent_argv_for_resume};
-use gtasks::app::{App, Key, Modal, Msg, Pending};
+use gtasks::app::{App, Key, Modal, Msg, Pending, TabAgent};
 use gtasks::state::State;
 
 fn prog() -> PathBuf {
@@ -387,5 +387,35 @@ fn the_record_survives_a_restart_but_old_files_still_parse() {
             .map(|l| l.agent.as_str()),
         Some("opencode"),
         "the record survives a restart"
+    );
+}
+
+#[test]
+fn y_never_reopens_onto_a_running_agent() {
+    // Overwriting the live session would drop in-flight work: the y-arm
+    // refuses like `g` does, instead of replacing sessions[key].
+    let mut app = recorded("hermes");
+    app.tab_agents.insert(
+        ("o/r".to_string(), 7),
+        TabAgent {
+            running: true,
+            ..Default::default()
+        },
+    );
+    app.modal = Some(Modal::Confirm("reopen?".to_string()));
+    app.pending = Some(Pending::Resume {
+        plan: plan(AgentId::Hermes),
+        path: tree(),
+        preset: None,
+    });
+    app.update(Msg::Key(Key::Char('y')));
+    assert!(
+        app.agent_resume.is_none(),
+        "the live session survives the y"
+    );
+    assert!(
+        app.status.contains("already running"),
+        "the refusal says why: {}",
+        app.status
     );
 }

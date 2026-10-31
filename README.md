@@ -33,7 +33,8 @@ Download the latest release for your machine from
 
 - **Linux**: `gtasks-linux-x86_64.tar.gz`
 - **Mac** (Intel and Apple Silicon, one binary): `gtasks-macos-universal.dmg` —
-  open it, copy `gtasks` somewhere on your `PATH`.
+  open it, copy `gtasks` somewhere on your `PATH` (a `gtasks-macos-universal.tar.gz`
+  with the same binary rides along in the release).
 
 The DMG is unsigned (no paid Apple certificate): on first run macOS asks once —
 right-click the binary, choose Open, confirm. Afterwards it starts normally.
@@ -120,9 +121,10 @@ refresh_s = 300          # re-read the list every N seconds while idle (0 = off,
 - **`gh` is the only backend**; the app never holds a token.
 - **Worktrees live outside the clone** (configurable root, default `$XDG_DATA_HOME/gtasks/worktrees/`),
   resolved from the branch name, never re-derived after an outside rename.
-- **The agent runs embedded** (pty, never suspends the UI) with `--ignore-rules` by default
-  (repo-committed instruction files cannot steer it). YOLO-equivalents exist only inside the
-  opt-in sandboxed launches — and only where the agent has one (omp; hermes keeps Smart).
+- **The agent runs embedded** (pty, never suspends the UI) with `--ignore-rules` on hermes by default
+  (repo-committed instruction files cannot steer it; other agents have no equivalent flag).
+  YOLO-equivalents exist only inside the opt-in sandboxed launches — and only where the agent
+  has one (omp; hermes keeps Smart).
 - **Checked doors are declared.** Every `CheckedArgv` construction site is listed in
   `tests/invariants/lib.sh` with its reason — a new door is a decision, and CI refuses undeclared ones.
 - **`config.toml` is hand-edited, `state.json` is not.**

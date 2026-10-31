@@ -1105,11 +1105,15 @@ impl App {
         }
     }
 
-    /// A GitHub repo name: letters, digits, dots, dashes, underscores.
-    /// Spaces never survive — the create call would split them.
+    /// A GitHub repo name: letters, digits, dots, dashes, underscores —
+    /// and never a leading dash (it would land in flag position) or a
+    /// bare `.`/`..` (it would escape the clone root on join).
     fn valid_project_name(name: &str) -> bool {
         !name.is_empty()
             && name.len() <= 100
+            && !name.starts_with('-')
+            && name != "."
+            && name != ".."
             && name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
@@ -1845,33 +1849,48 @@ impl App {
             // The tree remembers its agent: offer the previous session
             // back before any agent question — `y` reopens it with
             // nothing sent, `n` goes back to choosing. A missing binary
-            // skips the offer silently and chooses as usual.
+            // skips the offer silently and chooses as usual. A running
+            // agent refuses the offer like `g` does: reopening over it
+            // would drop the live session.
             if let Some(last) = self
                 .last_agents
                 .get(&row.path.display().to_string())
                 .cloned()
             {
-                if let Some(choice) = self
-                    .agent_choices()
-                    .into_iter()
-                    .find(|c| c.id.name() == last.agent)
-                {
-                    let mut plan = menu.plan;
-                    plan.branch = row.branch.as_str().to_string();
-                    plan.agent = choice;
-                    plan.profile = last.profile.clone();
-                    let question = format!(
-                        "reopen the last {} session here ({})? (y = resume, nothing sent · n = choose agent)",
-                        last.agent,
-                        row.path.display()
-                    );
-                    self.modal = Some(Modal::Confirm(question));
-                    self.pending = Some(Pending::Resume {
-                        plan,
-                        path: row.path,
-                        preset: menu.agent,
-                    });
-                    return;
+                let key = Self::tab_key(&menu.plan.repo, menu.plan.number);
+                let busy = self.tab_agents.get(&key).is_some_and(|a| a.running);
+                if !busy {
+                    if let Some(choice) = self
+                        .agent_choices()
+                        .into_iter()
+                        .find(|c| c.id.name() == last.agent)
+                    {
+                        let mut plan = menu.plan;
+                        plan.branch = row.branch.as_str().to_string();
+                        plan.agent = choice;
+                        plan.profile = last.profile.clone();
+                        // Non-hermes resume is agent-global (`--continue`
+                        // reopens the latest session, not this tree's):
+                        // say so, or the per-tree offer misleads.
+                        let scope_note = if plan.agent.id == crate::agent::AgentId::Hermes {
+                            ""
+                        } else {
+                            " (latest session — may be from another tree)"
+                        };
+                        let question = format!(
+                            "reopen the last {} session here ({})?{} (y = resume, nothing sent · n = choose agent)",
+                            last.agent,
+                            row.path.display(),
+                            scope_note
+                        );
+                        self.modal = Some(Modal::Confirm(question));
+                        self.pending = Some(Pending::Resume {
+                            plan,
+                            path: row.path,
+                            preset: menu.agent,
+                        });
+                        return;
+                    }
                 }
             }
             match menu.agent {
@@ -2320,9 +2339,15 @@ impl App {
         // menu — the app already knows who ran here.
         if let Some((plan, path)) = self.resume_candidate(&item) {
             let agent = plan.agent.id.name();
+            let scope_note = if plan.agent.id == crate::agent::AgentId::Hermes {
+                ""
+            } else {
+                " (latest session — may be from another tree)"
+            };
             self.modal = Some(Modal::Confirm(format!(
-                "reopen the last {agent} session here ({})? (y = resume, nothing sent · n = choose agent)",
-                path.display()
+                "reopen the last {agent} session here ({})?{} (y = resume, nothing sent · n = choose agent)",
+                path.display(),
+                scope_note
             )));
             self.pending = Some(Pending::Resume {
                 plan,
@@ -3400,8 +3425,15 @@ impl App {
                         }
                         // Reopen the recorded session: the loop resumes it
                         // with the agent's continue flag, sending nothing.
+                        // Like `g`, never onto a running agent: overwriting
+                        // the live session would drop in-flight work.
                         Some(Pending::Resume { plan, path, .. }) => {
-                            self.agent_resume = Some((plan, path));
+                            let key = App::tab_key(&plan.repo, plan.number);
+                            if self.tab_agents.get(&key).is_some_and(|a| a.running) {
+                                self.status = "an agent is already running in this tab".to_string();
+                            } else {
+                                self.agent_resume = Some((plan, path));
+                            }
                         }
                         // A delete is a write too (to the clone, via the
                         // loop): `y` moves the agreed order there.

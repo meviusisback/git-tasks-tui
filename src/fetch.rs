@@ -46,9 +46,10 @@ pub fn fetch_repo_list(binaries: &Binaries, timeout: Duration) -> Result<Vec<Rep
 
 /// Fetch one issue/PR by number, open or closed, for a tab the OPEN-only
 /// fetch never saw: closed work with a live tab resolves here instead of
-/// falling back to whatever sits under the cursor. Issues are tried
-/// first (the common tabbed-closed case), then PRs; anything else is
-/// the entry's failure, not the tab's.
+/// falling back to whatever sits under the cursor. PRs are tried first:
+/// the issues endpoint serves pull requests too, so issue-first would
+/// misclassify a closed PR as an issue (no head branch) and launch work
+/// in a synthetic `issue-N` tree.
 pub fn fetch_closed_item(
     binaries: &Binaries,
     repo: &str,
@@ -56,7 +57,7 @@ pub fn fetch_closed_item(
     timeout: Duration,
 ) -> Result<Item, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
-    for kind in [ItemKind::Issue, ItemKind::Pr] {
+    for kind in [ItemKind::Pr, ItemKind::Issue] {
         let subcommand = match kind {
             ItemKind::Issue => "issue",
             ItemKind::Pr => "pr",

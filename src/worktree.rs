@@ -122,7 +122,10 @@ pub fn list_worktrees(root: &Path, slug: &RepoSlug) -> Vec<PathBuf> {
                 return false;
             }
             match std::fs::symlink_metadata(path.join(".git")) {
-                Ok(meta) => !meta.is_dir(),
+                // A real file or dir — but never a symlink: a swapped-in
+                // link would move reads (and launches) elsewhere, and the
+                // doc above promises links are skipped.
+                Ok(meta) => !meta.is_dir() && !meta.file_type().is_symlink(),
                 Err(_) => false,
             }
         })
@@ -442,13 +445,20 @@ pub fn create_project(
         return Err("GitHub did not say who you are".to_string());
     }
     let slug = format!("{owner}/{name}");
+    // Validate before any network: the panel already gated the name, but
+    // the owner comes from the server — parse the joined slug, not hopes.
+    let parsed = crate::actions::RepoSlug::parse(&slug)
+        .map_err(|err| format!("cannot use {slug}: {err:#}"))?;
     let visibility = if private { "--private" } else { "--public" };
+    // `--` before the name: it parsed safe, but flag position is where a
+    // regression would hurt — the separator makes the position structural.
     let argv = gh::gh(
         binaries,
         &cwd,
         vec![
             "repo".into(),
             "create".into(),
+            "--".into(),
             name.to_string().into(),
             visibility.into(),
             "--add-readme".into(),
@@ -464,8 +474,6 @@ pub fn create_project(
     }
     // Clone through the app's own path, so the tree grows where `W` looks.
     let dest = root.join(name);
-    let parsed = crate::actions::RepoSlug::parse(&slug)
-        .map_err(|err| format!("cannot use {slug}: {err:#}"))?;
     clone_repo(binaries, &dest, &parsed).map_err(|err| format!("cannot clone {slug}: {err:#}"))?;
     Ok((slug, dest))
 }

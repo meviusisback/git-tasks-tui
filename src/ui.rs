@@ -895,17 +895,19 @@ fn tree_head_text(tree: &crate::app::ItemTree) -> String {
 fn worktrees_box(view: &ViewModel) -> Paragraph<'static> {
     let mut lines = Vec::new();
     for tree in &view.trees {
+        // Branch and path both reach the disk: sanitize at render, like
+        // every other attacker-shaped string.
         lines.push(Line::from(vec![
             Span::styled(worktree_marker_text(), theme::worktree_marker()),
             Span::styled(
-                tree_head_text(tree),
+                sanitize(&tree_head_text(tree)),
                 Style::default()
                     .fg(theme::FOCUSED)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::from(Span::styled(
-            format!("  {}", tree.path.display()),
+            format!("  {}", sanitize(&tree.path.display().to_string())),
             Style::default().fg(theme::SUBTEXT),
         )));
     }
@@ -945,17 +947,19 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         // no rows (a fresh branch, a W-grown tree) would otherwise leave
         // the whole right column above the box empty.
         if let Some(ctx) = app.active_agent().and_then(|agent| agent.context.as_ref()) {
+            // Repo, path and branch all reach the disk: sanitize, like
+            // every other attacker-shaped string.
             let lines = vec![
                 Line::from(Span::styled(
                     "working on",
                     theme::overlay_text().add_modifier(Modifier::BOLD),
                 )),
-                Line::from(Span::raw(ctx.repo.clone())),
-                Line::from(Span::raw(format!(
+                Line::from(Span::raw(sanitize(&ctx.repo))),
+                Line::from(Span::raw(sanitize(&format!(
                     "{} @ {}",
                     ctx.path.display(),
                     ctx.branch
-                ))),
+                )))),
             ];
             return Paragraph::new(lines).block(block);
         }
@@ -970,7 +974,7 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
             if !known {
                 let lines = vec![
                     Line::from(Span::styled(
-                        format!("#{} {}", tab.number, tab.repo),
+                        format!("#{} {}", tab.number, sanitize(&tab.repo)),
                         theme::title(false),
                     )),
                     Line::from(Span::raw("not in the current list")),
@@ -1459,7 +1463,7 @@ fn draw_worktrees_menu(
                 .borders(Borders::ALL)
                 .title(format!(
                     " worktrees for {} — Enter use · n new · r rename · d delete · Esc cancel ",
-                    menu.plan.repo,
+                    sanitize(&menu.plan.repo),
                 ))
                 .border_style(theme::overlay())
                 .title_style(theme::overlay()),
@@ -1583,7 +1587,7 @@ fn draw_diff(frame: &mut Frame, area: Rect, app: &crate::app::App) {
             " diff {} — ↑/↓ scroll · Esc close ",
             app.diff_for
                 .as_ref()
-                .map(|(repo, number)| format!("{repo}#{number}"))
+                .map(|(repo, number)| format!("{}#{number}", sanitize(repo)))
                 .unwrap_or_default(),
         ))
         .border_style(theme::overlay())

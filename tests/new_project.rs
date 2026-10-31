@@ -102,3 +102,23 @@ fn a_bad_branch_keeps_the_panel_open() {
     assert!(app.create_requested.is_none());
     assert!(matches!(app.modal, Some(Modal::NewProject(_))));
 }
+
+#[test]
+fn dash_and_dot_names_never_queue() {
+    // A leading dash would land in flag position of `gh repo create`;
+    // dots would escape the clone root on join. Neither queues.
+    for bad in ["-f", "--template", ".", "..", "-x"] {
+        let mut app = App::default();
+        press(&mut app, Key::Char('N'));
+        type_text(&mut app, bad);
+        press(&mut app, Key::Enter);
+        assert!(
+            app.create_requested.is_none(),
+            "{bad} must not queue a create"
+        );
+        assert!(
+            matches!(app.modal, Some(Modal::NewProject(_))),
+            "{bad} keeps the panel open"
+        );
+    }
+}

@@ -495,40 +495,47 @@ fn launch_agent(
     resume: bool,
 ) {
     let key = App::tab_key(&plan.repo, plan.number);
-    // A resume reopens exactly this tree: the branch check below would
-    // compare the tree against a plan built for it, and a drifted tree is
-    // still the tree the user just confirmed.
-    if !resume {
-        // The tree may have drifted onto another branch since it was made
-        // (renamed outside, checked out by hand): starting the agent there
-        // works on the wrong code. Offer the fix instead of starting
-        // silently: build the tree the plan wants and launch there. `n` in
-        // the menu does the same; this catches an Enter on the wrong row.
-        match gtasks::worktree::current_branch(ctx.binaries, path, ctx.timeout) {
-            Some(have) if have != plan.branch => {
-                match correct_tree_path(app, plan) {
-                    Some(target) => {
-                        let question = format!(
-                            "tree {} is on branch {have}, not {} — create {} and launch there?",
-                            path.display(),
-                            plan.branch,
-                            target.display()
-                        );
-                        app.modal = Some(Modal::Confirm(question));
-                        app.pending = Some(Pending::Agent(plan.clone(), target));
-                    }
-                    None => {
-                        app.status = format!(
-                            "tree {} is on branch {have}, not {} — fix the branch or delete the tree and relaunch",
-                            path.display(),
-                            plan.branch
-                        );
-                    }
-                }
-                return;
+    // The tree must be safe to start in — fresh launch or resume. A
+    // resume reopens exactly this tree, but the offer-time branch read
+    // trusts the tree's own `.git` pointer: re-validate at launch, or a
+    // planted tree (symlinked `.git`, absolute gitdir, dead pointer)
+    // plus a crafted record turns one `y` into work in the wrong place.
+    // Anything unsafe gets the same question as a drifted tree: build
+    // the right one instead of starting silently.
+    let placed = gtasks::agent::placed_ok_in(path, app.worktree_root.as_deref());
+    let drifted = match gtasks::worktree::current_branch(ctx.binaries, path, ctx.timeout) {
+        // The tree drifted onto another branch since it was made
+        // (renamed outside, checked out by hand): starting the agent
+        // there works on the wrong code.
+        Some(have) if have.as_str() != plan.branch => Some(have.as_str().to_string()),
+        // Unreadable branch (dead pointer, git hiccup): unknown stays
+        // unlaunchable — same question as a known drift.
+        None => Some(String::new()),
+        _ => None,
+    };
+    if !placed || drifted.is_some() {
+        match correct_tree_path(app, plan) {
+            Some(target) => {
+                let why = match drifted {
+                    Some(have) if !have.is_empty() => format!(
+                        "tree {} is on branch {have}, not {}",
+                        path.display(),
+                        plan.branch
+                    ),
+                    _ => format!("tree {} is not safe to start in", path.display()),
+                };
+                let question = format!("{why} — create {} and launch there?", target.display());
+                app.modal = Some(Modal::Confirm(question));
+                app.pending = Some(Pending::Agent(plan.clone(), target));
             }
-            _ => {}
+            None => {
+                app.status = format!(
+                    "tree {} is on another branch — fix the branch or delete the tree and relaunch",
+                    path.display()
+                );
+            }
         }
+        return;
     }
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
