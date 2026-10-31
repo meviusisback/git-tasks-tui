@@ -482,15 +482,18 @@ fn the_action_menu_fits_at_80_columns() {
 }
 
 /// A finished run filed under its tab: records live per tab, so the test
-/// plants the tab and the entry together.
+/// plants the tab and the entry together. The tab adopts the record's
+/// tree, like a launch would place its bookmark.
 fn seed_tab_record(app: &mut App, record: gtasks::agent::AgentRecord) {
+    let tree = record.worktree.display().to_string();
     app.tabs.push(Tab {
+        tree: tree.clone(),
         repo: "o/r".to_string(),
         number: 7,
     });
     app.active_tab = Some(0);
     app.tab_agents.insert(
-        ("o/r".to_string(), 7),
+        ("o/r".to_string(), 7, tree),
         TabAgent {
             record: Some(record),
             ..Default::default()

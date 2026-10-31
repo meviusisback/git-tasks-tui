@@ -587,8 +587,8 @@ struct TabChunk {
 
 fn tab_chunks(app: &App) -> Vec<TabChunk> {
     let mut chunks: Vec<TabChunk> = Vec::new();
-    for (i, info) in app.tab_infos().iter().enumerate() {
-        if i > 0 {
+    for (pos, info) in app.tab_infos().iter().enumerate() {
+        if pos > 0 {
             chunks.push(TabChunk {
                 text: "  │  ".to_string(),
                 style: Style::default(),
@@ -607,13 +607,13 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
         chunks.push(TabChunk {
             text: mark.to_string(),
             style: mark_style,
-            tab: Some(i),
+            tab: Some(info.index),
             close: false,
         });
         chunks.push(TabChunk {
             text: " ".to_string(),
             style: Style::default(),
-            tab: Some(i),
+            tab: Some(info.index),
             close: false,
         });
         let icon = match info.kind {
@@ -626,13 +626,13 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             chunks.push(TabChunk {
                 text: worktree_marker_text().to_string(),
                 style: theme::worktree_marker(),
-                tab: Some(i),
+                tab: Some(info.index),
                 close: false,
             });
             chunks.push(TabChunk {
                 text: " ".to_string(),
                 style: Style::default(),
-                tab: Some(i),
+                tab: Some(info.index),
                 close: false,
             });
         }
@@ -640,7 +640,7 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             chunks.push(TabChunk {
                 text: icon.to_string(),
                 style: kind_style(info.kind),
-                tab: Some(i),
+                tab: Some(info.index),
                 close: false,
             });
         }
@@ -648,20 +648,20 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
         chunks.push(TabChunk {
             text: sanitize(&number),
             style: kind_style(info.kind),
-            tab: Some(i),
+            tab: Some(info.index),
             close: false,
         });
         if !title.is_empty() {
             chunks.push(TabChunk {
                 text: " ".to_string(),
                 style: Style::default(),
-                tab: Some(i),
+                tab: Some(info.index),
                 close: false,
             });
             chunks.push(TabChunk {
                 text: sanitize(&title),
                 style: Style::default(),
-                tab: Some(i),
+                tab: Some(info.index),
                 close: false,
             });
         }
@@ -671,13 +671,13 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             chunks.push(TabChunk {
                 text: " ".to_string(),
                 style: Style::default(),
-                tab: Some(i),
+                tab: Some(info.index),
                 close: false,
             });
             chunks.push(TabChunk {
                 text: "◉".to_string(),
                 style: Style::default().fg(theme::FOCUSED),
-                tab: Some(i),
+                tab: Some(info.index),
                 close: false,
             });
         }
@@ -689,7 +689,7 @@ fn tab_chunks(app: &App) -> Vec<TabChunk> {
             style: Style::default()
                 .fg(theme::ALERT)
                 .add_modifier(Modifier::BOLD),
-            tab: Some(i),
+            tab: Some(info.index),
             close: true,
         });
     }

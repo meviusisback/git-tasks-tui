@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 pub struct TabState {
     pub repo: String,
     pub number: u64,
+    /// The tab's worktree: "" on bookmarks from before the field existed.
+    #[serde(default)]
+    pub tree: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

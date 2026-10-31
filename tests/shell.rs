@@ -25,10 +25,12 @@ fn arrows_walk_the_tabs() {
 
     // With tabs, the arrows walk them like t/T — and wrap around.
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "o/r".to_string(),
         number: 7,
     });
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "o/r".to_string(),
         number: 8,
     });

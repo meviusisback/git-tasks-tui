@@ -32,12 +32,13 @@ fn tab_cycles_panes_both_ways() {
 fn tab_cycle_includes_the_agent_while_one_runs() {
     let mut app = App {
         tabs: vec![Tab {
+            tree: String::new(),
             repo: "o/r".to_string(),
             number: 7,
         }],
         active_tab: Some(0),
         tab_agents: HashMap::from([(
-            ("o/r".to_string(), 7),
+            ("o/r".to_string(), 7, String::new()),
             TabAgent {
                 running: true,
                 ..Default::default()
@@ -107,7 +108,7 @@ fn legend_while_running_names_typing_not_app_keys() {
     let mut app = App {
         pane: Pane::Agent,
         tab_agents: HashMap::from([(
-            ("o/r".to_string(), 7),
+            ("o/r".to_string(), 7, String::new()),
             TabAgent {
                 running: true,
                 ..Default::default()
@@ -116,6 +117,7 @@ fn legend_while_running_names_typing_not_app_keys() {
         ..App::default()
     };
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "o/r".to_string(),
         number: 7,
     });
@@ -172,12 +174,13 @@ fn shift_arrows_reach_the_agent_box_only_from_the_detail() {
     let mut app = App {
         pane: List,
         tabs: vec![Tab {
+            tree: String::new(),
             repo: "o/r".to_string(),
             number: 7,
         }],
         active_tab: Some(0),
         tab_agents: HashMap::from([(
-            ("o/r".to_string(), 7),
+            ("o/r".to_string(), 7, String::new()),
             TabAgent {
                 running: true,
                 ..Default::default()
@@ -190,12 +193,13 @@ fn shift_arrows_reach_the_agent_box_only_from_the_detail() {
     let mut app = App {
         pane: Detail,
         tabs: vec![Tab {
+            tree: String::new(),
             repo: "o/r".to_string(),
             number: 7,
         }],
         active_tab: Some(0),
         tab_agents: HashMap::from([(
-            ("o/r".to_string(), 7),
+            ("o/r".to_string(), 7, String::new()),
             TabAgent {
                 running: true,
                 ..Default::default()

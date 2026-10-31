@@ -349,15 +349,18 @@ fn y_on_an_agent_question_moves_the_agreed_plan_to_the_loop() {
 }
 
 /// A finished run filed under its tab: records live per tab now, so the
-/// tests plant the tab and the entry together.
+/// tests plant the tab and the entry together. The tab adopts the
+/// record's tree, like a launch would place its bookmark.
 fn seed_tab_record(app: &mut App, record: AgentRecord) {
+    let tree = record.worktree.display().to_string();
     app.tabs.push(Tab {
+        tree: tree.clone(),
         repo: "o/r".to_string(),
         number: 7,
     });
     app.active_tab = Some(0);
     app.tab_agents.insert(
-        ("o/r".to_string(), 7),
+        ("o/r".to_string(), 7, tree),
         TabAgent {
             record: Some(record),
             ..Default::default()
@@ -366,8 +369,11 @@ fn seed_tab_record(app: &mut App, record: AgentRecord) {
 }
 
 fn tab_record(app: &App) -> Option<&AgentRecord> {
+    let tree = std::path::PathBuf::from("/tmp/wt/o/r/fix-foo")
+        .display()
+        .to_string();
     app.tab_agents
-        .get(&("o/r".to_string(), 7))
+        .get(&("o/r".to_string(), 7, tree))
         .and_then(|agent| agent.record.as_ref())
 }
 

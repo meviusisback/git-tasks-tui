@@ -64,6 +64,7 @@ fn restore_re_shows_the_tab_whose_pid_is_alive() {
     };
     let mut state = gtasks::state::State::default();
     state.tabs.push(gtasks::state::TabState {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
@@ -76,7 +77,7 @@ fn restore_re_shows_the_tab_whose_pid_is_alive() {
     );
     let mut app = App::default();
     app.restore_session(&state);
-    let key = ("me/a".to_string(), 1);
+    let key = ("me/a".to_string(), 1, tree.clone());
     let entry = app.tab_agents.get(&key).expect("the shadow is back");
     assert!(entry.running, "the tab shows its agent as running");
     let record = entry.record.as_ref().expect("a record to name it");
@@ -85,6 +86,7 @@ fn restore_re_shows_the_tab_whose_pid_is_alive() {
     // A dead pid leaves no shadow behind.
     let mut state2 = gtasks::state::State::default();
     state2.tabs.push(gtasks::state::TabState {
+        tree: String::new(),
         repo: "me/a".to_string(),
         number: 1,
     });
@@ -100,8 +102,13 @@ fn restore_re_shows_the_tab_whose_pid_is_alive() {
     );
     let mut app2 = App::default();
     app2.restore_session(&state2);
+    let dead_key = (
+        "me/a".to_string(),
+        1,
+        "/nonexistent-tree-gtasks-detached-probe".to_string(),
+    );
     assert!(
-        !app2.tab_agents.contains_key(&key),
+        !app2.tab_agents.contains_key(&dead_key),
         "no shadow for a dead pid"
     );
     assert!(
@@ -109,6 +116,7 @@ fn restore_re_shows_the_tab_whose_pid_is_alive() {
         "the dead record is pruned, not kept"
     );
     let _ = Tab {
+        tree: String::new(),
         repo: String::new(),
         number: 0,
     };

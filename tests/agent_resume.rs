@@ -395,10 +395,12 @@ fn the_record_survives_a_restart_but_old_files_still_parse() {
 #[test]
 fn y_never_reopens_onto_a_running_agent() {
     // Overwriting the live session would drop in-flight work: the y-arm
-    // refuses like `g` does, instead of replacing sessions[key].
+    // refuses like `g` does, instead of replacing sessions[key]. Same
+    // tree, same tab — a different tree is a different session and
+    // proceeds.
     let mut app = recorded("hermes");
     app.tab_agents.insert(
-        ("o/r".to_string(), 7),
+        ("o/r".to_string(), 7, tree().display().to_string()),
         TabAgent {
             running: true,
             ..Default::default()
