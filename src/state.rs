@@ -43,6 +43,12 @@ pub struct State {
     /// start. Unknown agent names are simply never matched, so a stale
     /// entry is inert, never an error.
     pub last_agents: HashMap<String, crate::agent::LastAgent>,
+    /// The Herdr agent behind each tree, by tree path: re-attaching after a
+    /// restart finds the same live agent instead of starting a second one.
+    /// A dead name is re-bound on next launch, so staleness only costs one
+    /// extra `agent get`, never a wrong session.
+    #[serde(default)]
+    pub herdr_bindings: HashMap<String, crate::herdr::HerdrBinding>,
 }
 
 impl Default for State {
@@ -63,6 +69,7 @@ impl Default for State {
             col_pct: 30,
             row_pct: 38,
             last_agents: HashMap::new(),
+            herdr_bindings: HashMap::new(),
         }
     }
 }

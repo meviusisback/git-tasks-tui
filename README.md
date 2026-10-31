@@ -64,7 +64,7 @@ The full map lives in [`docs/keys.md`](docs/keys.md) — every row is taken from
 | `N` | New GitHub project: name, visibility, branch → created, cloned, tree grown, agent menu |
 | `a` / `m` | Review actions and merge (method × branch deletion is a choice) |
 | `R` | Repo picker (re-reads GitHub on open) · `f` closed/open/all on one repo |
-| `s` | Settings (sandboxed agents, terminal font) · `?` keys + icon legend |
+| `s` | Settings (sandboxed agents, agent backend, terminal font) · `?` keys + icon legend |
 | Mouse | Click focuses and selects, double-click opens, `[✕]` closes a tab, dividers drag, wheel scrolls |
 
 Red **CR** after a PR number means *changes requested* — those rows are waiting on you.
@@ -98,6 +98,7 @@ clone_roots = ["/home/you/repo"]  # local clones, tried in order (no ~ expansion
 worktree_root = null         # worktree base (default: $XDG_DATA_HOME/gtasks/worktrees)
 agent_profile = "default"    # hermes -p profile for handoffs
 sandbox_agents = false       # launch via <agent>-sandboxed wrappers
+agent_backend = "direct"     # direct | herdr (Herdr owns the agent, the box embeds `agent attach`)
 font_size = "Medium"         # Small | Medium | Large (whole terminal, Foot restart applies)
 font_family = "monospace"    # whole-terminal typeface (Foot restart applies)
 parallel = 4
@@ -124,7 +125,12 @@ refresh_s = 300          # re-read the list every N seconds while idle (0 = off,
 - **The agent runs embedded** (pty, never suspends the UI) with `--ignore-rules` on hermes by default
   (repo-committed instruction files cannot steer it; other agents have no equivalent flag).
   YOLO-equivalents exist only inside the opt-in sandboxed launches — and only where the agent
-  has one (omp; hermes keeps Smart).
+  has one (omp; hermes keeps Smart). With `agent_backend = "herdr"`, Herdr owns the agent
+  process and the box embeds `herdr agent attach`: the same agent stays visible in Herdr's
+  own tabs, and outlives gtasks (closing the tab detaches; reopening the tree re-attaches).
+  Sandboxed launches always stay direct — Herdr starts the canonical binary, never the wrapper.
+  Names are ours (`g-<repo>-<n>-<agent>`, Herdr charset, 31 chars) and re-attach is
+  cwd-checked: a stale same-name agent from another tree never joins the wrong session.
 - **Checked doors are declared.** Every `CheckedArgv` construction site is listed in
   `tests/invariants/lib.sh` with its reason — a new door is a decision, and CI refuses undeclared ones.
 - **`config.toml` is hand-edited, `state.json` is not.**

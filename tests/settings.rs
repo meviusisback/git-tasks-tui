@@ -18,6 +18,7 @@ fn s_opens_the_settings_menu_with_the_sandbox_row() {
         menu.rows,
         vec![
             Setting::SandboxAgents,
+            Setting::AgentBackend,
             Setting::FontSize,
             Setting::FontFamily
         ]
@@ -72,11 +73,13 @@ fn font_rows_cycle_without_touching_the_disk() {
         rows,
         vec![
             Setting::SandboxAgents,
+            Setting::AgentBackend,
             Setting::FontSize,
             Setting::FontFamily
         ]
     );
     // Cursor onto the size row, Enter cycles Small -> Medium -> Large.
+    app.update(Msg::Key(Key::Down));
     app.update(Msg::Key(Key::Down));
     app.update(Msg::Key(Key::Enter));
     assert_eq!(app.font_size, gtasks::config::FontSize::Large);
@@ -149,4 +152,42 @@ fn the_menu_shows_the_state_on_screen() {
     app.update(Msg::Key(Key::Enter));
     let on = render(&app);
     assert!(on.contains("sandboxed agents [on]"), "flipped: {on}");
+}
+
+#[test]
+fn enter_flips_the_backend_to_herdr_and_back() {
+    let mut app = settings_app();
+    app.update(Msg::Key(Key::Char('s')));
+    app.update(Msg::Key(Key::Down));
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.agent_backend, gtasks::config::AgentBackend::Herdr);
+    assert!(app.config_save_requested, "the loop owns the write");
+    assert_eq!(app.status, "agent backend: herdr");
+    // The menu stays open: Enter flips back.
+    assert!(matches!(app.modal, Some(Modal::Settings(_))));
+    app.update(Msg::Key(Key::Enter));
+    assert_eq!(app.agent_backend, gtasks::config::AgentBackend::Direct);
+    assert_eq!(app.status, "agent backend: direct");
+}
+
+#[test]
+fn the_backend_roundtrips_through_toml() {
+    let _guard = tempfile::tempdir().unwrap();
+    let dir = _guard.path().canonicalize().unwrap();
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "repos = [\"o/r\"]\nagent_backend = \"herdr\"\n").unwrap();
+    let mut config = gtasks::config::Config::load(&path).unwrap();
+    assert_eq!(config.agent_backend, gtasks::config::AgentBackend::Herdr);
+    config.agent_backend = gtasks::config::AgentBackend::Direct;
+    config.save(&path).unwrap();
+    assert_eq!(
+        gtasks::config::Config::load(&path).unwrap().agent_backend,
+        gtasks::config::AgentBackend::Direct
+    );
+    // An old config without the key still loads, defaulting to direct.
+    std::fs::write(&path, "repos = [\"o/r\"]\n").unwrap();
+    assert_eq!(
+        gtasks::config::Config::load(&path).unwrap().agent_backend,
+        gtasks::config::AgentBackend::Direct
+    );
 }

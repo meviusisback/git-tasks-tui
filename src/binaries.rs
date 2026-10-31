@@ -22,6 +22,9 @@ pub struct Binaries {
     /// Browser launcher; absent on a headless machine, which is why it is optional.
     /// `xdg-open` on Linux, `open` on macOS.
     pub opener: Option<PathBuf>,
+    /// Herdr CLI for the Herdr agent backend (`herdr agent start/attach`).
+    /// Absent when not installed; the backend then falls back to direct.
+    pub herdr: Option<PathBuf>,
 }
 
 impl Binaries {
@@ -31,6 +34,7 @@ impl Binaries {
             gh: resolve("gh")?,
             git: resolve("git")?,
             hermes: resolve("hermes").ok(),
+            herdr: resolve("herdr").ok(),
             #[cfg(target_os = "macos")]
             opener: resolve("open").ok(),
             #[cfg(not(target_os = "macos"))]
@@ -44,6 +48,7 @@ impl Binaries {
             gh,
             git,
             hermes: None,
+            herdr: None,
             opener: None,
         }
     }

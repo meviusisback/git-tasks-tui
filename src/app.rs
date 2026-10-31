@@ -241,6 +241,7 @@ pub enum Modal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
     SandboxAgents,
+    AgentBackend,
     FontSize,
     FontFamily,
 }
@@ -250,6 +251,7 @@ impl Setting {
     pub fn title(&self) -> &'static str {
         match self {
             Setting::SandboxAgents => "sandboxed agents",
+            Setting::AgentBackend => "agent backend",
             Setting::FontSize => "terminal font size",
             Setting::FontFamily => "terminal font",
         }
@@ -260,6 +262,9 @@ impl Setting {
         match self {
             Setting::SandboxAgents => {
                 "launch through the `<agent>-sandboxed` wrappers (omp YOLO, hermes Smart, pi contained)"
+            }
+            Setting::AgentBackend => {
+                "direct spawns the binary in the box; herdr starts it in Herdr and embeds an attach view (sandboxed launches always stay direct)"
             }
             Setting::FontSize => {
                 "whole-terminal glyph size: Small 9px · Medium 11px · Large 14px. Restart the terminal to apply."
@@ -282,6 +287,7 @@ impl Setting {
             }
             Setting::FontSize => app.font_size.name().to_string(),
             Setting::FontFamily => app.font_family.clone(),
+            Setting::AgentBackend => app.agent_backend.name().to_string(),
         }
     }
 }
@@ -553,6 +559,12 @@ pub struct App {
     /// every launch, persisted in the session file: reopening the tree
     /// offers that agent's previous session instead of a fresh start.
     pub last_agents: HashMap<String, crate::agent::LastAgent>,
+    /// The Herdr agent behind each tree, by tree path: re-attaching after a
+    /// restart finds the same live agent. Persisted with the session.
+    pub herdr_bindings: HashMap<String, crate::herdr::HerdrBinding>,
+    /// Why the last launch fell back to direct despite the herdr backend:
+    /// consumed by the direct tail, which prints it on top of the outcome.
+    pub herdr_fallback_note: Option<String>,
     /// True when session fields changed since the last save: the loop
     /// persists `state.json` so a temporary exit keeps tabs, filter and
     /// cursor positions.
@@ -563,6 +575,9 @@ pub struct App {
     /// `<agent>-sandboxed` wrappers with non-interactive approvals. Off by
     /// default; set from the config at startup, never flipped at runtime.
     pub sandbox_agents: bool,
+    /// Mirror of `Config::agent_backend`: where the agent process runs.
+    /// Herdr never carries a sandboxed launch — the wrapper stays direct.
+    pub agent_backend: crate::config::AgentBackend,
     /// Set when a settings toggle flips: the loop writes `config.toml`.
     /// The key handler never touches the disk itself.
     pub config_save_requested: bool,
@@ -707,6 +722,7 @@ impl Default for App {
             pending: None,
             agent_profile: String::from("default"),
             sandbox_agents: false,
+            agent_backend: crate::config::AgentBackend::default(),
             config_save_requested: false,
             font_save_requested: false,
             font_size: crate::config::FontSize::default(),
@@ -716,6 +732,8 @@ impl Default for App {
             config_fallback: false,
             tab_agents: HashMap::new(),
             last_agents: HashMap::new(),
+            herdr_bindings: HashMap::new(),
+            herdr_fallback_note: None,
             agent_requested: None,
             agent_go: None,
             agent_resume: None,
@@ -1708,6 +1726,7 @@ impl App {
         state.col_pct = self.col_pct;
         state.row_pct = self.row_pct;
         state.last_agents = self.last_agents.clone();
+        state.herdr_bindings = self.herdr_bindings.clone();
     }
 
     /// Restore pane, cursors, filter, query and tabs from a saved session.
@@ -1764,6 +1783,7 @@ impl App {
             .collect();
         self.active_tab = state.active_tab.filter(|idx| *idx < self.tabs.len());
         self.last_agents = state.last_agents.clone();
+        self.herdr_bindings = state.herdr_bindings.clone();
         self.set_lengths(self.repos.len(), self.visible_items().len());
         self.refresh_status();
     }
@@ -2434,6 +2454,7 @@ impl App {
             cursor: 0,
             rows: vec![
                 Setting::SandboxAgents,
+                Setting::AgentBackend,
                 Setting::FontSize,
                 Setting::FontFamily,
             ],
@@ -2458,6 +2479,10 @@ impl App {
                 } else {
                     "sandboxed agents off".to_string()
                 };
+            }
+            Setting::AgentBackend => {
+                self.agent_backend = self.agent_backend.next();
+                self.status = format!("agent backend: {}", self.agent_backend.name());
             }
             Setting::FontSize => {
                 self.font_size = self.font_size.next();

@@ -16,6 +16,7 @@ pub mod env;
 pub mod fetch;
 pub mod gh;
 pub mod graphql;
+pub mod herdr;
 pub mod icons;
 pub mod input;
 pub mod logging;

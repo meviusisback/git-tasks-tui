@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -122,6 +123,7 @@ fn load_config() -> (Config, Option<String>) {
 /// `agreed` is `Some` when the user already said yes to creating the tree;
 /// `None` means resolve first and ask before writing. The agent spawns
 /// embedded in the agent box — the TUI never suspends.
+#[allow(clippy::too_many_arguments)]
 fn start_agent(
     app: &mut App,
     binaries: &Binaries,
@@ -130,6 +132,7 @@ fn start_agent(
     agreed: Option<PathBuf>,
     term_size: (u16, u16),
     sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    herdr_slot: &mut Option<gtasks::herdr::HerdrPending>,
 ) {
     // One agent per tab: the box shows one session, so a second launch on
     // the same tab is refused instead of orphaning the first. Other tabs
@@ -186,7 +189,7 @@ fn start_agent(
     if agreed.is_some() {
         match gtasks::worktree::create(&root, &plan.clone, &slug, &branch, binaries) {
             Ok(created) => {
-                launch_agent(
+                if let Some(pending) = launch_agent(
                     app,
                     &plan,
                     &created.path,
@@ -197,7 +200,9 @@ fn start_agent(
                         timeout,
                     },
                     false,
-                );
+                ) {
+                    *herdr_slot = Some(pending);
+                }
             }
             // The refusal goes to the screen as it is: a check failure must
             // not become indistinguishable from a bug in the check.
@@ -207,7 +212,7 @@ fn start_agent(
     }
     match agent::next_step(target) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(
+            if let Some(pending) = launch_agent(
                 app,
                 &plan,
                 &path,
@@ -218,7 +223,9 @@ fn start_agent(
                     timeout,
                 },
                 false,
-            );
+            ) {
+                *herdr_slot = Some(pending);
+            }
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -239,6 +246,7 @@ fn start_agent(
 /// it falls back to the creation question instead of failing silently.
 /// The path is re-validated at launch (not a symlink, still under the root):
 /// the menu row was recorded earlier and the disk may have changed since.
+#[allow(clippy::too_many_arguments)]
 fn start_placed(
     app: &mut App,
     plan: AgentPlan,
@@ -247,6 +255,7 @@ fn start_placed(
     sessions: &mut HashMap<(String, u64), EmbeddedSession>,
     binaries: &Binaries,
     timeout: Duration,
+    herdr_slot: &mut Option<gtasks::herdr::HerdrPending>,
 ) {
     // One agent per tab, same as every other launch.
     let key = App::tab_key(&plan.repo, plan.number);
@@ -265,7 +274,7 @@ fn start_placed(
     }
     match agent::next_step(path) {
         agent::AgentNext::Launch(path) => {
-            launch_agent(
+            if let Some(pending) = launch_agent(
                 app,
                 &plan,
                 &path,
@@ -276,7 +285,9 @@ fn start_placed(
                     timeout,
                 },
                 false,
-            );
+            ) {
+                *herdr_slot = Some(pending);
+            }
         }
         agent::AgentNext::AskToCreate(path) => {
             let question = format!(
@@ -493,8 +504,7 @@ fn launch_agent(
     path: &std::path::Path,
     ctx: LaunchCtx<'_>,
     resume: bool,
-) {
-    let key = App::tab_key(&plan.repo, plan.number);
+) -> Option<gtasks::herdr::HerdrPending> {
     // The tree must be safe to start in — fresh launch or resume. A
     // resume reopens exactly this tree, but the offer-time branch read
     // trusts the tree's own `.git` pointer: re-validate at launch, or a
@@ -535,13 +545,13 @@ fn launch_agent(
                 );
             }
         }
-        return;
+        return None;
     }
     let seeds = match gtasks::agent::seeds_dir() {
         Ok(seeds) => seeds,
         Err(err) => {
             app.status = format!("cannot prepare the seed directory: {err:#}");
-            return;
+            return None;
         }
     };
     // A resume sends nothing: the session comes back as it was, so there
@@ -557,7 +567,7 @@ fn launch_agent(
         Ok(seed) => seed,
         Err(err) => {
             app.status = format!("cannot write the agent seed: {err:#}");
-            return;
+            return None;
         }
     };
     let argv = {
@@ -565,6 +575,22 @@ fn launch_agent(
         // binary. A wrapper that was never installed refuses here, naming
         // itself — launching the plain binary instead would silently drop
         // the containment the setting promises.
+        // Herdr backend (never sandboxed: Herdr starts the canonical agent
+        // binary, never our wrapper — a sandboxed launch always stays direct).
+        // The slow `herdr` calls run in a worker thread; the loop embeds
+        // `herdr agent attach` (or falls back to direct) when it answers.
+        if app.agent_backend == gtasks::config::AgentBackend::Herdr && !app.sandbox_agents {
+            match ctx.binaries.herdr.clone() {
+                Some(herdr) => {
+                    return Some(start_herdr_launch(
+                        app, plan, path, body, lines, seed, resume, &herdr,
+                    ));
+                }
+                None => {
+                    app.herdr_fallback_note = Some("the herdr CLI is missing".to_string());
+                }
+            }
+        }
         let program = if app.sandbox_agents {
             match agent::sandboxed_program(&plan.agent.program) {
                 Some(wrapped) => wrapped,
@@ -578,7 +604,7 @@ fn launch_agent(
                         "sandbox_agents is on but {} is not installed",
                         wrapper.as_deref().unwrap_or("the wrapper")
                     );
-                    return;
+                    return None;
                 }
             }
         } else {
@@ -629,54 +655,8 @@ fn launch_agent(
         &parent,
     ) {
         Ok(sess) => {
-            // The agent lives in its item's tab: ensure the tab, show it,
-            // and file this session under it. Other tabs keep running.
-            if !app
-                .tabs
-                .iter()
-                .any(|tab| tab.repo == plan.repo && tab.number == plan.number)
-            {
-                app.tabs.push(gtasks::app::Tab {
-                    repo: plan.repo.clone(),
-                    number: plan.number,
-                });
-            }
-            if let Some(idx) = app
-                .tabs
-                .iter()
-                .position(|tab| tab.repo == plan.repo && tab.number == plan.number)
-            {
-                app.activate_tab(idx);
-            }
-            let screen = sess.snapshot();
-            let entry = app.tab_agents.entry(key.clone()).or_default();
-            entry.running = true;
-            entry.screen = screen;
-            entry.record = Some(gtasks::agent::AgentRecord {
-                repo: plan.repo.clone(),
-                number: plan.number,
-                profile: plan.profile.clone(),
-                agent: plan.agent.id.name().to_string(),
-                worktree: path.to_path_buf(),
-                seed_lines: lines,
-                status: gtasks::agent::AgentStatus::Running,
-            });
-            entry.dismissed_for = None;
-            app.pane = gtasks::app::Pane::Agent;
-            // The detail pane shows where the agent works while no
-            // issue/PR is selected; without it the right column above the
-            // box goes blank on repos with no rows.
-            entry.context = Some(gtasks::app::AgentContext {
-                repo: plan.repo.clone(),
-                branch: plan.branch.clone(),
-                path: path.to_path_buf(),
-            });
-            // The prompt is typed, not sent: the agent opens ready, and
-            // the user reviews the draft and presses Enter. The seed file
-            // still travels to the record so the run is reproducible. A
-            // resume sends nothing: no draft, just the session back.
-            entry.draft = if resume { None } else { Some(body) };
-            app.status = if resume {
+            let draft = if resume { None } else { Some(body) };
+            let status = if resume {
                 format!(
                     "reopened the last {} session — nothing sent",
                     plan.agent.id.name()
@@ -684,11 +664,334 @@ fn launch_agent(
             } else {
                 "agent ready — review the draft, edit it, Enter sends it".to_string()
             };
-            app.remember_worktree_agent(plan, path);
-            ctx.sessions.insert(key, sess);
+            finish_launch(app, ctx.sessions, plan, path, sess, lines, draft, status);
         }
         Err(err) => app.status = format!("cannot run the agent: {err:#}"),
     }
+    // A Herdr attempt that fell back to direct (missing CLI, failed start)
+    // says so on top of the direct outcome: the setting still reads
+    // `herdr`, so silence would mislead the next launch too.
+    if let Some(reason) = app.herdr_fallback_note.take() {
+        if app.status.starts_with("agent ready") || app.status.starts_with("reopened the last") {
+            app.status = format!("{} (Herdr unavailable: {reason})", app.status);
+        } else {
+            app.status = format!("Herdr unavailable ({reason}) — {}", app.status);
+        }
+    }
+    // Direct spawns synchronously: nothing in flight to poll.
+    None
+}
+
+/// Queue a Herdr-side start: build the agent's own argv (our flags, Herdr's
+/// binary), hand the slow calls to a worker thread, and mark the tab busy
+/// so a second `g` cannot queue another launch on top. The loop embeds
+/// `herdr agent attach` when the thread answers; the draft is typed into
+/// the attach view exactly like a direct launch, reaching the same agent.
+/// Returns the in-flight launch for the loop to poll.
+#[allow(clippy::too_many_arguments)]
+fn start_herdr_launch(
+    app: &mut App,
+    plan: &AgentPlan,
+    path: &Path,
+    body: String,
+    lines: usize,
+    seed: gtasks::agent::SeedFile,
+    resume: bool,
+    herdr: &Path,
+) -> gtasks::herdr::HerdrPending {
+    let full = if resume {
+        agent::agent_argv_for_resume(
+            plan.agent.id,
+            &plan.agent.program,
+            &plan.profile,
+            path,
+            false,
+        )
+    } else {
+        agent::agent_argv_for_draft(
+            plan.agent.id,
+            &plan.agent.program,
+            &plan.profile,
+            path,
+            false,
+        )
+    };
+    let agent_args: Vec<String> = full
+        .as_argv()
+        .args
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let tree = path.to_path_buf();
+    let name =
+        gtasks::herdr::agent_name(&plan.repo, plan.number, plan.agent.id.name(), &plan.profile);
+    let job = gtasks::herdr::HerdrJob {
+        program: herdr.to_path_buf(),
+        cli_cwd: tree.clone(),
+        name,
+        kind: plan.agent.id.name().to_string(),
+        agent_args,
+        tree: tree.clone(),
+        label: format!("{}#{} {}", plan.repo, plan.number, plan.agent.id.name()),
+        binding: app.herdr_bindings.get(&tree.display().to_string()).cloned(),
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(gtasks::herdr::run_job(job));
+    });
+    // Busy until the attach lands: `g` refuses onto a running agent, and
+    // without this mark the still-empty tab would accept a second launch.
+    let key = App::tab_key(&plan.repo, plan.number);
+    let entry = app.tab_agents.entry(key).or_default();
+    entry.running = true;
+    entry.context = Some(gtasks::app::AgentContext {
+        repo: plan.repo.clone(),
+        branch: plan.branch.clone(),
+        path: path.to_path_buf(),
+    });
+    app.status = "starting the agent in Herdr…".to_string();
+    gtasks::herdr::HerdrPending {
+        rx,
+        plan: plan.clone(),
+        path: tree,
+        body,
+        lines,
+        seed,
+        resume,
+    }
+}
+
+/// Poll a Herdr-side start: embed the attach view, or launch direct with
+/// the reason on top. A tab closed while the thread worked does not come
+/// back: the Herdr agent keeps running (that is the point of Herdr) and
+/// the binding is recorded, so reopening the tree re-attaches.
+fn poll_herdr_launch(
+    app: &mut App,
+    binaries: &Binaries,
+    term_size: (u16, u16),
+    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    timeout: Duration,
+    slot: &mut Option<gtasks::herdr::HerdrPending>,
+) {
+    let Some(pending) = slot.take() else {
+        return;
+    };
+    match pending.rx.try_recv() {
+        Err(TryRecvError::Empty) => {
+            *slot = Some(pending);
+        }
+        Err(TryRecvError::Disconnected) => {
+            launch_direct_after_herdr(
+                app,
+                binaries,
+                term_size,
+                sessions,
+                timeout,
+                pending,
+                slot,
+                "the Herdr worker died",
+            );
+        }
+        Ok(gtasks::herdr::HerdrOutcome::Failed(reason)) => {
+            launch_direct_after_herdr(
+                app, binaries, term_size, sessions, timeout, pending, slot, &reason,
+            );
+        }
+        Ok(gtasks::herdr::HerdrOutcome::Attached {
+            name,
+            tab_id,
+            pane_id,
+        }) => {
+            let Some(herdr) = binaries.herdr.clone() else {
+                launch_direct_after_herdr(
+                    app,
+                    binaries,
+                    term_size,
+                    sessions,
+                    timeout,
+                    pending,
+                    slot,
+                    "the herdr CLI is missing",
+                );
+                return;
+            };
+            let argv = gtasks::herdr::attach_argv(&herdr, &pending.path, &name);
+            let outer = ui::agent_box(
+                Rect::new(0, 0, term_size.0, term_size.1),
+                app.col_pct,
+                app.row_pct,
+            );
+            let cols = outer.width.saturating_sub(2);
+            let rows = outer.height.saturating_sub(2);
+            let parent: std::collections::HashMap<String, String> = std::env::vars().collect();
+            match EmbeddedSession::spawn(
+                &argv,
+                pending.seed,
+                pending.lines,
+                pending.plan.repo.clone(),
+                pending.plan.number,
+                pending.plan.profile.clone(),
+                pending.plan.agent.id.name().to_string(),
+                pending.path.clone(),
+                cols,
+                rows,
+                &parent,
+            ) {
+                Ok(sess) => {
+                    let path_key = pending.path.display().to_string();
+                    app.herdr_bindings.insert(
+                        path_key,
+                        gtasks::herdr::HerdrBinding {
+                            name: name.clone(),
+                            tab_id,
+                            pane_id,
+                        },
+                    );
+                    app.session_dirty = true;
+                    if app.tabs.iter().any(|tab| {
+                        tab.repo == pending.plan.repo && tab.number == pending.plan.number
+                    }) {
+                        let draft = if pending.resume {
+                            None
+                        } else {
+                            Some(pending.body)
+                        };
+                        let status = if pending.resume {
+                            format!(
+                                "reopened the last {} session in Herdr — nothing sent",
+                                pending.plan.agent.id.name()
+                            )
+                        } else {
+                            format!("attached to the Herdr agent {name} — also visible in Herdr")
+                        };
+                        finish_launch(
+                            app,
+                            sessions,
+                            &pending.plan,
+                            &pending.path,
+                            sess,
+                            pending.lines,
+                            draft,
+                            status,
+                        );
+                    } else {
+                        // The tab closed mid-start: the agent keeps running
+                        // in Herdr (its binding is recorded above), the box
+                        // does not come back.
+                        drop(sess);
+                        app.status = format!(
+                            "the tab closed while Herdr started {name} — reopen the tree to attach"
+                        );
+                    }
+                }
+                Err(err) => {
+                    app.status = format!("cannot attach to the Herdr agent: {err:#}");
+                }
+            }
+        }
+    }
+}
+
+/// Direct fallback after a failed Herdr attempt: force the direct backend
+/// for one launch (the setting stays `herdr`), with the reason attached.
+/// Without the forced backend the retry would queue another Herdr thread.
+#[allow(clippy::too_many_arguments)]
+fn launch_direct_after_herdr(
+    app: &mut App,
+    binaries: &Binaries,
+    term_size: (u16, u16),
+    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    timeout: Duration,
+    pending: gtasks::herdr::HerdrPending,
+    slot: &mut Option<gtasks::herdr::HerdrPending>,
+    reason: &str,
+) {
+    app.herdr_fallback_note = Some(reason.to_string());
+    app.agent_backend = gtasks::config::AgentBackend::Direct;
+    // Forced direct, so this cannot queue another thread — but handle the
+    // return or a future backend would silently drop a launch.
+    if let Some(next) = launch_agent(
+        app,
+        &pending.plan,
+        &pending.path,
+        LaunchCtx {
+            term_size,
+            sessions,
+            binaries,
+            timeout,
+        },
+        pending.resume,
+    ) {
+        *slot = Some(next);
+    }
+    app.agent_backend = gtasks::config::AgentBackend::Herdr;
+}
+
+/// File a freshly spawned box session under its tab: tabs, screen, record,
+/// context, draft and status. Shared by the direct spawn and the Herdr
+/// attach — after spawning both are just a pty child in a tab.
+#[allow(clippy::too_many_arguments)]
+fn finish_launch(
+    app: &mut App,
+    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    plan: &AgentPlan,
+    path: &Path,
+    sess: EmbeddedSession,
+    seed_lines: usize,
+    draft: Option<String>,
+    status: String,
+) {
+    let key = App::tab_key(&plan.repo, plan.number);
+    // The agent lives in its item's tab: ensure the tab, show it, and
+    // file this session under it. Other tabs keep running.
+    if !app
+        .tabs
+        .iter()
+        .any(|tab| tab.repo == plan.repo && tab.number == plan.number)
+    {
+        app.tabs.push(gtasks::app::Tab {
+            repo: plan.repo.clone(),
+            number: plan.number,
+        });
+    }
+    if let Some(idx) = app
+        .tabs
+        .iter()
+        .position(|tab| tab.repo == plan.repo && tab.number == plan.number)
+    {
+        app.activate_tab(idx);
+    }
+    let screen = sess.snapshot();
+    let entry = app.tab_agents.entry(key.clone()).or_default();
+    entry.running = true;
+    entry.screen = screen;
+    entry.record = Some(gtasks::agent::AgentRecord {
+        repo: plan.repo.clone(),
+        number: plan.number,
+        profile: plan.profile.clone(),
+        agent: plan.agent.id.name().to_string(),
+        worktree: path.to_path_buf(),
+        seed_lines,
+        status: gtasks::agent::AgentStatus::Running,
+    });
+    entry.dismissed_for = None;
+    app.pane = gtasks::app::Pane::Agent;
+    // The detail pane shows where the agent works while no
+    // issue/PR is selected; without it the right column above the
+    // box goes blank on repos with no rows.
+    entry.context = Some(gtasks::app::AgentContext {
+        repo: plan.repo.clone(),
+        branch: plan.branch.clone(),
+        path: path.to_path_buf(),
+    });
+    // The prompt is typed, not sent: the agent opens ready, and
+    // the user reviews the draft and presses Enter. The seed file
+    // still travels to the record so the run is reproducible. A
+    // resume sends nothing: no draft, just the session back.
+    entry.draft = draft;
+    app.status = status;
+    app.remember_worktree_agent(plan, path);
+    sessions.insert(key, sess);
 }
 
 /// Start one batched fetch in the background. Dropping the receiver with the app
@@ -852,6 +1155,7 @@ fn run_tui() -> anyhow::Result<()> {
         write_timeout: timeout,
         agent_profile: config.agent_profile.clone(),
         sandbox_agents: config.sandbox_agents,
+        agent_backend: config.agent_backend,
         font_size: config.font_size,
         font_family: config.font_family.clone(),
         fonts: gtasks::config::mono_fonts(),
@@ -970,6 +1274,9 @@ fn run_tui() -> anyhow::Result<()> {
     // App only carries what the screen needs. Switching tabs switches
     // boxes; background tabs keep running.
     let mut sessions: HashMap<(String, u64), EmbeddedSession> = HashMap::new();
+    // One Herdr-side start at a time: the worker thread answers, the loop
+    // embeds `herdr agent attach` (or falls back to direct).
+    let mut herdr_pending: Option<gtasks::herdr::HerdrPending> = None;
     // Draw only on change: view + paint every tick is what caps the fps
     // budget, so background completions, events and fresh agent output
     // raise this instead.
@@ -1115,6 +1422,7 @@ fn run_tui() -> anyhow::Result<()> {
                 app.font_save_requested = false;
             } else if let Some(path) = config_path() {
                 config.sandbox_agents = app.sandbox_agents;
+                config.agent_backend = app.agent_backend;
                 config.font_size = app.font_size;
                 config.font_family = app.font_family.clone();
                 match config.save(&path) {
@@ -1452,6 +1760,7 @@ fn run_tui() -> anyhow::Result<()> {
                 None,
                 term_size,
                 &mut sessions,
+                &mut herdr_pending,
             );
         }
         if let Some((plan, path)) = app.agent_go.take() {
@@ -1464,11 +1773,12 @@ fn run_tui() -> anyhow::Result<()> {
                 Some(path),
                 term_size,
                 &mut sessions,
+                &mut herdr_pending,
             );
         }
         if let Some((plan, path)) = app.agent_resume.take() {
             needs_draw = true;
-            launch_agent(
+            if let Some(pending) = launch_agent(
                 &mut app,
                 &plan,
                 &path,
@@ -1479,6 +1789,21 @@ fn run_tui() -> anyhow::Result<()> {
                     timeout,
                 },
                 true,
+            ) {
+                herdr_pending = Some(pending);
+            }
+        }
+        // A Herdr-side start answering: embed the attach view, or launch
+        // direct with the reason on top.
+        if herdr_pending.is_some() {
+            needs_draw = true;
+            poll_herdr_launch(
+                &mut app,
+                &binaries,
+                term_size,
+                &mut sessions,
+                timeout,
+                &mut herdr_pending,
             );
         }
         if let Some((plan, path)) = app.agent_place.take() {
@@ -1491,6 +1816,7 @@ fn run_tui() -> anyhow::Result<()> {
                 &mut sessions,
                 &binaries,
                 timeout,
+                &mut herdr_pending,
             );
         }
         if let Some(order) = app.rename_go.take() {

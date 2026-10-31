@@ -51,6 +51,12 @@ pub struct Config {
     /// first, so a single-root config keeps working.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clone_roots: Vec<PathBuf>,
+    /// Where agents run: `direct` spawns the binary in the embedded box;
+    /// `herdr` starts it in Herdr (`agent start`) and embeds `agent attach`,
+    /// so the same agent stays visible in Herdr's own tabs. Sandbox always
+    /// stays direct — Herdr starts the canonical binary, never the wrapper.
+    #[serde(default)]
+    pub agent_backend: AgentBackend,
 }
 
 impl Default for Config {
@@ -58,6 +64,7 @@ impl Default for Config {
         Self {
             repos: Vec::new(),
             worktree_root: None,
+            agent_backend: AgentBackend::default(),
             parallel: 4,
             timeout_s: 30,
             write_timeout_s: 60,
@@ -74,6 +81,38 @@ impl Default for Config {
         }
     }
 }
+/// Where the agent process runs: spawned by gtasks into the embedded box,
+/// or started in Herdr and embedded as an attach view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentBackend {
+    /// Spawn the binary directly in the embedded box (always, and always
+    /// for sandboxed launches — Herdr cannot start the wrapper).
+    #[default]
+    Direct,
+    /// Start in Herdr (`agent start`), embed `agent attach`: the same agent
+    /// stays visible in Herdr's own tabs.
+    Herdr,
+}
+
+impl AgentBackend {
+    /// Short name for the settings row.
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentBackend::Direct => "direct",
+            AgentBackend::Herdr => "herdr",
+        }
+    }
+
+    /// Cycle for the settings toggle: direct → herdr → direct.
+    pub fn next(self) -> Self {
+        match self {
+            AgentBackend::Direct => AgentBackend::Herdr,
+            AgentBackend::Herdr => AgentBackend::Direct,
+        }
+    }
+}
+
 /// Terminal font size: the whole terminal, because a TUI cannot resize its
 /// own glyphs — the terminal owns every pixel. Small is 9px, Medium is 11px
 /// (Foot's default), Large is 14px.
