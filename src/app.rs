@@ -1004,7 +1004,7 @@ impl App {
         // legend in this one row would push every message off the edge.
         let text = if self.pane == Pane::Detail {
             String::from(
-                "q quit · ? help · ←/→ panes · t/T tabs · x close · m actions · g agent · W trees · d diff · Enter body · s settings",
+                "q quit · ? help · ←/→ tabs · x close · m actions · g agent · W trees · d diff · Enter body · s settings",
             )
         } else if self.pane == Pane::Agent {
             // While the agent runs, every key but Esc is agent input —
@@ -1016,7 +1016,7 @@ impl App {
                 )
             } else {
                 String::from(
-                    "q quit · ? help · ←/→ panes · ↑/↓ scroll · g launch agent · x close record",
+                    "q quit · ? help · ←/→ tabs · ↑/↓ scroll · g launch agent · x close record",
                 )
             }
         } else if self.pane == Pane::Repos {
@@ -1025,11 +1025,11 @@ impl App {
             )
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · R repos · m actions · g agent · W trees · d diff · s settings",
+                "q quit · ? help · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · R repos · m actions · g agent · W trees · d diff · s settings",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ panes · ↑/↓ move · Tab repos · Enter open tab · t/T tabs · x close · m actions · g agent · W trees · d diff · f state · s settings",
+                "q quit · ? help · Esc back · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · m actions · g agent · W trees · d diff · f state · s settings",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -3609,13 +3609,6 @@ impl App {
             },
             Key::Char('q') => self.quit = true,
             Key::Char('?') => self.show_help = true,
-            Key::Left => {
-                // Left column is repos + list; from anywhere on the right,
-                // go back to the list.
-                if matches!(self.pane, Pane::Detail | Pane::Agent) {
-                    self.pane = Pane::List;
-                }
-            }
             // Shift+arrows move between boxes following the screen layout:
             // left column is repos over list, right column detail over agent.
             // At an edge nothing moves — a wrap would land somewhere the
@@ -3644,10 +3637,21 @@ impl App {
                 Pane::Detail | Pane::List | Pane::Agent => {}
             },
             Key::Right => {
-                // Right column top is the detail; from anywhere on the left,
-                // go to the detail.
-                if matches!(self.pane, Pane::Repos | Pane::List) {
-                    self.pane = Pane::Detail;
+                // Plain arrows walk the tabs, like `t`/`T`: boxes move on
+                // Shift+arrows (same row or column) and Tab. The live
+                // agent keeps its own arrows — this arm never runs while
+                // it has focus.
+                if self.tabs.is_empty() {
+                    self.status = "no tabs — Enter opens one".to_string();
+                } else {
+                    self.next_tab();
+                }
+            }
+            Key::Left => {
+                if self.tabs.is_empty() {
+                    self.status = "no tabs — Enter opens one".to_string();
+                } else {
+                    self.prev_tab();
                 }
             }
             Key::Tab => self.pane = next_pane(self.pane, true, self.agent_box_shown()),

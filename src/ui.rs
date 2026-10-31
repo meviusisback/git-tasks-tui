@@ -72,7 +72,7 @@ fn pane_title(name: &str, icon: &str) -> String {
 
 /// The keys that work today. Also the source of the `?` overlay.
 const HELP_NOW: &[&str] = &[
-    "← / →      move between the columns · wheel scrolls the agent box",
+    "← / →      previous / next tab, like t / T · wheel scrolls the agent box",
     "Shift + ←/↑/↓/→  move between the four boxes",
     "↑ / ↓      move the selection, or scroll detail/agent",
     "Enter      open a tab + open the detail box · d diff",
@@ -1469,9 +1469,110 @@ fn draw_worktrees_menu(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// The diff overlay: the PR's unified diff, one screenful at the scroll
-/// offset, additions green, removals red, hunk headers bright. Long lines
-/// are clipped by the widget (code reads better unwrapped than rewrapped).
+/// One side-by-side diff row: the old line on the left, the new line on
+/// the right, each with its own tone. Changed pairs render old-vs-new
+/// on the same row, so the eye compares instead of scrolling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideRow {
+    pub left: (String, DiffTone),
+    pub right: (String, DiffTone),
+}
+
+/// How one cell of a side-by-side row reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffTone {
+    /// Unchanged context, or an empty filler cell.
+    Same,
+    /// A removed line (left column).
+    Old,
+    /// An added line (right column).
+    New,
+    /// Hunk and file headers (`@@`, `---`/`+++`).
+    Head,
+}
+
+/// Pair a unified diff into side-by-side rows: context lines span both
+/// columns, runs of `-`/`+` pair up row by row, leftovers face a blank
+/// cell. Headers become full-width head rows. Pure over the text, so
+/// tests pin the pairing without a terminal.
+pub fn side_by_side(diff: &str) -> Vec<SideRow> {
+    let mut rows: Vec<SideRow> = Vec::new();
+    let mut dels: Vec<String> = Vec::new();
+    let mut adds: Vec<String> = Vec::new();
+    let flush = |rows: &mut Vec<SideRow>, dels: &mut Vec<String>, adds: &mut Vec<String>| {
+        let mut olds = dels.drain(..);
+        let mut news = adds.drain(..);
+        loop {
+            match (olds.next(), news.next()) {
+                (Some(old), Some(new)) => rows.push(SideRow {
+                    left: (old, DiffTone::Old),
+                    right: (new, DiffTone::New),
+                }),
+                (Some(old), None) => rows.push(SideRow {
+                    left: (old, DiffTone::Old),
+                    right: (String::new(), DiffTone::Same),
+                }),
+                (None, Some(new)) => rows.push(SideRow {
+                    left: (String::new(), DiffTone::Same),
+                    right: (new, DiffTone::New),
+                }),
+                (None, None) => break,
+            }
+        }
+    };
+    for line in diff.lines() {
+        if line.starts_with("@@")
+            || line.starts_with("diff ")
+            || line.starts_with("--- ")
+            || line.starts_with("+++ ")
+            || line.starts_with("index ")
+        {
+            flush(&mut rows, &mut dels, &mut adds);
+            rows.push(SideRow {
+                left: (line.to_string(), DiffTone::Head),
+                right: (String::new(), DiffTone::Same),
+            });
+        } else if line.starts_with('-') {
+            dels.push(line[1.min(line.len())..].to_string());
+        } else if line.starts_with('+') {
+            adds.push(line[1.min(line.len())..].to_string());
+        } else {
+            flush(&mut rows, &mut dels, &mut adds);
+            let text = line.strip_prefix(' ').unwrap_or(line).to_string();
+            rows.push(SideRow {
+                left: (text.clone(), DiffTone::Same),
+                right: (text, DiffTone::Same),
+            });
+        }
+    }
+    flush(&mut rows, &mut dels, &mut adds);
+    rows
+}
+
+/// Fit one cell into exactly `width` columns: truncate wide text, pad
+/// narrow text — so the two columns never drift apart.
+fn fit_cell(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    while used < width {
+        out.push(' ');
+        used += 1;
+    }
+    out
+}
+
+/// The diff overlay: old version left, new version right, one screenful
+/// at the scroll offset. Changed pairs sit on the same row — red left,
+/// green right, bold — context reads plain on both sides. Long lines are
+/// clipped per column (code reads better unwrapped than rewrapped).
 /// A truncation note leads when the fetch kept only the head.
 fn draw_diff(frame: &mut Frame, area: Rect, app: &crate::app::App) {
     let area = centered_rect(88, 88, area);
@@ -1501,21 +1602,34 @@ fn draw_diff(frame: &mut Frame, area: Rect, app: &crate::app::App) {
             Style::default().fg(theme::SUBTEXT),
         )));
     }
-    rows.extend(app.diff_text.lines().skip(app.diff_scroll).map(|line| {
-        let text = sanitize(line);
-        let style = if line.starts_with('+') && !line.starts_with("+++") {
-            Style::default().fg(theme::OK)
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            Style::default().fg(theme::ALERT)
-        } else if line.starts_with("@@") {
-            Style::default()
-                .fg(theme::FOCUSED)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        Line::from(Span::styled(text, style))
-    }));
+    let col = inner.width.saturating_sub(3) as usize / 2;
+    let tone_style = |tone: DiffTone| match tone {
+        DiffTone::Same => Style::default(),
+        DiffTone::Old => Style::default().fg(theme::ALERT),
+        DiffTone::New => Style::default().fg(theme::OK),
+        DiffTone::Head => Style::default()
+            .fg(theme::FOCUSED)
+            .add_modifier(Modifier::BOLD),
+    };
+    let changed = |tone: DiffTone| {
+        let style = tone_style(tone);
+        match tone {
+            DiffTone::Old | DiffTone::New => style.add_modifier(Modifier::BOLD),
+            _ => style,
+        }
+    };
+    rows.extend(
+        side_by_side(&app.diff_text)
+            .iter()
+            .skip(app.diff_scroll)
+            .map(|row| {
+                Line::from(vec![
+                    Span::styled(fit_cell(&sanitize(&row.left.0), col), changed(row.left.1)),
+                    Span::styled(" │ ", Style::default().fg(theme::SUBTEXT)),
+                    Span::styled(fit_cell(&sanitize(&row.right.0), col), changed(row.right.1)),
+                ])
+            }),
+    );
     let visible = Paragraph::new(rows);
     frame.render_widget(visible, inner);
 }

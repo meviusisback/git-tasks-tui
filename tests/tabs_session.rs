@@ -781,7 +781,7 @@ fn the_screen_names_tab_and_repo_keys() {
     }
     for needle in [
         "Tab repos", // bottom legend: how to reach the repos
-        "t/T tabs",  // bottom legend: how to move between tabs
+        "←/→ tabs",  // bottom legend: how to move between tabs
         "x close",   // bottom legend: how to close one
         "●",         // the active tab marker on the strip
         "#1",        // the open tab itself

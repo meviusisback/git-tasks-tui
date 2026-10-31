@@ -8,8 +8,8 @@ disagree, the handler is right and this file is a bug.
 | `q` | quit |
 | `Ctrl-C` | quit — the escape hatch, always live, except with the agent focused, where it interrupts the agent |
 | `Esc` | back **one level**: overlay → confirmation → search → detail → list → repos. It **never quits** and **never steals agent keys**: with the agent focused `Esc` goes to the agent (like `Tab`; `Shift`+arrows leave the box). At the outermost level it says `Esc — nothing to close` in the status line |
-| `?` | the overlay of keys (it says which work today and which are promised) |
-| `←` / `→` | move between the columns: left (repos, list) ↔ right (detail); `Tab` cycles the panes, plus the agent box while the active tab's agent operates. Mouse: left-click focuses a box or opens a tab, drag on a divider resizes the cross (saved across restarts), the wheel scrolls the agent box history |
+| `?` | the overlay of keys + icon legend (it says which keys work today and which are promised) |
+| `←` / `→` | previous / next tab, like `t` / `T`. Boxes move on `Shift`+arrows (same row or column) or `Tab`. Mouse: left-click focuses a box or opens a tab, drag on a divider resizes the cross (saved across restarts), the wheel scrolls the agent box history |
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while the active tab's agent operates |
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
 | `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
@@ -20,7 +20,7 @@ disagree, the handler is right and this file is a bug.
 | `R` | repo selection menu (the rows re-read from GitHub on open, so new repos join without a restart): `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
 | `f` | state filter on a single repo: open → closed → all states (numeric, oldest first). Closed history is fetched on demand; on "all repos" it says to pick one repo first |
-| `d` | diff of the selected PR in an overlay (`↑`/`↓` scroll, wheel scrolls, `Enter`/`Esc` closes): fetched once, then cached; first 200 lines with the total named when truncated |
+| `d` | side-by-side diff of the selected PR in an overlay (`↑`/`↓` scroll, wheel scrolls, `Enter`/`Esc` closes): old version left, new version right, changed pairs on the same row. Fetched once, then cached; first 200 lines with the total named when truncated |
 | `o` | open the selected item in the browser |
 | `r` | refresh — it works in every pane, including inside a drilled-in repo. The list also re-reads itself every `refresh_s` seconds while idle (default 300, `0` turns it off) |
 | `a` | ask to act on the selected PR: opens a confirmation showing the exact command |
@@ -54,6 +54,10 @@ the detail column.
 
 `p`, `f`, `c` are names that were discussed and
 **are not promised anywhere on screen**.
+
+Red `CR` after a PR number means *changes requested* — that row waits on you.
+A worktree directory for another branch than the item's is named in the box
+instead of hidden (`not the item's branch`).
 
 A fresh start (no `state.json` yet) focuses the repos pane: the first
 keypress picks a repo, `Enter` drills into its issues, `Enter` again opens

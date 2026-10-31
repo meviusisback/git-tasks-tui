@@ -96,6 +96,67 @@ fn d_refuses_issues_with_the_reason() {
 }
 
 #[test]
+fn side_by_side_pairs_changes_and_keeps_context() {
+    use gtasks::ui::{DiffTone, side_by_side};
+    let rows =
+        side_by_side("@@ -1,3 +1,3 @@\n context\n-old one\n+new one\n context\n-extra old\n");
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0].left.1, DiffTone::Head);
+    assert_eq!(
+        (rows[1].left.0.as_str(), rows[1].right.0.as_str()),
+        ("context", "context")
+    );
+    assert_eq!(rows[1].left.1, DiffTone::Same);
+    assert_eq!(
+        (rows[2].left.0.as_str(), rows[2].right.0.as_str()),
+        ("old one", "new one")
+    );
+    assert_eq!(rows[2].left.1, DiffTone::Old);
+    assert_eq!(rows[2].right.1, DiffTone::New);
+    assert_eq!(rows[4].left.0.as_str(), "extra old");
+    assert_eq!(rows[4].right.0.as_str(), "", "no partner: blank cell");
+}
+
+#[test]
+fn the_overlay_shows_old_left_and_new_right() {
+    use gtasks::ui::{draw, view_for};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut app = pr_app();
+    app.apply_diff(
+        "o/r",
+        7,
+        Ok("@@ -1 +1 @@\n-old one\n+new one\n".to_string()),
+    );
+    press(&mut app, Key::Char('d'));
+    let view = view_for(&app);
+    let backend = TestBackend::new(100, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..20 {
+        for x in 0..100 {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    let row = screen
+        .lines()
+        .find(|line| line.contains("old one"))
+        .expect("the old line renders: {screen}");
+    assert!(
+        row.contains("new one"),
+        "the new line sits on the same row: {row}"
+    );
+    assert!(
+        row.find("old one") < row.find("new one"),
+        "old left, new right: {row}"
+    );
+    assert!(row.contains("│"), "a divider splits the columns: {row}");
+}
+
+#[test]
 fn esc_enter_close_and_arrows_scroll() {
     let mut app = pr_app();
     app.apply_diff(
@@ -234,8 +295,16 @@ fn the_overlay_colours_additions_and_removals() {
     press(&mut app, Key::Char('d'));
     let (screen, styles) = render(&app);
     assert!(screen.contains("o/r#7"), "title names the PR: {screen}");
-    assert!(screen.contains("+added"));
-    assert!(screen.contains("-removed"));
+    // Side by side: no +/- sigils — the column is the sign.
+    assert!(screen.contains("added"), "the added line renders: {screen}");
+    assert!(
+        screen.contains("removed"),
+        "the removed line renders: {screen}"
+    );
+    assert!(
+        !screen.contains("+added") && !screen.contains("-removed"),
+        "no unified sigils: {screen}"
+    );
     let green = styles
         .iter()
         .flatten()

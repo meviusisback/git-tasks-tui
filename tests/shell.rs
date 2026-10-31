@@ -1,32 +1,50 @@
-//! Task 10 shell behaviour: arrows move between columns, `?` toggles the
-//! overlay, the legend always shows the keys available right now.
+//! Task 10 shell behaviour: arrows walk the tabs, Shift+arrows walk the
+//! boxes, `?` toggles the overlay, the legend always shows the keys
+//! available right now.
 
-use gtasks::app::{App, Key, Modal, Msg, Pane};
+use gtasks::app::{App, Key, Modal, Msg, Pane, Tab};
 
 fn press(app: &mut App, key: Key) {
     app.update(Msg::Key(key));
 }
 
 #[test]
-fn arrows_move_between_the_two_columns() {
+fn arrows_walk_the_tabs() {
     let mut app = App::default();
     assert_eq!(app.pane, Pane::List);
-
+    // No tabs: the arrows say how to open one, and stay put.
     press(&mut app, Key::Right);
-    assert_eq!(app.pane, Pane::Detail, "right enters the detail column");
-    press(&mut app, Key::Right);
-    assert_eq!(app.pane, Pane::Detail, "right at the edge stays put");
+    assert_eq!(app.pane, Pane::List, "no tabs: no move");
+    assert!(
+        app.status.contains("no tabs"),
+        "no tabs: the remedy shows: {}",
+        app.status
+    );
+    press(&mut app, Key::Left);
+    assert_eq!(app.pane, Pane::List, "no tabs: no move back either");
 
+    // With tabs, the arrows walk them like t/T — and wrap around.
+    app.tabs.push(Tab {
+        repo: "o/r".to_string(),
+        number: 7,
+    });
+    app.tabs.push(Tab {
+        repo: "o/r".to_string(),
+        number: 8,
+    });
+    app.active_tab = Some(0);
+    press(&mut app, Key::Right);
+    assert_eq!(app.active_tab, Some(1), "right takes the next tab");
+    press(&mut app, Key::Right);
+    assert_eq!(app.active_tab, Some(0), "right wraps past the last tab");
     press(&mut app, Key::Left);
-    assert_eq!(app.pane, Pane::List, "left goes back to the list column");
-    press(&mut app, Key::Left);
-    assert_eq!(app.pane, Pane::List, "left at the edge stays put");
+    assert_eq!(app.active_tab, Some(1), "left walks back");
 }
 
 #[test]
 fn esc_in_detail_goes_back_to_the_list() {
     let mut app = App::default();
-    press(&mut app, Key::Right);
+    press(&mut app, Key::ShiftRight);
     assert_eq!(app.pane, Pane::Detail);
     press(&mut app, Key::Esc);
     assert!(!app.quit, "Esc in detail goes back, it does not quit");

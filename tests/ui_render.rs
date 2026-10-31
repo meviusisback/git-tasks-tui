@@ -62,8 +62,8 @@ fn frame_shows_two_columns_and_legend() {
     assert!(screen.contains("(0)"), "repo row carries its count");
     assert!(screen.contains("#12 Add widget"), "item row");
     assert!(
-        screen.contains("←/→ panes"),
-        "the legend names the column keys: {screen}"
+        screen.contains("←/→ tabs"),
+        "the legend names the tab keys: {screen}"
     );
     assert!(
         screen.contains("? help"),
