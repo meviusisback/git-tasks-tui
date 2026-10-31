@@ -602,6 +602,10 @@ pub struct App {
     /// The Herdr agent behind each tree, by tree path: re-attaching after a
     /// restart finds the same live agent. Persisted with the session.
     pub herdr_bindings: HashMap<String, crate::herdr::HerdrBinding>,
+    /// Direct agents alive at the last save, by tree path: the restart
+    /// re-shows them instead of forgetting them. Persisted with the
+    /// session; pids are verified before use.
+    pub live_direct: HashMap<String, crate::agent::LiveDirect>,
     /// Why the last launch fell back to direct despite the herdr backend:
     /// consumed by the direct tail, which prints it on top of the outcome.
     pub herdr_fallback_note: Option<String>,
@@ -783,6 +787,7 @@ impl Default for App {
             tab_agents: HashMap::new(),
             last_agents: HashMap::new(),
             herdr_bindings: HashMap::new(),
+            live_direct: HashMap::new(),
             herdr_fallback_note: None,
             agent_requested: None,
             agent_go: None,
@@ -1798,6 +1803,7 @@ impl App {
         state.row_pct = self.row_pct;
         state.last_agents = self.last_agents.clone();
         state.herdr_bindings = self.herdr_bindings.clone();
+        state.live_direct = self.live_direct.clone();
     }
 
     /// Restore pane, cursors, filter, query and tabs from a saved session.
@@ -1855,6 +1861,88 @@ impl App {
         self.active_tab = state.active_tab.filter(|idx| *idx < self.tabs.len());
         self.last_agents = state.last_agents.clone();
         self.herdr_bindings = state.herdr_bindings.clone();
+        // Direct agents outlive a restart: the new process is not their
+        // parent, but the pid record says which tree they work in. A live
+        // pid re-shows the tab's agent instead of a blank box; a dead or
+        // recycled one is dropped, so the tab starts clean.
+        self.live_direct = state.live_direct.clone();
+        self.live_direct
+            .retain(|tree, live| crate::agent::owns_tree(live.pid, tree));
+        for (tree, live) in self.live_direct.clone() {
+            let key = Self::tab_key(&live.repo, live.number);
+            if !self.tabs.iter().any(|t| (t.repo.clone(), t.number) == key) {
+                continue;
+            }
+            let entry = self.tab_agents.entry(key).or_default();
+            entry.running = true;
+            entry.record = Some(crate::agent::AgentRecord {
+                repo: live.repo.clone(),
+                number: live.number,
+                profile: live.profile.clone(),
+                agent: live.agent.clone(),
+                worktree: std::path::PathBuf::from(&tree),
+                seed_lines: 0,
+                status: crate::agent::AgentStatus::Running,
+            });
+        }
+        // Orphans from before the pid record existed (or a crashed save):
+        // one /proc walk, matched against every open tab's trees. Only
+        // reparented agents count (see `orphaned_agents`), so a second
+        // live gtasks keeps its own children.
+        let orphans = crate::agent::orphaned_agents();
+        if !orphans.is_empty() {
+            for tab in self.tabs.clone() {
+                let key = Self::tab_key(&tab.repo, tab.number);
+                if self.tab_agents.get(&key).is_some_and(|a| a.running) {
+                    continue;
+                }
+                let Ok(slug) = crate::actions::RepoSlug::parse(&tab.repo) else {
+                    continue;
+                };
+                let found = self
+                    .worktree_root
+                    .iter()
+                    .flat_map(|root| crate::worktree::list_worktrees(root, &slug))
+                    .find_map(|tree| {
+                        let tree_str = tree.display().to_string();
+                        orphans.iter().find_map(|(pid, agent, cmdline)| {
+                            if cmdline.contains(&tree_str) {
+                                Some((*pid, *agent, tree_str.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                    });
+                if let Some((pid, agent, tree_str)) = found {
+                    let profile = self
+                        .last_agents
+                        .get(&tree_str)
+                        .map(|last| last.profile.clone())
+                        .unwrap_or_else(|| self.agent_profile.clone());
+                    self.live_direct.insert(
+                        tree_str.clone(),
+                        crate::agent::LiveDirect {
+                            pid,
+                            repo: tab.repo.clone(),
+                            number: tab.number,
+                            agent: agent.to_string(),
+                            profile: profile.clone(),
+                        },
+                    );
+                    let entry = self.tab_agents.entry(key).or_default();
+                    entry.running = true;
+                    entry.record = Some(crate::agent::AgentRecord {
+                        repo: tab.repo.clone(),
+                        number: tab.number,
+                        profile,
+                        agent: agent.to_string(),
+                        worktree: std::path::PathBuf::from(&tree_str),
+                        seed_lines: 0,
+                        status: crate::agent::AgentStatus::Running,
+                    });
+                }
+            }
+        }
         self.set_lengths(self.repos.len(), self.visible_items().len());
         self.refresh_status();
     }

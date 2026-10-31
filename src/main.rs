@@ -1028,6 +1028,23 @@ fn finish_launch(
     entry.draft = draft;
     app.status = status;
     app.remember_worktree_agent(plan, path);
+    // The pid record is what survives a restart: the next process finds
+    // this agent by pid instead of forgetting it. Herdr agents need no
+    // record — the daemon owns them and the binding reattaches.
+    if plan.agent.herdr {
+        app.live_direct.remove(&path.display().to_string());
+    } else if let Some(pid) = sess.pid() {
+        app.live_direct.insert(
+            path.display().to_string(),
+            gtasks::agent::LiveDirect {
+                pid,
+                repo: plan.repo.clone(),
+                number: plan.number,
+                agent: plan.agent.id.name().to_string(),
+                profile: plan.profile.clone(),
+            },
+        );
+    }
     sessions.insert(key, sess);
 }
 
@@ -1820,6 +1837,20 @@ fn run_tui() -> anyhow::Result<()> {
         }
         if let Some((plan, path)) = app.agent_resume.take() {
             needs_draw = true;
+            // Taking over a detached agent: the old process is not ours
+            // anymore and its output is already lost (its pty died with
+            // the old gtasks). Stop it before reopening the session, or
+            // two agents would work the same tree.
+            let tree = path.display().to_string();
+            let mut took_over: Option<u32> = None;
+            if let Some(live) = app.live_direct.get(&tree) {
+                let (pid, alive) = (live.pid, crate::agent::owns_tree(live.pid, &tree));
+                app.live_direct.remove(&tree);
+                if alive {
+                    unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                    took_over = Some(pid);
+                }
+            }
             if let Some(pending) = launch_agent(
                 &mut app,
                 &plan,
@@ -1833,6 +1864,11 @@ fn run_tui() -> anyhow::Result<()> {
                 true,
             ) {
                 herdr_pending = Some(pending);
+            }
+            // The relaunch sets its own status inside; keep the takeover
+            // visible by appending it.
+            if let Some(pid) = took_over {
+                app.status = format!("{} — detached agent (pid {pid}) stopped", app.status);
             }
         }
         // A Herdr-side start answering: embed the attach view, or launch
@@ -2063,6 +2099,12 @@ fn run_tui() -> anyhow::Result<()> {
             }
         }
         for (key, summary) in exited {
+            // A reaped agent is gone for good: drop the restart record
+            // with it, so the next launch does not chase a dead pid.
+            if let Some(sess) = sessions.get(&key) {
+                app.live_direct
+                    .remove(&sess.worktree().display().to_string());
+            }
             sessions.remove(&key);
             needs_draw = true;
             if Some(&key) == active_key.as_ref() {
