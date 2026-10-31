@@ -354,15 +354,19 @@ pub enum WorkspaceSlot {
 }
 
 /// The repo's Space on Herdr: one workspace per repo, labeled with the
-/// slug. Reused when it exists, created named after the repo when it does
-/// not. A fresh Space arrives with its root tab already in the tree, so
-/// the agent starts there directly.
+/// repo name alone (`payment_nexi`, not `owner/payment_nexi` — the owner
+/// is always him and only eats label room). Reused when it exists,
+/// created named after the repo when it does not. A fresh Space arrives
+/// with its root tab already in the tree, so the agent starts there
+/// directly.
 pub fn workspace_ensure(
     program: &Path,
     cwd: &Path,
     repo: &str,
     tree: &Path,
 ) -> anyhow::Result<WorkspaceSlot> {
+    // Short name only: every repo here is his, the owner adds nothing.
+    let short = repo.split('/').next_back().unwrap_or(repo);
     let argv = herdr_argv(program, cwd, vec![os("workspace"), os("list")]);
     let out = run_checked(&argv, TIMEOUT_QUICK)?;
     anyhow::ensure!(out.status.success(), "`herdr workspace list` failed");
@@ -374,7 +378,8 @@ pub fn workspace_ensure(
     {
         for space in spaces {
             let label = space.get("label").and_then(|v| v.as_str()).unwrap_or("");
-            if label == repo {
+            // Full slugs are legacy: Spaces used to carry `owner/name`.
+            if label == short || label == repo {
                 let id = space
                     .get("workspace_id")
                     .and_then(|v| v.as_str())
@@ -392,7 +397,7 @@ pub fn workspace_ensure(
             os("workspace"),
             os("create"),
             os("--label"),
-            os(repo),
+            os(short),
             os("--cwd"),
             tree.as_os_str().to_os_string(),
             os("--no-focus"),
