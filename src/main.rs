@@ -1992,18 +1992,21 @@ fn run_tui() -> anyhow::Result<()> {
             // the user asked for nothing.
             let auto = app.auto_reattach;
             app.auto_reattach = false;
-            // Taking over a detached agent: the old process is not ours
-            // anymore and its output is already lost (its pty died with
-            // the old gtasks). Stop it before reopening the session, or
-            // two agents would work the same tree.
+            // Taking over a detached agent: only on an explicit reopen,
+            // never on the automatic startup reattach. The old process is
+            // not ours anymore and its output is already lost (its pty
+            // died with the old gtasks): stop it before reopening the
+            // session, or two agents would work the same tree.
             let tree = path.display().to_string();
             let mut took_over: Option<u32> = None;
-            if let Some(live) = app.live_direct.get(&tree) {
-                let (pid, alive) = (live.pid, crate::agent::owns_tree(live.pid, &tree));
-                app.live_direct.remove(&tree);
-                if alive {
-                    unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-                    took_over = Some(pid);
+            if !auto {
+                if let Some(live) = app.live_direct.get(&tree) {
+                    let (pid, alive) = (live.pid, crate::agent::owns_tree(live.pid, &tree));
+                    app.live_direct.remove(&tree);
+                    if alive {
+                        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                        took_over = Some(pid);
+                    }
                 }
             }
             if let Some(mut pending) = launch_agent(
