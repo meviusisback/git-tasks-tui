@@ -575,6 +575,44 @@ fn clicking_a_tab_opens_it_clicking_between_does_not() {
 }
 
 #[test]
+fn open_prs_with_changes_requested_show_a_red_cr() {
+    let (mut app, _tmp) = pr_app();
+    let mut waiting = item("o/r", 7, ItemKind::Pr, Some("fix-foo"));
+    waiting.review_decision = Some("CHANGES_REQUESTED".to_string());
+    let mut fine = item("o/r", 8, ItemKind::Pr, Some("fix-bar"));
+    fine.review_decision = Some("APPROVED".to_string());
+    let mut closed = item("o/r", 9, ItemKind::Pr, Some("fix-baz"));
+    closed.state = "MERGED".to_string();
+    closed.review_decision = Some("CHANGES_REQUESTED".to_string());
+    let mut issue = item("o/r", 10, ItemKind::Issue, None);
+    issue.review_decision = Some("CHANGES_REQUESTED".to_string());
+    app.apply_outcome(FetchOutcome {
+        items: vec![waiting, fine, closed, issue],
+        failures: Vec::new(),
+    });
+    with_plain_icons(|| {
+        let screen = render_200x30(&app);
+        assert_eq!(
+            screen.matches("CR ").count(),
+            1,
+            "one CR, on the waiting PR only: {screen}"
+        );
+        let row = screen
+            .lines()
+            .find(|line| line.contains("CR "))
+            .expect("the CR row renders");
+        assert!(
+            row.contains("#7"),
+            "the CR sits on the changes-requested PR: {row}"
+        );
+    });
+    // And the view knows it structurally, not just visually. The merged
+    // one is not even visible under the default open-only filter.
+    let view = gtasks::ui::view_for(&app);
+    assert_eq!(view.item_crs, vec![true, false, false]);
+}
+
+#[test]
 fn the_close_mark_closes_instead_of_switching() {
     use gtasks::ui::{tab_at, tab_close_at, tabs_row};
     let (mut app, _tmp) = pr_app();

@@ -39,6 +39,7 @@ fn sample() -> (App, ViewModel) {
         items: vec!["#12 Add widget".into(), "#7 Fix crash".into()],
         item_kinds: vec![None, None],
         item_worktrees: vec![false, false],
+        item_crs: vec![false, false],
         detail: "Body line one\nBody line two".into(),
         trees: Vec::new(),
         tabs: Vec::new(),

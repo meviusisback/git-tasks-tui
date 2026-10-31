@@ -28,6 +28,9 @@ pub struct ViewModel {
     /// One per item: a worktree directory with a `.git` entry exists for
     /// the item's branch. The marker in the issues list.
     pub item_worktrees: Vec<bool>,
+    /// One per item: an open PR whose review says CHANGES_REQUESTED.
+    /// The red CR in the issues list — those wait on us.
+    pub item_crs: Vec<bool>,
     pub detail: String,
     pub tabs: Vec<String>,
     pub active_tab: Option<usize>,
@@ -358,6 +361,17 @@ pub fn view_for(app: &App) -> ViewModel {
         .iter()
         .map(|item| app.has_worktree(&item.repo, item.head_ref_name.as_deref()))
         .collect();
+    let item_crs = visible
+        .iter()
+        .map(|item| {
+            item.kind == ItemKind::Pr
+                && item.state.eq_ignore_ascii_case("OPEN")
+                && item
+                    .review_decision
+                    .as_deref()
+                    .is_some_and(|r| r.eq_ignore_ascii_case("CHANGES_REQUESTED"))
+        })
+        .collect();
     // Structured fields from the item, always; the fetched body below them
     // only when it belongs to this item. A missing field is omitted, never
     // blank — and a missing body says how to fetch it instead of leaving a
@@ -404,6 +418,7 @@ pub fn view_for(app: &App) -> ViewModel {
         repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
         item_worktrees,
+        item_crs,
         item_kinds,
         detail,
         trees,
@@ -499,7 +514,8 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
         .iter()
         .zip(view.item_kinds.iter().chain(std::iter::repeat(&None)))
         .zip(view.item_worktrees.iter().chain(std::iter::repeat(&false)))
-        .map(|((entry, kind), has_wt)| {
+        .zip(view.item_crs.iter().chain(std::iter::repeat(&false)))
+        .map(|(((entry, kind), has_wt), is_cr)| {
             let (number, title) = split_number_title(entry);
             let icon = match kind {
                 Some(ItemKind::Pr) => icons::kind_pr(),
@@ -521,6 +537,12 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
             ];
             if icon.is_empty() {
                 spans.remove(0);
+            }
+            if *is_cr {
+                // Changes requested: a red CR right after the number,
+                // before the title — those rows wait on us.
+                let at = spans.len().saturating_sub(1);
+                spans.insert(at, Span::styled("CR ", Style::default().fg(theme::ALERT)));
             }
             if *has_wt {
                 // Marker, then a real gap: the marker must not touch the
