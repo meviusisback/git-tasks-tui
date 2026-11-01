@@ -1437,7 +1437,7 @@ fn run_tui() -> anyhow::Result<()> {
         cache_path.as_deref().and_then(gtasks::cache::load);
     if let Some(items) = cached_items.clone() {
         app.items = items;
-        app.set_lengths(app.repos.len(), app.visible_items().len());
+        app.set_lengths(app.repos.len(), app.visible_rows().len());
         app.refresh_status();
         app.status = format!("{} — cached, refreshing…", app.status);
     }
@@ -2418,7 +2418,7 @@ fn run_tui() -> anyhow::Result<()> {
                                         if let Some(idx) = ui::list_row_at(
                                             g.list,
                                             me.row,
-                                            app.visible_items().len(),
+                                            app.visible_rows().len(),
                                         ) {
                                             app.click_list_row(idx, Instant::now());
                                         }

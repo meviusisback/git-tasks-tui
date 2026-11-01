@@ -499,6 +499,9 @@ pub struct App {
     pub repos_len: usize,
     pub list_cursor: usize,
     pub list_len: usize,
+    /// The list shows worktree rows under their issue/PR (plus orphan
+    /// trees below the issues): `v` flips it, saved across restarts.
+    pub show_trees: bool,
     pub detail_scroll: u16,
     pub modal: Option<Modal>,
     /// True while `/` search input is active: keys go to the query.
@@ -709,6 +712,29 @@ pub struct ItemTree {
     pub drifted: bool,
 }
 
+/// One row of the bottom-left list: an issue/PR, a worktree under its
+/// issue/PR (child) or with no issue at all (orphan), or the divider
+/// between the issues and the orphan section. Children and orphans are
+/// real cursor stops; the divider is drawn but never selected.
+#[derive(Debug, Clone)]
+pub enum ListRow {
+    Item { repo: String, number: u64 },
+    Tree(TreeRow),
+    Divider,
+}
+
+/// A worktree row: which issue/PR it works on (`None` for orphans),
+/// its branch and path, who ran there last and whether one is live now.
+#[derive(Debug, Clone)]
+pub struct TreeRow {
+    pub repo: String,
+    pub number: Option<u64>,
+    pub branch: String,
+    pub path: std::path::PathBuf,
+    pub agent: Option<String>,
+    pub live: bool,
+}
+
 /// One tab's agent side: the screen the box renders, whether its session
 /// is alive, the finished run (the card stays after the exit), what the
 /// agent works on (shown in the detail while nothing is selected), and
@@ -747,6 +773,7 @@ impl Default for App {
             repos_len: 0,
             list_cursor: 0,
             list_len: 0,
+            show_trees: true,
             detail_scroll: 0,
             modal: None,
             searching: false,
@@ -895,7 +922,7 @@ impl App {
                 }
             }
         }
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         // A fresh list means a fresh selection to describe: start its body
         // at once, quietly — Enter stays the loud, explicit ask.
         self.preload_detail();
@@ -938,7 +965,7 @@ impl App {
             .collect();
         self.repos_cursor = 0;
         self.repo_filter = RepoFilter::All;
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         // A new list means a new context: a body fetched for the previous
         // one would say "this is the item you are looking at" about an item
         // that may be gone — same discipline as `apply_repo_filter`.
@@ -956,7 +983,7 @@ impl App {
             _ => RepoFilter::All,
         };
         self.list_cursor = 0;
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         // The detail belonged to the previous list: showing it here would say
         // "this is the item you are looking at" about an item that is gone.
         self.detail.clear();
@@ -1019,6 +1046,151 @@ impl App {
             ordered.sort_by_key(|i| i.number);
             ordered
         }
+    }
+
+    /// The branch an issue/PR grows its work on: the head branch for PRs,
+    /// `issue-N` for issues. Same rule as the worktrees box, so the list
+    /// children and the detail agree about what belongs where.
+    fn link_branch(item: &Item) -> String {
+        item.head_ref_name
+            .clone()
+            .unwrap_or_else(|| format!("issue-{}", item.number))
+    }
+
+    /// Every worktree directory of one repo with a readable branch: branch
+    /// and path, sorted by path. Detached or unreadable trees are skipped —
+    /// nothing can be placed on them reliably.
+    fn repo_tree_branches(&self, repo: &str) -> Vec<(String, std::path::PathBuf)> {
+        let (Some(root), Ok(slug)) = (
+            self.worktree_root.as_deref(),
+            crate::actions::RepoSlug::parse(repo),
+        ) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, std::path::PathBuf)> =
+            crate::worktree::list_worktrees(root, &slug)
+                .into_iter()
+                .filter_map(|path| {
+                    crate::worktree::worktree_branch(&path)
+                        .map(|branch| (branch.as_str().to_string(), path))
+                })
+                .collect();
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out
+    }
+
+    /// The agent marks of one tree, from memory: who ran there last and
+    /// whether one is live inside right now. No disk reads — the branches
+    /// come from the trees themselves, the marks from the session.
+    fn tree_marks(&self, path: &std::path::Path) -> (Option<String>, bool) {
+        let agent = self
+            .last_agents
+            .get(&path.display().to_string())
+            .map(|last| last.agent.clone());
+        let live = self.tab_agents.values().any(|tab| {
+            tab.running
+                && tab
+                    .record
+                    .as_ref()
+                    .is_some_and(|record| record.worktree == path)
+        });
+        (agent, live)
+    }
+
+    /// The bottom-left list as rows: one per visible issue/PR, each with
+    /// its worktrees underneath, then — when `v` shows trees — the divider
+    /// and the orphan trees (branches no fetched issue/PR owns). The scope
+    /// comes from the repo filter, not the items: a repo with zero issues
+    /// still shows its trees. A hidden parent takes its children with it;
+    /// orphans answer the search box on their branch name.
+    pub fn visible_rows(&self) -> Vec<ListRow> {
+        let items = self.visible_items();
+        if !self.show_trees {
+            return items
+                .iter()
+                .map(|item| ListRow::Item {
+                    repo: item.repo.clone(),
+                    number: item.number,
+                })
+                .collect();
+        }
+        // One disk pass per repo in scope: every tree with its branch.
+        let scope: Vec<String> = match &self.repo_filter {
+            RepoFilter::One(slug) => vec![slug.as_str().to_string()],
+            RepoFilter::All => {
+                let mut repos: Vec<String> = items.iter().map(|item| item.repo.clone()).collect();
+                repos.sort();
+                repos.dedup();
+                repos
+            }
+        };
+        let mut trees: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        for repo in &scope {
+            for (branch, path) in self.repo_tree_branches(repo) {
+                trees.push((repo.clone(), branch, path));
+            }
+        }
+        // A tree is linked when its branch belongs to any fetched issue/PR
+        // of the scope — even a hidden one: a filtered-out parent hides the
+        // tree with it instead of orphaning it. Closed-but-tabbed history
+        // counts too: its trees are spoken for, not orphans.
+        let linked: std::collections::HashSet<(String, String)> = self
+            .items
+            .iter()
+            .chain(self.retained.iter())
+            .filter(|item| scope.iter().any(|repo| repo == &item.repo))
+            .map(|item| (item.repo.clone(), Self::link_branch(item)))
+            .collect();
+        let mut rows = Vec::new();
+        for item in &items {
+            rows.push(ListRow::Item {
+                repo: item.repo.clone(),
+                number: item.number,
+            });
+            let want = Self::link_branch(item);
+            for (repo, branch, path) in trees
+                .iter()
+                .filter(|tree| tree.0 == item.repo && tree.1 == want)
+            {
+                let (agent, live) = self.tree_marks(path);
+                rows.push(ListRow::Tree(TreeRow {
+                    repo: repo.clone(),
+                    number: Some(item.number),
+                    branch: branch.clone(),
+                    path: path.clone(),
+                    agent,
+                    live,
+                }));
+            }
+        }
+        let needle = self.query.trim().to_lowercase();
+        let mut orphans: Vec<&(String, String, std::path::PathBuf)> = trees
+            .iter()
+            .filter(|tree| !linked.contains(&(tree.0.clone(), tree.1.clone())))
+            .collect();
+        if !needle.is_empty() {
+            orphans.retain(|tree| tree.1.to_lowercase().contains(&needle));
+        }
+        orphans.sort();
+        if !orphans.is_empty() {
+            // A divider only ever sits between issues and orphans — never
+            // first, never last — so the cursor always has somewhere to go.
+            if !rows.is_empty() {
+                rows.push(ListRow::Divider);
+            }
+            for (repo, branch, path) in orphans {
+                let (agent, live) = self.tree_marks(path);
+                rows.push(ListRow::Tree(TreeRow {
+                    repo: repo.clone(),
+                    number: None,
+                    branch: branch.clone(),
+                    path: path.clone(),
+                    agent,
+                    live,
+                }));
+            }
+        }
+        rows
     }
 
     /// The bottom legend: the keys available right now, never the full keymap
@@ -1099,11 +1271,11 @@ impl App {
             )
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · R repos · m actions · g agent · W trees · d diff · s settings",
+                "q quit · ? help · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · R repos · m actions · g agent · W trees · d diff · v trees · s settings",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · m actions · g agent · W trees · d diff · f state · s settings",
+                "q quit · ? help · Esc back · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · m actions · g agent · W trees · d diff · v trees · f state · s settings",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -1353,7 +1525,7 @@ impl App {
         // just unchecked. The refresh below re-reads from the server.
         self.items
             .retain(|i| shown.iter().any(|s| s.as_str() == i.repo));
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         self.loading = true;
         self.refresh_requested = true;
     }
@@ -1407,7 +1579,9 @@ impl App {
     pub fn click_list_row(&mut self, idx: usize, now: Instant) {
         let double = matches!(self.last_click, Some((Pane::List, row, at)) if row == idx && now.duration_since(at) < Duration::from_millis(DOUBLE_CLICK_MS));
         self.last_click = Some((Pane::List, idx, now));
-        if idx >= self.visible_items().len() {
+        let rows = self.visible_rows();
+        // The divider is drawn, not selected: a click on it does nothing.
+        if matches!(rows.get(idx), None | Some(ListRow::Divider)) {
             return;
         }
         self.list_cursor = idx;
@@ -1435,9 +1609,37 @@ impl App {
         }
     }
 
-    /// The item under the cursor, if any.
+    /// The row under the cursor, if any. Rows are computed live (trees
+    /// come from the disk), so the cursor reads them fresh every time.
+    pub fn selected_row(&self) -> Option<ListRow> {
+        self.visible_rows().into_iter().nth(self.list_cursor)
+    }
+
+    /// The item under the cursor, if any. A worktree child resolves to
+    /// its parent issue/PR — every action that acts on a row keeps
+    /// working on children. Orphans and the divider select nothing.
     pub fn selected_item(&self) -> Option<&Item> {
-        self.visible_items().get(self.list_cursor).copied()
+        match self.selected_row() {
+            Some(ListRow::Item { repo, number }) => self
+                .items
+                .iter()
+                .find(|item| item.repo == repo && item.number == number),
+            Some(ListRow::Tree(tree)) => tree.number.and_then(|number| {
+                self.items
+                    .iter()
+                    .find(|item| item.repo == tree.repo && item.number == number)
+            }),
+            _ => None,
+        }
+    }
+
+    /// The worktree under the cursor, if the row is one: branch, path,
+    /// who ran there last and whether one is live now.
+    pub fn selected_tree_row(&self) -> Option<TreeRow> {
+        match self.selected_row() {
+            Some(ListRow::Tree(tree)) => Some(tree),
+            _ => None,
+        }
     }
 
     /// The item the right column acts on. An open tab owns the detail:
@@ -1512,6 +1714,91 @@ impl App {
             }
             self.status = format!("loading #{}…", item.number);
         }
+    }
+
+    /// `Enter` on a list row: an issue/PR opens its tab, a worktree child
+    /// opens the tab pinned to that tree, an orphan activates the tab
+    /// living on its tree (or says there is none). The divider does
+    /// nothing — the cursor can never sit on it anyway.
+    pub fn open_row(&mut self) {
+        match self.selected_row() {
+            Some(ListRow::Item { .. }) => self.open_tab_for_selected(),
+            Some(ListRow::Tree(tree)) => match tree.number {
+                Some(number) => self.open_tab_on_tree(&tree.repo, number, &tree.path),
+                None => self.activate_tab_on_tree(&tree.path),
+            },
+            _ => {}
+        }
+    }
+
+    /// `Enter` on a worktree child: the tab for this exact tree opens (or
+    /// activates), placed from the start — no retarget dance. Same detail
+    /// and focus flow as opening from the parent row.
+    pub fn open_tab_on_tree(&mut self, repo: &str, number: u64, tree: &std::path::Path) {
+        self.dismiss_finished_card();
+        let Some(item) = self
+            .items
+            .iter()
+            .find(|i| i.repo == repo && i.number == number)
+            .cloned()
+        else {
+            return;
+        };
+        self.pane = Pane::Detail;
+        let tree = tree.display().to_string();
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.repo == repo && t.number == number && t.tree == tree)
+        {
+            if Some(idx) == self.active_tab {
+                self.request_detail();
+                return;
+            }
+            self.active_tab = Some(idx);
+        } else {
+            self.tabs.push(Tab {
+                repo: item.repo.clone(),
+                number: item.number,
+                tree,
+            });
+            self.active_tab = Some(self.tabs.len() - 1);
+        }
+        self.dismiss_finished_card();
+        self.session_dirty = true;
+        let key = (item.repo.clone(), item.number);
+        if self.detail_for.as_ref() != Some(&key) {
+            if self.detail_requested.as_ref() != Some(&key) {
+                self.detail_requested = Some(key);
+            }
+            self.status = format!("loading #{}…", item.number);
+        }
+    }
+
+    /// `Enter` on an orphan tree: a tab already living on that tree takes
+    /// over. Orphans name no issue/PR, so there is nothing to bookmark —
+    /// without a tab the row only says so.
+    pub fn activate_tab_on_tree(&mut self, tree: &std::path::Path) {
+        let wanted = tree.display().to_string();
+        if let Some(idx) = self.tabs.iter().position(|t| t.tree == wanted) {
+            self.activate_tab(idx);
+        } else {
+            self.status = String::from("no tab on this tree — open it from its issue/PR first");
+        }
+    }
+
+    /// `v` flips the worktree rows: children under their issue/PR plus the
+    /// orphan section, or issues alone. The cursor re-clamps to the new
+    /// rows and the choice is saved with the session.
+    pub fn toggle_tree_filter(&mut self) {
+        self.show_trees = !self.show_trees;
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
+        self.status = if self.show_trees {
+            String::from("worktree rows on — children under their issue, orphans below")
+        } else {
+            String::from("worktree rows off — issues alone")
+        };
+        self.session_dirty = true;
     }
 
     /// Activate tab `idx` (clamped): the tab owns the detail, so it shows
@@ -1866,6 +2153,7 @@ impl App {
         state.last_agents = self.last_agents.clone();
         state.herdr_bindings = self.herdr_bindings.clone();
         state.live_direct = self.live_direct.clone();
+        state.show_trees = self.show_trees;
     }
 
     /// The tab for this tree: the exact one when several share the repo
@@ -1925,6 +2213,7 @@ impl App {
             self.repos_cursor = state.repos_cursor.min(self.repos.len().saturating_sub(1));
         }
         self.list_cursor = state.list_cursor;
+        self.show_trees = state.show_trees;
         // The cross geometry comes back too, clamped like a fresh drag:
         // a shrunken terminal must not restore an unusable split.
         self.col_pct = state.col_pct.clamp(15, 85);
@@ -2036,7 +2325,7 @@ impl App {
                 }
             }
         }
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         self.refresh_status();
     }
 
@@ -3990,6 +4279,9 @@ impl App {
             // then cached). With a running agent focused this key types
             // into the agent instead — it never reaches here.
             Key::Char('d') => self.request_diff(),
+            // `v` flips the worktree rows in the list: children under
+            // their issue/PR plus the orphan section, or issues alone.
+            Key::Char('v') => self.toggle_tree_filter(),
             // `s` opens the settings menu (app-wide toggles like sandboxed
             // agents). With a running agent focused this key types into
             // the agent instead — it never reaches here.
@@ -4122,7 +4414,7 @@ impl App {
             // In the list Enter opens a tab for the row; the detail follows
             // the active tab from then on.
             Key::Enter if self.pane == Pane::List => {
-                self.open_tab_for_selected();
+                self.open_row();
             }
             Key::Enter => self.request_detail(),
             // Handled at the top; repeated here because the match must be total.
@@ -4137,7 +4429,26 @@ impl App {
                 self.apply_repo_filter();
             }
             Pane::List => {
-                self.list_cursor = step(self.list_cursor, delta, self.list_len);
+                let rows = self.visible_rows();
+                if rows.is_empty() {
+                    self.list_cursor = 0;
+                } else {
+                    // The divider is drawn, not selected: stepping onto it
+                    // keeps going the same way. It never sits first or last,
+                    // so the walk always lands on a real row.
+                    let mut next = step(self.list_cursor, delta, rows.len());
+                    for _ in 0..rows.len() {
+                        if !matches!(rows.get(next), Some(ListRow::Divider)) {
+                            break;
+                        }
+                        let moved = step(next, delta, rows.len());
+                        if moved == next {
+                            break;
+                        }
+                        next = moved;
+                    }
+                    self.list_cursor = next;
+                }
                 self.dismiss_finished_card();
                 // Landing on a row starts its body: by the time the user
                 // reads the fields, the description is already on its way.

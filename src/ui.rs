@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use crate::app::{App, Pane};
+use crate::app::{App, ListRow, Pane, RepoFilter};
 use crate::icons;
 use crate::markdown::{self as md};
 use crate::model::ItemKind;
@@ -34,6 +34,10 @@ pub struct ViewModel {
     pub detail: String,
     pub tabs: Vec<String>,
     pub active_tab: Option<usize>,
+    /// The bottom-left list as drawn rows: issues/PRs, worktree children
+    /// and orphans, and the divider between them. The cursor walks these,
+    /// not the plain item list.
+    pub rows: Vec<ListRowView>,
     pub agent: String,
     /// Last parsed screen of the embedded agent, row by row. Empty while
     /// idle: the panel is hidden then, so there is nothing to show.
@@ -41,6 +45,23 @@ pub struct ViewModel {
     /// The open trees behind the shown issue/PR, if any: branch, path, who
     /// ran there last, live now or not. Rendered as a WORKTREES section.
     pub trees: Vec<crate::app::ItemTree>,
+}
+
+/// One drawn row of the bottom-left list: an issue/PR exactly like
+/// before, a worktree (child or orphan) with its branch, or the divider
+/// between the issues and the orphan section.
+pub enum ListRowView {
+    Item {
+        entry: String,
+        kind: Option<ItemKind>,
+        has_wt: bool,
+        is_cr: bool,
+    },
+    Tree {
+        text: String,
+        live: bool,
+    },
+    Divider,
 }
 
 /// The number colour by kind: green PRs, yellow issues. Only the number —
@@ -76,6 +97,7 @@ const HELP_NOW: &[&str] = &[
     "Shift + ←/↑/↓/→  move between the four boxes",
     "↑ / ↓      move the selection, or scroll detail/agent",
     "Enter      open a tab + open the detail box · d diff",
+    "v          worktree rows under each issue (toggle) · f state",
     "t / T      next / previous tab",
     "x / X      close the active tab, then the agent record",
     "w          focus the agent pane (worktree + agent instructions)",
@@ -401,6 +423,61 @@ pub fn view_for(app: &App) -> ViewModel {
         .iter()
         .map(|item| Some(item.kind))
         .collect();
+    // The list as drawn rows: issues/PRs like before, worktree children
+    // under their issue, orphans below the divider. Branch and agent
+    // names come from the disk and the session — both attacker-shaped —
+    // so the whole row text is sanitised once, here.
+    let show_repo = matches!(app.repo_filter, RepoFilter::All);
+    let rows: Vec<ListRowView> = app
+        .visible_rows()
+        .into_iter()
+        .map(|row| match row {
+            ListRow::Item { repo, number } => {
+                match app
+                    .items
+                    .iter()
+                    .find(|i| i.repo == repo && i.number == number)
+                {
+                    Some(item) => ListRowView::Item {
+                        entry: format!("#{} {}", item.number, item.title),
+                        kind: Some(item.kind),
+                        has_wt: app.has_worktree(&item.repo, item.head_ref_name.as_deref()),
+                        is_cr: item.kind == ItemKind::Pr
+                            && item.state.eq_ignore_ascii_case("OPEN")
+                            && item
+                                .review_decision
+                                .as_deref()
+                                .is_some_and(|r| r.eq_ignore_ascii_case("CHANGES_REQUESTED")),
+                    },
+                    None => ListRowView::Item {
+                        entry: format!("#{number} {repo}"),
+                        kind: None,
+                        has_wt: false,
+                        is_cr: false,
+                    },
+                }
+            }
+            ListRow::Tree(tree) => {
+                let mut text = String::new();
+                if tree.number.is_some() {
+                    // A child reads as belonging to the row above it.
+                    text.push_str("  ");
+                } else if show_repo {
+                    text.push_str(&format!("{} ", tree.repo));
+                }
+                text.push_str(worktree_marker_text());
+                text.push_str(&tree.branch);
+                if let Some(agent) = tree.agent {
+                    text.push_str(&format!(" · {agent}"));
+                }
+                ListRowView::Tree {
+                    text: sanitize(&text),
+                    live: tree.live,
+                }
+            }
+            ListRow::Divider => ListRowView::Divider,
+        })
+        .collect();
     // The open trees behind the shown issue/PR: its head branch, or the
     // fresh branch issues grow (`issue-N`), so the work is visible where
     // the issue is read.
@@ -420,6 +497,7 @@ pub fn view_for(app: &App) -> ViewModel {
         item_worktrees,
         item_crs,
         item_kinds,
+        rows,
         detail,
         trees,
         tabs: app.tab_labels(),
@@ -502,58 +580,80 @@ fn split_number_title(entry: &str) -> (String, String) {
 /// front of the number says a worktree directory exists for the item's
 /// branch: `g` then works on it.
 fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
-    let selected = if view.items.is_empty() {
+    let selected = if view.rows.is_empty() {
         None
     } else {
-        Some(app.list_cursor.min(view.items.len().saturating_sub(1)))
+        Some(app.list_cursor.min(view.rows.len().saturating_sub(1)))
     };
     let highlight = app.pane == Pane::List;
     let focused = highlight;
     let items: Vec<ListItem> = view
-        .items
+        .rows
         .iter()
-        .zip(view.item_kinds.iter().chain(std::iter::repeat(&None)))
-        .zip(view.item_worktrees.iter().chain(std::iter::repeat(&false)))
-        .zip(view.item_crs.iter().chain(std::iter::repeat(&false)))
-        .map(|(((entry, kind), has_wt), is_cr)| {
-            let (number, title) = split_number_title(entry);
-            let icon = match kind {
-                Some(ItemKind::Pr) => icons::kind_pr(),
-                Some(ItemKind::Issue) => icons::kind_issue(),
-                None => "",
-            };
-            // Titles read bold: the number carries the kind colour, the
-            // title carries the weight — at a glance rows scan as titles
-            // first, numbers second. (Glyph size itself is the terminal's,
-            // not the app's: no box can be bigger than the terminal font.)
-            let mut spans = vec![
-                Span::styled(icon, kind_style(*kind)),
-                Span::styled(sanitize(&number), kind_style(*kind)),
-                Span::raw(" "),
-                Span::styled(
-                    sanitize(&title),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ];
-            if icon.is_empty() {
-                spans.remove(0);
+        .map(|row| match row {
+            ListRowView::Item {
+                entry,
+                kind,
+                has_wt,
+                is_cr,
+            } => {
+                let (number, title) = split_number_title(entry);
+                let icon = match kind {
+                    Some(ItemKind::Pr) => icons::kind_pr(),
+                    Some(ItemKind::Issue) => icons::kind_issue(),
+                    None => "",
+                };
+                // Titles read bold: the number carries the kind colour,
+                // the title carries the weight — at a glance rows scan as
+                // titles first, numbers second. (Glyph size itself is the
+                // terminal's, not the app's: no box can be bigger than the
+                // terminal font.)
+                let mut spans = vec![
+                    Span::styled(icon, kind_style(*kind)),
+                    Span::styled(sanitize(&number), kind_style(*kind)),
+                    Span::raw(" "),
+                    Span::styled(
+                        sanitize(&title),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ];
+                if icon.is_empty() {
+                    spans.remove(0);
+                }
+                if *is_cr {
+                    // Changes requested: a red CR right after the number,
+                    // before the title — those rows wait on us.
+                    let at = spans.len().saturating_sub(1);
+                    spans.insert(at, Span::styled("CR ", Style::default().fg(theme::ALERT)));
+                }
+                if *has_wt {
+                    // Marker, then a real gap: the marker must not touch the
+                    // kind icon — at a glance the two merge into one glyph.
+                    spans.insert(0, Span::raw(" "));
+                    spans.insert(
+                        0,
+                        Span::styled(worktree_marker_text(), theme::worktree_marker()),
+                    );
+                }
+                ListItem::new(Line::from(spans))
             }
-            if *is_cr {
-                // Changes requested: a red CR right after the number,
-                // before the title — those rows wait on us.
-                let at = spans.len().saturating_sub(1);
-                spans.insert(at, Span::styled("CR ", Style::default().fg(theme::ALERT)));
+            ListRowView::Tree { text, live } => {
+                // A worktree under its issue (indented) or an orphan below
+                // the divider: the tree icon tells it apart from issues.
+                // A live tree reads bold — something works there right now.
+                let style = if *live {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::SUBTEXT)
+                };
+                ListItem::new(Line::from(Span::styled(text.clone(), style)))
             }
-            if *has_wt {
-                // Marker, then a real gap: the marker must not touch the
-                // kind icon — at a glance the two merge into one glyph.
-                spans.insert(0, Span::raw(" "));
-                spans.insert(
-                    0,
-                    Span::styled(worktree_marker_text(), theme::worktree_marker()),
-                );
-            }
-            ListItem::new(Line::from(spans))
+            ListRowView::Divider => ListItem::new(Line::from(Span::styled(
+                "── worktrees with no issue/PR ──",
+                Style::default()
+                    .fg(theme::SUBTEXT)
+                    .add_modifier(Modifier::DIM),
+            ))),
         })
         .collect();
     let widget = List::new(items)
@@ -959,6 +1059,24 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
                     "{} @ {}",
                     ctx.path.display(),
                     ctx.branch
+                )))),
+            ];
+            return Paragraph::new(lines).block(block);
+        }
+        // A worktree row with no issue behind it (an orphan, or a child
+        // whose parent left the fetch): name where it works instead of a
+        // blank pane — repo, path and branch, like the agent context.
+        if let Some(tree) = app.selected_tree_row() {
+            let lines = vec![
+                Line::from(Span::styled(
+                    "working on",
+                    theme::overlay_text().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::raw(sanitize(&tree.repo))),
+                Line::from(Span::raw(sanitize(&format!(
+                    "{} @ {}",
+                    tree.path.display(),
+                    tree.branch
                 )))),
             ];
             return Paragraph::new(lines).block(block);

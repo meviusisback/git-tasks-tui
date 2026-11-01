@@ -61,8 +61,40 @@ fn tab_cycle_includes_the_agent_while_one_runs() {
 
 #[test]
 fn cursors_clamp_to_the_available_rows() {
+    use gtasks::fetch::FetchOutcome;
+    use gtasks::model::{Item, ItemKind};
+
     let mut app = App::default();
-    app.set_lengths(3, 5);
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
+    ]);
+    // Five plain rows (no worktree root, so no tree rows): the cursor
+    // walks them, not the lengths counter.
+    app.apply_outcome(FetchOutcome {
+        items: (1..=5)
+            .map(|number| Item {
+                number,
+                title: format!("t{number}"),
+                state: "OPEN".into(),
+                is_draft: None,
+                author: None,
+                labels: Vec::new(),
+                assignees: Vec::new(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: String::new(),
+                url: String::new(),
+                head_ref_name: None,
+                base_ref_name: None,
+                review_decision: None,
+                mergeable: None,
+                status_check_rollup: Vec::new(),
+                closing_issues_references: Vec::new(),
+                repo: "o/r".to_string(),
+                kind: ItemKind::Issue,
+            })
+            .collect(),
+        failures: Vec::new(),
+    });
 
     for _ in 0..10 {
         press(&mut app, Key::Down);
@@ -74,7 +106,8 @@ fn cursors_clamp_to_the_available_rows() {
     assert_eq!(app.list_cursor, 0, "clamped at the first row");
 
     // An empty list keeps the cursor at zero.
-    app.set_lengths(0, 0);
+    app.items.clear();
+    app.set_lengths(app.repos.len(), app.visible_rows().len());
     press(&mut app, Key::Down);
     assert_eq!(app.list_cursor, 0);
     assert_eq!(app.repos_cursor, 0);
