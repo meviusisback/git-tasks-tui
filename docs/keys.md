@@ -58,6 +58,7 @@ the detail column.
 **are not promised anywhere on screen**.
 
 Red `CR` after a PR number means *changes requested* — that row waits on you.
+A peach `T` in front of a row means an open tab names that issue/PR.
 A worktree directory for another branch than the item's is named in the box
 instead of hidden (`not the item's branch`).
 

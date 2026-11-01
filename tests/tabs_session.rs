@@ -1172,3 +1172,50 @@ fn closing_names_the_tab_you_land_on() {
         app.status
     );
 }
+
+#[test]
+fn an_open_tab_marks_its_row_with_a_peach_t() {
+    use gtasks::ui::{draw, view_for};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut app = app_with_items();
+    press(&mut app, Key::Enter); // tab #1 opens
+    let view = view_for(&app);
+    assert_eq!(
+        view.item_tabs,
+        vec![true, false],
+        "only #1 carries the mark"
+    );
+    // Plain icons: with a Nerd Font a glyph sits between the mark and the
+    // number, without one the row reads exactly `T #1 one`.
+    let previous = std::env::var_os("GTASKS_NERD");
+    unsafe {
+        std::env::set_var("GTASKS_NERD", "0");
+    }
+    let backend = TestBackend::new(80, 12);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, &app, &view)).unwrap();
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("GTASKS_NERD", value),
+            None => std::env::remove_var("GTASKS_NERD"),
+        }
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..12 {
+        for x in 0..80 {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+    }
+    assert!(
+        screen.contains("T #1 one"),
+        "the mark reads in front of the issue: {screen}"
+    );
+    // The second row has no tab: no mark before its number.
+    assert!(
+        !screen.contains("T #2 two"),
+        "rows without a tab stay plain: {screen}"
+    );
+}
