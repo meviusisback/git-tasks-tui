@@ -40,17 +40,20 @@ fn sample() -> (App, ViewModel) {
         item_kinds: vec![None, None],
         item_worktrees: vec![false, false],
         item_crs: vec![false, false],
+        item_tabs: vec![false, false],
         rows: vec![
             ListRowView::Item {
                 entry: "#12 Add widget".into(),
                 kind: None,
                 has_wt: false,
+                has_tab: false,
                 is_cr: false,
             },
             ListRowView::Item {
                 entry: "#7 Fix crash".into(),
                 kind: None,
                 has_wt: false,
+                has_tab: false,
                 is_cr: false,
             },
         ],
@@ -106,6 +109,7 @@ fn untrusted_text_is_sanitised_before_display() {
         entry: "evil\u{1b}]52;c;Zm9v\u{07} title\u{202e}".into(),
         kind: None,
         has_wt: false,
+        has_tab: false,
         is_cr: false,
     };
     let screen = render(&app, &view);

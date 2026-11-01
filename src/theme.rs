@@ -29,6 +29,8 @@ pub const WARN: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
 pub const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
 /// #89dceb — sky: cyan terminal output in the embedded agent box.
 pub const SKY: Color = Color::Rgb(0x89, 0xdc, 0xeb);
+/// #fab387 — peach: the open-tab marker in the issue list.
+pub const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 
 /// Map an embedded-terminal colour index to the Mocha palette. Index 0
 /// (black) reads as the secondary text instead of near-black: the agent box
@@ -154,6 +156,13 @@ pub fn worktree_marker() -> Style {
 /// and without a Nerd Font (folder vs triangle), same colour either way.
 pub fn repo_icon() -> Style {
     Style::default().fg(SKY)
+}
+
+/// The open-tab marker in the issue list: a peach `T`, the colour of
+/// work in progress. Plain text, so it reads the same with and without
+/// a Nerd Font.
+pub fn tab_marker() -> Style {
+    Style::default().fg(PEACH)
 }
 
 /// Error overlay frame: the config problem box. Same shape as help, the

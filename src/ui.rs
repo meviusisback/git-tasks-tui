@@ -28,6 +28,9 @@ pub struct ViewModel {
     /// One per item: a worktree directory with a `.git` entry exists for
     /// the item's branch. The marker in the issues list.
     pub item_worktrees: Vec<bool>,
+    /// One per item: an open tab names this issue/PR. A peach `T` in the
+    /// issues list — the work is one keypress away.
+    pub item_tabs: Vec<bool>,
     /// One per item: an open PR whose review says CHANGES_REQUESTED.
     /// The red CR in the issues list — those wait on us.
     pub item_crs: Vec<bool>,
@@ -55,6 +58,7 @@ pub enum ListRowView {
         entry: String,
         kind: Option<ItemKind>,
         has_wt: bool,
+        has_tab: bool,
         is_cr: bool,
     },
     Tree {
@@ -394,6 +398,14 @@ pub fn view_for(app: &App) -> ViewModel {
                     .is_some_and(|r| r.eq_ignore_ascii_case("CHANGES_REQUESTED"))
         })
         .collect();
+    let item_tabs = visible
+        .iter()
+        .map(|item| {
+            app.tabs
+                .iter()
+                .any(|tab| tab.repo == item.repo && tab.number == item.number)
+        })
+        .collect();
     // Structured fields from the item, always; the fetched body below them
     // only when it belongs to this item. A missing field is omitted, never
     // blank — and a missing body says how to fetch it instead of leaving a
@@ -442,6 +454,10 @@ pub fn view_for(app: &App) -> ViewModel {
                         entry: format!("#{} {}", item.number, item.title),
                         kind: Some(item.kind),
                         has_wt: app.has_worktree(&item.repo, item.head_ref_name.as_deref()),
+                        has_tab: app
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.repo == item.repo && tab.number == item.number),
                         is_cr: item.kind == ItemKind::Pr
                             && item.state.eq_ignore_ascii_case("OPEN")
                             && item
@@ -453,6 +469,7 @@ pub fn view_for(app: &App) -> ViewModel {
                         entry: format!("#{number} {repo}"),
                         kind: None,
                         has_wt: false,
+                        has_tab: false,
                         is_cr: false,
                     },
                 }
@@ -510,6 +527,7 @@ pub fn view_for(app: &App) -> ViewModel {
         item_worktrees,
         item_crs,
         item_kinds,
+        item_tabs,
         rows,
         detail,
         trees,
@@ -608,6 +626,7 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
                 entry,
                 kind,
                 has_wt,
+                has_tab,
                 is_cr,
             } => {
                 let (number, title) = split_number_title(entry);
@@ -647,6 +666,12 @@ fn issues_list(app: &App, view: &ViewModel) -> (List<'static>, ListState) {
                         0,
                         Span::styled(worktree_marker_text(), theme::worktree_marker()),
                     );
+                }
+                if *has_tab {
+                    // An open tab on this issue/PR: a peach `T` up front,
+                    // with the same breathing gap as the worktree marker.
+                    spans.insert(0, Span::raw(" "));
+                    spans.insert(0, Span::styled("T", theme::tab_marker()));
                 }
                 ListItem::new(Line::from(spans))
             }
@@ -1376,6 +1401,11 @@ fn icon_legend() -> Vec<(String, Style, &'static str)> {
             worktree_marker_text().to_string(),
             theme::worktree_marker(),
             "worktree on disk for that branch",
+        ),
+        (
+            "T ".to_string(),
+            theme::tab_marker(),
+            "an open tab on that issue/PR",
         ),
         (
             "CR ".to_string(),
