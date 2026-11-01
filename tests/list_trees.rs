@@ -33,8 +33,12 @@ fn item(repo: &str, number: u64, kind: ItemKind, head: Option<&str>) -> Item {
 }
 
 fn plant_worktree(root: &std::path::Path, branch: &str) -> PathBuf {
+    plant_worktree_for(root, "o/r", branch)
+}
+
+fn plant_worktree_for(root: &std::path::Path, repo: &str, branch: &str) -> PathBuf {
     use gtasks::worktree::BranchName;
-    let slug = gtasks::actions::RepoSlug::parse("o/r").unwrap();
+    let slug = gtasks::actions::RepoSlug::parse(repo).unwrap();
     let branch = BranchName::parse(branch).unwrap();
     let path =
         gtasks::worktree::resolve_in(root, std::path::Path::new(""), &slug, &branch).unwrap();
@@ -258,4 +262,30 @@ fn the_choice_survives_a_restart() {
     let old: gtasks::state::State =
         serde_json::from_str("{\"selected_repos\":[]}").expect("old files still parse");
     assert!(old.show_trees, "missing field means shown");
+}
+
+#[test]
+fn orphans_show_for_repos_with_zero_issues_under_all() {
+    // The screenshot: agent-orchestr has tabs and trees but no issues, so
+    // under "all repos" its trees must still land in the orphan section.
+    let (mut app, _tmp) = tree_app();
+    app.set_repos(vec![
+        gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
+        gtasks::actions::RepoSlug::parse("o/z").expect("valid slug"),
+    ]);
+    plant_worktree_for(&wt(&app), "o/z", "scratch-dev");
+    let summary = row_summary(&app.visible_rows());
+    assert!(
+        summary.iter().any(|row| row == "tree scratch-dev (orphan)"),
+        "the issueless repo's tree shows: {summary:?}"
+    );
+    // And drilled in, the scope is just that repo: same orphan, no items.
+    app.repo_filter =
+        gtasks::app::RepoFilter::One(gtasks::actions::RepoSlug::parse("o/z").expect("valid slug"));
+    let drilled = row_summary(&app.visible_rows());
+    assert_eq!(
+        drilled,
+        vec!["tree scratch-dev (orphan)"],
+        "drilled in: only the orphan, no divider, no items"
+    );
 }

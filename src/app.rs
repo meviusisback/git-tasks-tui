@@ -1115,10 +1115,20 @@ impl App {
                 .collect();
         }
         // One disk pass per repo in scope: every tree with its branch.
+        // Under "all repos" the scope is every configured repo — not just
+        // the ones with visible issues — so a repo with zero issues still
+        // shows its trees instead of vanishing from the list.
         let scope: Vec<String> = match &self.repo_filter {
             RepoFilter::One(slug) => vec![slug.as_str().to_string()],
             RepoFilter::All => {
-                let mut repos: Vec<String> = items.iter().map(|item| item.repo.clone()).collect();
+                let mut repos: Vec<String> = self
+                    .repos
+                    .iter()
+                    .filter_map(|row| match row {
+                        RepoRow::Repo(slug) => Some(slug.as_str().to_string()),
+                        RepoRow::All => None,
+                    })
+                    .collect();
                 repos.sort();
                 repos.dedup();
                 repos
