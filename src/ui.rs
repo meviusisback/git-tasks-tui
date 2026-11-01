@@ -480,17 +480,30 @@ pub fn view_for(app: &App) -> ViewModel {
         .collect();
     // The open trees behind the shown issue/PR: its head branch, or the
     // fresh branch issues grow (`issue-N`), so the work is visible where
-    // the issue is read.
-    let trees = app
-        .effective_item()
-        .map(|item| {
-            let branch = item
-                .head_ref_name
-                .clone()
-                .unwrap_or_else(|| format!("issue-{}", item.number));
-            app.item_trees(&item.repo, &branch)
-        })
-        .unwrap_or_default();
+    // the issue is read. A repo-level tab (`#0`) has no issue behind it:
+    // show its own tree instead of the list row's.
+    let trees = match app.active_repo_tree() {
+        Some((_, path, branch)) => {
+            let (agent, live) = app.tree_marks(&path);
+            vec![crate::app::ItemTree {
+                branch,
+                path,
+                agent,
+                live,
+                drifted: false,
+            }]
+        }
+        None => match app.effective_item() {
+            Some(item) => {
+                let branch = item
+                    .head_ref_name
+                    .clone()
+                    .unwrap_or_else(|| format!("issue-{}", item.number));
+                app.item_trees(&item.repo, &branch)
+            }
+            None => Vec::new(),
+        },
+    };
     ViewModel {
         repos: app.repos.iter().map(|row| row.text().to_string()).collect(),
         items,
@@ -1040,6 +1053,25 @@ fn detail(app: &App, view: &ViewModel, width: u16) -> Paragraph<'static> {
         return Paragraph::new(md_lines(&record.card(), width))
             .block(block)
             .scroll((app.detail_scroll, 0));
+    }
+    // A repo-level tab (`#0`) owns the detail with its own tree: show
+    // where it works instead of the list row under the cursor. Actions
+    // still read that row through `effective_item` — only the display is
+    // pinned to the tab.
+    if let Some((repo, path, branch)) = app.active_repo_tree() {
+        let lines = vec![
+            Line::from(Span::styled(
+                "working on",
+                theme::overlay_text().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::raw(sanitize(&repo))),
+            Line::from(Span::raw(sanitize(&format!(
+                "{} @ {}",
+                path.display(),
+                branch
+            )))),
+        ];
+        return Paragraph::new(lines).block(block);
     }
     let Some(item) = app.effective_item() else {
         // No issue/PR under the cursor — but the agent may still have a
