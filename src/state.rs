@@ -58,6 +58,10 @@ pub struct State {
     /// inert, never a wrong agent.
     #[serde(default)]
     pub live_direct: HashMap<String, crate::agent::LiveDirect>,
+    /// The list shows worktree rows under their issue/PR (plus orphan
+    /// trees in their own section below): `v` flips it, saved here.
+    #[serde(default = "default_show_trees")]
+    pub show_trees: bool,
 }
 
 impl Default for State {
@@ -80,8 +84,15 @@ impl Default for State {
             last_agents: HashMap::new(),
             herdr_bindings: HashMap::new(),
             live_direct: HashMap::new(),
+            show_trees: true,
         }
     }
+}
+
+/// The list shows worktrees unless the user hid them: a fresh state
+/// shows them, an old file without the field reads as shown.
+fn default_show_trees() -> bool {
+    true
 }
 
 impl State {
