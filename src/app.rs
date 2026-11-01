@@ -1109,7 +1109,7 @@ impl App {
     /// The agent marks of one tree, from memory: who ran there last and
     /// whether one is live inside right now. No disk reads — the branches
     /// come from the trees themselves, the marks from the session.
-    fn tree_marks(&self, path: &std::path::Path) -> (Option<String>, bool) {
+    pub fn tree_marks(&self, path: &std::path::Path) -> (Option<String>, bool) {
         let agent = self
             .last_agents
             .get(&path.display().to_string())
@@ -1704,6 +1704,31 @@ impl App {
             }
         }
         self.selected_item()
+    }
+
+    /// The active tab's own tree, when no issue/PR stands behind it: a
+    /// repo-level tab (`#0`) works on a tree, not on a row. The branch is
+    /// read from the tree itself, so a renamed branch still names itself.
+    /// `None` when the tab has an issue (the item owns the detail then)
+    /// or no placed tree (an unplaced bookmark follows the list).
+    pub fn active_repo_tree(&self) -> Option<(String, std::path::PathBuf, String)> {
+        let tab = self.active_tab.and_then(|idx| self.tabs.get(idx))?;
+        if tab.tree.is_empty() {
+            return None;
+        }
+        let known = self
+            .items
+            .iter()
+            .chain(self.retained.iter())
+            .any(|i| i.repo == tab.repo && i.number == tab.number);
+        if known {
+            return None;
+        }
+        let path = std::path::PathBuf::from(&tab.tree);
+        let branch = crate::worktree::worktree_branch(&path)
+            .map(|b| b.as_str().to_string())
+            .unwrap_or_default();
+        Some((tab.repo.clone(), path, branch))
     }
 
     /// Open a tab for the row under the cursor, or activate it when open.

@@ -289,3 +289,52 @@ fn orphans_show_for_repos_with_zero_issues_under_all() {
         "drilled in: only the orphan, no divider, no items"
     );
 }
+
+#[test]
+fn a_repo_tab_owns_the_detail_with_its_tree() {
+    use gtasks::app::Tab;
+
+    // The screenshot: active tab is #0 on its tree, list cursor on #12.
+    // The detail must show the tab's tree, not the list row.
+    let (mut app, _tmp) = tree_app();
+    let path = plant_worktree_for(&wt(&app), "o/r", "dev-tree");
+    app.tabs.push(Tab {
+        repo: "o/r".to_string(),
+        number: 0,
+        tree: path.display().to_string(),
+    });
+    app.active_tab = Some(0);
+    app.pane = Pane::List;
+    app.list_cursor = 0; // on #7 — the display still shows the repo tab's tree
+    assert_eq!(
+        app.effective_item().map(|item| item.number),
+        Some(7),
+        "actions still read the list row behind a #0 tab"
+    );
+    let (repo, got_path, branch) = app.active_repo_tree().expect("the tab names its tree");
+    assert_eq!(repo, "o/r");
+    assert_eq!(got_path, path);
+    assert_eq!(branch, "dev-tree");
+    // The worktrees box shows the tab's own tree.
+    let view = gtasks::ui::view_for(&app);
+    assert_eq!(view.trees.len(), 1, "the box follows the repo tab");
+    assert_eq!(view.trees[0].branch, "dev-tree");
+    // And the detail names where it works, not the list row.
+    let backend = ratatui::backend::TestBackend::new(200, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| gtasks::ui::draw(frame, &app, &view))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..30 {
+        for x in 0..200 {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+    }
+    assert!(
+        screen.contains("working on"),
+        "detail shows the tree: {screen}"
+    );
+    assert!(screen.contains("dev-tree"), "names the branch: {screen}");
+}
