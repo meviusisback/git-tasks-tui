@@ -158,6 +158,46 @@ pub fn worktree_branch(path: &Path) -> Option<BranchName> {
     BranchName::parse(name).ok()
 }
 
+/// The clone's default branch (`origin/HEAD`), if the clone names one: the
+/// branch a fresh `git clone` checks out. A tree sitting on it has no
+/// dedicated branch — the app asks before working there instead of
+/// committing straight onto it.
+pub fn default_branch(
+    binaries: &crate::binaries::Binaries,
+    clone: &Path,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    let argv = crate::gh::CheckedArgv::from_checked(crate::gh::git(
+        binaries,
+        clone,
+        vec!["symbolic-ref".into(), "refs/remotes/origin/HEAD".into()],
+    ));
+    let out = crate::gh::run_checked(&argv, timeout).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .strip_prefix("refs/remotes/origin/")
+        .map(str::to_string)
+        .filter(|name| !name.is_empty())
+}
+
+/// Checkout a new branch inside an existing tree: the answer to "this tree
+/// is on the default branch — work on a dedicated one instead?". Typed
+/// argv through the mutation transport, like every other worktree write.
+pub fn checkout_new_branch_argv(
+    binaries: &crate::binaries::Binaries,
+    path: &Path,
+    branch: &BranchName,
+) -> crate::gh::Argv {
+    crate::gh::git(
+        binaries,
+        path,
+        vec!["checkout".into(), "-b".into(), branch.as_str().into()],
+    )
+}
+
 /// Rename a worktree: the branch first, the directory after. Branch-first
 /// means a failed move leaves a valid tree at the old path on the new
 /// branch — still usable, never half-moved. Both steps run in the loop

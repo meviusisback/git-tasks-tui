@@ -12,14 +12,16 @@ disagree, the handler is right and this file is a bug.
 | `←` / `→` | previous / next tab, like `t` / `T`. Boxes move on `Shift`+arrows (same row or column) or `Tab`. Mouse: left-click focuses a box or opens a tab, drag on a divider resizes the cross (saved across restarts), the wheel scrolls the agent box history |
 | `Tab` | next pane: list → repos → detail → list, plus the agent box while the active tab's agent operates |
 | `Shift` + `←`/`↑`/`↓`/`→` | move focus between the four boxes following the screen layout (left column repos/list, right column detail/agent) |
-| `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows; in detail/agent it scrolls |
-| `Enter` | in the repos pane: drill into that repo's items; in the list: bookmark the row — open its tab, show it and move the focus right (the open tab owns the detail; without tabs the detail follows the list); in the search box: leave the box |
-| `t` / `T` | next / previous tab — the open tab owns the detail (its issue shows even across a repo filter, even closed) and its agent comes back below; scrolling never drags the detail off a tab. Never touches the repo selection on the left |
+| `↑` / `↓` | move the selection in the focused pane; in the repos pane it moves between repos and the list below follows — the open tab follows too: it re-seats on the new repo's first tab (or none), so the detail never shows another repo's issue |
+| `Enter` | in the repos pane: drill into that repo's items (the strip narrows to that repo's tabs and lands on its first one); in the list: bookmark the row — open its tab, show it and move the focus right (the open tab owns the detail; without tabs the detail follows the list); in the search box: leave the box |
+| `t` / `T` | next / previous tab among the shown ones — with a repo drilled in, only that repo's tabs cycle. The open tab owns the detail (its issue shows even closed) and its agent comes back below; scrolling never drags the detail off a tab. Never touches the repo selection on the left |
 | `x` / `X` | close the active tab first, then the agent record |
+| `K` | stop the active tab's Herdr agent Herdr-side (asks first; the tab stays open, the next launch starts fresh) |
 | `w` | focus the agent pane (worktree + agent instructions live there) |
 | `R` | repo selection menu (the rows re-read from GitHub on open, so new repos join without a restart): `Space` marks, `a` marks all, `n` unmarks all, `↑`/`↓` moves, `Enter` applies, `Esc` cancels. Picks are saved to `state.json` (0600); nothing marked means **all repos** |
 | `/` | search: filters the visible list on the title and the number (`/42` finds `#42`) |
 | `f` | state filter on a single repo: open → closed → all states (numeric, oldest first). Closed history is fetched on demand; on "all repos" it says to pick one repo first |
+| `v` | worktree rows in the list: children under their issue/PR plus the orphan section below (toggle, saved) |
 | `d` | side-by-side diff of the selected PR in an overlay (`↑`/`↓` scroll, wheel scrolls, `Enter`/`Esc` closes): old version left, new version right, changed pairs on the same row. Fetched once, then cached; first 200 lines with the total named when truncated |
 | `o` | open the selected item in the browser |
 | `r` | refresh — it works in every pane, including inside a drilled-in repo. The list also re-reads itself every `refresh_s` seconds while idle (default 300, `0` turns it off) |
@@ -56,6 +58,7 @@ the detail column.
 **are not promised anywhere on screen**.
 
 Red `CR` after a PR number means *changes requested* — that row waits on you.
+A peach `T` in front of a row means an open tab names that issue/PR.
 A worktree directory for another branch than the item's is named in the box
 instead of hidden (`not the item's branch`).
 

@@ -104,6 +104,44 @@ pub struct HerdrBinding {
     pub name: String,
     pub tab_id: String,
     pub pane_id: String,
+    /// Which tab this agent works for: the restart reattaches it without
+    /// asking. Empty/zero on bindings saved before the field existed —
+    /// those resolve by matching the tree against the open tabs' trees.
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub number: u64,
+    /// Agent kind (`omp`, `hermes`, …) and profile, to rebuild the resume
+    /// plan without guessing from the name.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub profile: String,
+}
+
+/// The resume plan for an automatic reattach: same shape as a `g` resume,
+/// built from the binding instead of the menu. The branch is read live
+/// from the tree (a renamed tree must not trigger the drift question),
+/// and an unknown kind refuses — a stale binding never becomes a launch.
+pub fn reattach_plan(
+    binding: &HerdrBinding,
+    repo: &str,
+    number: u64,
+    branch: &str,
+    profile: &str,
+    choice: crate::agent::AgentChoice,
+    clone: std::path::PathBuf,
+) -> Option<crate::agent::AgentPlan> {
+    crate::agent::AgentId::from_name(&binding.kind)?;
+    Some(crate::agent::AgentPlan {
+        repo: repo.to_string(),
+        number,
+        url: String::new(),
+        branch: branch.to_string(),
+        profile: profile.to_string(),
+        agent: choice,
+        clone,
+    })
 }
 
 /// One Herdr-side start, owned by the worker thread: the main thread only
@@ -116,6 +154,7 @@ pub struct HerdrJob {
     pub name: String,
     pub kind: String,
     pub agent_args: Vec<String>,
+    pub repo: String,
     pub tree: PathBuf,
     pub label: String,
     pub binding: Option<HerdrBinding>,
@@ -144,6 +183,10 @@ pub struct HerdrPending {
     pub lines: usize,
     pub seed: crate::agent::SeedFile,
     pub resume: bool,
+    /// An automatic reattach at startup must never fall back to a direct
+    /// launch: the user asked for nothing, so a dead agent only drops its
+    /// binding with a status line. User-invoked resumes keep the fallback.
+    pub no_fallback: bool,
 }
 
 /// The box child for a Herdr agent: `herdr agent attach <name>`. Input typed
@@ -227,16 +270,44 @@ pub fn run_job(job: HerdrJob) -> HerdrOutcome {
             &job.agent_args,
         )
     };
-    match tab_create(&job.program, &job.cli_cwd, &job.tree, &job.label) {
-        Ok((tab_id, pane_id)) => match start_in(&pane_id) {
-            Ok(()) => HerdrOutcome::Attached {
-                name,
-                tab_id,
-                pane_id,
-            },
-            Err(err) => failed(err),
-        },
-        Err(err) => failed(err),
+    // The repo's Space first: one workspace per repo, created named after
+    // the repo when missing. A fresh Space already owns a root tab in the
+    // tree, so the agent starts there; otherwise a tab grows in it.
+    let slot = match workspace_ensure(&job.program, &job.cli_cwd, &job.repo, &job.tree) {
+        Ok(slot) => slot,
+        Err(err) => return failed(err),
+    };
+    match slot {
+        WorkspaceSlot::ReuseRoot { tab_id, pane_id } => {
+            let _ = tab_rename(&job.program, &job.cli_cwd, &tab_id, &job.label);
+            match start_in(&pane_id) {
+                Ok(()) => HerdrOutcome::Attached {
+                    name,
+                    tab_id,
+                    pane_id,
+                },
+                Err(err) => failed(err),
+            }
+        }
+        WorkspaceSlot::NewTab { workspace_id } => {
+            match tab_create(
+                &job.program,
+                &job.cli_cwd,
+                &workspace_id,
+                &job.tree,
+                &job.label,
+            ) {
+                Ok((tab_id, pane_id)) => match start_in(&pane_id) {
+                    Ok(()) => HerdrOutcome::Attached {
+                        name,
+                        tab_id,
+                        pane_id,
+                    },
+                    Err(err) => failed(err),
+                },
+                Err(err) => failed(err),
+            }
+        }
     }
 }
 
@@ -263,10 +334,12 @@ pub fn agent_get(program: &Path, cwd: &Path, target: &str) -> anyhow::Result<Opt
     Ok(value.get("result").and_then(parse_agent_info))
 }
 
-/// Create a Herdr tab rooted in the worktree. Returns `(tab_id, pane_id)`.
+/// Create a Herdr tab rooted in the worktree inside `workspace`.
+/// Returns `(tab_id, pane_id)`.
 pub fn tab_create(
     program: &Path,
     cwd: &Path,
+    workspace: &str,
     tree: &Path,
     label: &str,
 ) -> anyhow::Result<(String, String)> {
@@ -276,10 +349,13 @@ pub fn tab_create(
         vec![
             os("tab"),
             os("create"),
+            os("--workspace"),
+            os(workspace),
             os("--cwd"),
             tree.as_os_str().to_os_string(),
             os("--label"),
             os(label),
+            os("--no-focus"),
         ],
     );
     let out = run_checked(&argv, TIMEOUT_QUICK)?;
@@ -297,6 +373,97 @@ pub fn tab_create(
     Ok((tab.to_string(), pane.to_string()))
 }
 
+/// Rename a tab (the auto-created root tab of a fresh Space says "1":
+/// give it the agent's label). Best effort — a missed rename never fails
+/// the launch.
+pub fn tab_rename(program: &Path, cwd: &Path, tab_id: &str, label: &str) -> anyhow::Result<()> {
+    let argv = herdr_argv(
+        program,
+        cwd,
+        vec![os("tab"), os("rename"), os(tab_id), os(label)],
+    );
+    let out = run_checked(&argv, TIMEOUT_QUICK)?;
+    anyhow::ensure!(out.status.success(), "`herdr tab rename` failed");
+    Ok(())
+}
+
+/// Where the agent goes: a fresh Space already owns a root tab sitting at
+/// a shell prompt (start there, no extra tab), while an existing Space
+/// grows one tab per agent.
+pub enum WorkspaceSlot {
+    ReuseRoot { tab_id: String, pane_id: String },
+    NewTab { workspace_id: String },
+}
+
+/// The repo's Space on Herdr: one workspace per repo, labeled with the
+/// repo name alone (`payment_nexi`, not `owner/payment_nexi` — the owner
+/// is always him and only eats label room). Reused when it exists,
+/// created named after the repo when it does not. A fresh Space arrives
+/// with its root tab already in the tree, so the agent starts there
+/// directly.
+pub fn workspace_ensure(
+    program: &Path,
+    cwd: &Path,
+    repo: &str,
+    tree: &Path,
+) -> anyhow::Result<WorkspaceSlot> {
+    // Short name only: every repo here is his, the owner adds nothing.
+    let short = repo.split('/').next_back().unwrap_or(repo);
+    let argv = herdr_argv(program, cwd, vec![os("workspace"), os("list")]);
+    let out = run_checked(&argv, TIMEOUT_QUICK)?;
+    anyhow::ensure!(out.status.success(), "`herdr workspace list` failed");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .context("cannot parse `herdr workspace list` output")?;
+    if let Some(spaces) = value
+        .pointer("/result/workspaces")
+        .and_then(|v| v.as_array())
+    {
+        for space in spaces {
+            let label = space.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            // Full slugs are legacy: Spaces used to carry `owner/name`.
+            if label == short || label == repo {
+                let id = space
+                    .get("workspace_id")
+                    .and_then(|v| v.as_str())
+                    .context("workspace without id")?;
+                return Ok(WorkspaceSlot::NewTab {
+                    workspace_id: id.to_string(),
+                });
+            }
+        }
+    }
+    let argv = herdr_argv(
+        program,
+        cwd,
+        vec![
+            os("workspace"),
+            os("create"),
+            os("--label"),
+            os(short),
+            os("--cwd"),
+            tree.as_os_str().to_os_string(),
+            os("--no-focus"),
+        ],
+    );
+    let out = run_checked(&argv, TIMEOUT_START)?;
+    anyhow::ensure!(out.status.success(), "`herdr workspace create` failed");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .context("cannot parse `herdr workspace create` output")?;
+    match value
+        .pointer("/result/root_pane/pane_id")
+        .and_then(|v| v.as_str())
+    {
+        Some(pane_id) => Ok(WorkspaceSlot::ReuseRoot {
+            tab_id: value
+                .pointer("/result/tab/tab_id")
+                .and_then(|v| v.as_str())
+                .context("fresh Space without tab id")?
+                .to_string(),
+            pane_id: pane_id.to_string(),
+        }),
+        None => anyhow::bail!("fresh Space without root pane"),
+    }
+}
 /// Start the agent Herdr-side in an existing pane: `agent start <name>
 /// --kind <kind> --pane <pane> -- <our args…>`. The pane must sit at its
 /// shell prompt; a reused pane whose agent already exited qualifies.

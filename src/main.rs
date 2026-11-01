@@ -131,17 +131,13 @@ fn start_agent(
     plan: AgentPlan,
     agreed: Option<PathBuf>,
     term_size: (u16, u16),
-    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64, String), EmbeddedSession>,
     herdr_slot: &mut Option<gtasks::herdr::HerdrPending>,
 ) {
-    // One agent per tab: the box shows one session, so a second launch on
-    // the same tab is refused instead of orphaning the first. Other tabs
-    // keep running untouched.
-    let key = App::tab_key(&plan.repo, plan.number);
-    if sessions.contains_key(&key) {
-        app.status = "an agent is already running in this tab".to_string();
-        return;
-    }
+    // One agent per tree-tab: the box shows one session, so a second
+    // launch on the same tree is refused instead of orphaning the first.
+    // A different tree on the same issue grows its own tab (the guard
+    // below keys on the tree, and `ensure_tab` retargets or splits).
     let timeout = Duration::from_secs(config.timeout_s.max(1));
     let root = match config.worktree_root.clone() {
         Some(root) => root,
@@ -252,17 +248,13 @@ fn start_placed(
     plan: AgentPlan,
     path: PathBuf,
     term_size: (u16, u16),
-    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64, String), EmbeddedSession>,
     binaries: &Binaries,
     timeout: Duration,
     herdr_slot: &mut Option<gtasks::herdr::HerdrPending>,
 ) {
-    // One agent per tab, same as every other launch.
-    let key = App::tab_key(&plan.repo, plan.number);
-    if sessions.contains_key(&key) {
-        app.status = "an agent is already running in this tab".to_string();
-        return;
-    }
+    // One agent per tree-tab, same as every other launch (the guard lives
+    // in `launch_agent`, where the final path is known).
     if !agent::placed_ok_in(&path, app.worktree_root.as_deref()) {
         let question = format!(
             "no worktree for {}@{} — create it and start the agent?",
@@ -308,7 +300,7 @@ fn rename_worktree(
     app: &mut App,
     binaries: &Binaries,
     order: gtasks::worktree::WorktreeRename,
-    sessions: &HashMap<(String, u64), EmbeddedSession>,
+    sessions: &HashMap<(String, u64, String), EmbeddedSession>,
 ) {
     if sessions.values().any(|s| s.worktree() == order.old_path) {
         app.status = "an agent is still running in that worktree".to_string();
@@ -363,6 +355,29 @@ fn rename_worktree(
     }
 }
 
+/// Stop a Herdr agent from a confirmed `K`: close its Herdr-side tab and
+/// forget the local shadow plus the reattach binding, so the next launch
+/// starts fresh. The gtasks tab stays open — this is not `x`.
+fn stop_herdr_agent(app: &mut App, binaries: &Binaries, stop: gtasks::app::HerdrStop) {
+    let Some(herdr) = binaries.herdr.clone() else {
+        app.status = "the herdr CLI is missing".to_string();
+        return;
+    };
+    // The daemon owns the agent: closing its tab kills the process. The
+    // local shadow and the reattach binding die with it, so the next
+    // launch starts fresh instead of attaching to a corpse.
+    match gtasks::herdr::tab_close(&herdr, std::path::Path::new(&stop.tree), &stop.tab_id) {
+        Ok(()) => {
+            app.herdr_bindings.remove(&stop.tree);
+            app.tab_agents.remove(&stop.key);
+            app.status = format!("Herdr agent {} stopped", stop.name);
+        }
+        Err(err) => {
+            app.status = format!("could not stop the Herdr agent: {err:#}");
+        }
+    }
+}
+
 /// Delete a worktree from a confirmed order. The branch is kept on purpose.
 /// Refused while a live session works inside; a finished record for the
 /// tree is cleared, so no card points at a deleted directory.
@@ -370,7 +385,7 @@ fn delete_worktree(
     app: &mut App,
     binaries: &Binaries,
     order: gtasks::worktree::WorktreeDelete,
-    sessions: &HashMap<(String, u64), EmbeddedSession>,
+    sessions: &HashMap<(String, u64, String), EmbeddedSession>,
 ) {
     if sessions.values().any(|s| s.worktree() == order.path) {
         app.status = "an agent is still running in that worktree".to_string();
@@ -409,7 +424,7 @@ fn cleanup_after_merge(
     app: &mut App,
     binaries: &Binaries,
     order: gtasks::worktree::CleanupOrder,
-    sessions: &HashMap<(String, u64), EmbeddedSession>,
+    sessions: &HashMap<(String, u64, String), EmbeddedSession>,
 ) {
     let mut deleted: Vec<String> = Vec::new();
     let mut kept: Vec<String> = Vec::new();
@@ -490,7 +505,7 @@ fn correct_tree_path(app: &App, plan: &AgentPlan) -> Option<PathBuf> {
 /// allows seven function arguments, and the plan side already takes three).
 struct LaunchCtx<'a> {
     term_size: (u16, u16),
-    sessions: &'a mut HashMap<(String, u64), EmbeddedSession>,
+    sessions: &'a mut HashMap<(String, u64, String), EmbeddedSession>,
     binaries: &'a Binaries,
     timeout: Duration,
 }
@@ -523,6 +538,17 @@ fn launch_agent(
         None => Some(String::new()),
         _ => None,
     };
+    // One agent per tree: a live session on this exact tree refuses
+    // instead of orphaning the first. A different tree on the same issue
+    // has its own key, so it launches untouched.
+    let key = App::tab_key(&plan.repo, plan.number, &path.display().to_string());
+    let busy =
+        ctx.sessions.contains_key(&key) || app.tab_agents.get(&key).is_some_and(|a| a.running);
+    if busy {
+        app.status =
+            "an agent is already running on this tree — resume to take it over".to_string();
+        return None;
+    }
     if !placed || drifted.is_some() {
         match correct_tree_path(app, plan) {
             Some(target) => {
@@ -735,6 +761,7 @@ fn start_herdr_launch(
         name,
         kind: plan.agent.id.name().to_string(),
         agent_args,
+        repo: plan.repo.clone(),
         tree: tree.clone(),
         label: format!("{}#{} {}", plan.repo, plan.number, plan.agent.id.name()),
         binding: app.herdr_bindings.get(&tree.display().to_string()).cloned(),
@@ -747,8 +774,8 @@ fn start_herdr_launch(
     // without this mark the still-empty tab would accept a second launch.
     // The tab itself is created now, not at attach: otherwise the poll
     // mistakes every fresh launch for a tab closed mid-start.
-    let key = App::tab_key(&plan.repo, plan.number);
-    ensure_tab(app, plan);
+    let key = App::tab_key(&plan.repo, plan.number, &path.display().to_string());
+    ensure_tab(app, plan, path);
     let entry = app.tab_agents.entry(key).or_default();
     entry.running = true;
     entry.context = Some(gtasks::app::AgentContext {
@@ -765,6 +792,7 @@ fn start_herdr_launch(
         lines,
         seed,
         resume,
+        no_fallback: false,
     }
 }
 
@@ -772,11 +800,120 @@ fn start_herdr_launch(
 /// the reason on top. A tab closed while the thread worked does not come
 /// back: the Herdr agent keeps running (that is the point of Herdr) and
 /// the binding is recorded, so reopening the tree re-attaches.
+/// At startup, reattach the Herdr agents behind the open tabs: the daemon
+/// owns them, so a restart only lost the view, never the agent. Only live
+/// agents queue (one synchronous `agent get` per binding, once per
+/// startup); a dead one drops its binding with a status line instead of
+/// haunting the next launch. Bindings whose tab is not open are left
+/// alone — reopening the tree still finds them.
+fn queue_herdr_reattaches(app: &mut App, binaries: &Binaries) {
+    let Some(herdr) = binaries.herdr.clone() else {
+        return;
+    };
+    if app.herdr_bindings.is_empty() {
+        return;
+    }
+    // The binding itself carries the tab: repo+number stored since the
+    // fields existed, else the open tab placed on that exact tree.
+    let mut gone = Vec::new();
+    for (tree, binding) in app.herdr_bindings.clone() {
+        let tabkey = if !binding.repo.is_empty() {
+            Some((binding.repo.clone(), binding.number, tree.clone()))
+        } else {
+            app.tabs.iter().find(|t| t.tree == tree).map(|t| t.key())
+        };
+        let Some(key) = tabkey else {
+            continue;
+        };
+        if !app.tabs.iter().any(|t| t.key() == key) {
+            continue;
+        }
+        let (repo, number) = (key.0.clone(), key.1);
+        // No running check here: at startup the sessions map is empty, so
+        // any running shadow is a detached leftover, never a live session.
+        // The attach replaces it on success; on failure the dead binding
+        // is dropped and the leftover stays visible instead of a blank.
+        let cwd = Path::new(&tree);
+        let alive = cwd.exists()
+            && gtasks::herdr::agent_get(&herdr, cwd, &binding.name)
+                .ok()
+                .flatten()
+                .is_some();
+        if !alive {
+            gone.push(binding.name.clone());
+            app.herdr_bindings.remove(&tree);
+            continue;
+        }
+        let profile = if !binding.profile.is_empty() {
+            binding.profile.clone()
+        } else {
+            app.last_agents
+                .get(&tree)
+                .map(|last| last.profile.clone())
+                .unwrap_or_else(|| app.agent_profile.clone())
+        };
+        let kind = if !binding.kind.is_empty() {
+            binding.kind.clone()
+        } else {
+            app.last_agents
+                .get(&tree)
+                .map(|last| last.agent.clone())
+                .unwrap_or_default()
+        };
+        let Some(choice) = app
+            .agent_choices()
+            .into_iter()
+            .find(|c| c.id.name() == kind && c.herdr)
+        else {
+            continue;
+        };
+        let Some(branch) = gtasks::worktree::worktree_branch(cwd) else {
+            continue;
+        };
+        let Ok(clone) = gtasks::agent::find_clone(&app.clone_roots, &repo) else {
+            continue;
+        };
+        if let Some(plan) = gtasks::herdr::reattach_plan(
+            &binding,
+            &repo,
+            number,
+            branch.as_str(),
+            &profile,
+            choice,
+            clone,
+        ) {
+            app.herdr_reattach_queue.push((plan, PathBuf::from(&tree)));
+        }
+    }
+    if !gone.is_empty() {
+        app.status = format!("Herdr agents gone: {} — bindings dropped", gone.join(", "));
+        app.session_dirty = true;
+    }
+}
+
+/// A Herdr agent that died on its own: forget the binding (reopening the
+/// tree starts fresh) and say so. Only for automatic reattaches — a user
+/// who asked to reopen keeps the direct fallback instead.
+fn drop_dead_binding(app: &mut App, pending: gtasks::herdr::HerdrPending, reason: &str) {
+    app.herdr_bindings
+        .remove(&pending.path.display().to_string());
+    app.tab_agents.remove(&App::tab_key(
+        &pending.plan.repo,
+        pending.plan.number,
+        &pending.path.display().to_string(),
+    ));
+    app.session_dirty = true;
+    app.status = format!(
+        "the Herdr agent {} is gone ({reason}) — reopen the tree to start fresh",
+        pending.plan.agent.id.name(),
+    );
+}
+
 fn poll_herdr_launch(
     app: &mut App,
     binaries: &Binaries,
     term_size: (u16, u16),
-    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64, String), EmbeddedSession>,
     timeout: Duration,
     slot: &mut Option<gtasks::herdr::HerdrPending>,
 ) {
@@ -788,28 +925,9 @@ fn poll_herdr_launch(
             *slot = Some(pending);
         }
         Err(TryRecvError::Disconnected) => {
-            launch_direct_after_herdr(
-                app,
-                binaries,
-                term_size,
-                sessions,
-                timeout,
-                pending,
-                slot,
-                "the Herdr worker died",
-            );
-        }
-        Ok(gtasks::herdr::HerdrOutcome::Failed(reason)) => {
-            launch_direct_after_herdr(
-                app, binaries, term_size, sessions, timeout, pending, slot, &reason,
-            );
-        }
-        Ok(gtasks::herdr::HerdrOutcome::Attached {
-            name,
-            tab_id,
-            pane_id,
-        }) => {
-            let Some(herdr) = binaries.herdr.clone() else {
+            if pending.no_fallback {
+                drop_dead_binding(app, pending, "the Herdr worker died");
+            } else {
                 launch_direct_after_herdr(
                     app,
                     binaries,
@@ -818,8 +936,39 @@ fn poll_herdr_launch(
                     timeout,
                     pending,
                     slot,
-                    "the herdr CLI is missing",
+                    "the Herdr worker died",
                 );
+            }
+        }
+        Ok(gtasks::herdr::HerdrOutcome::Failed(reason)) => {
+            if pending.no_fallback {
+                drop_dead_binding(app, pending, &reason);
+            } else {
+                launch_direct_after_herdr(
+                    app, binaries, term_size, sessions, timeout, pending, slot, &reason,
+                );
+            }
+        }
+        Ok(gtasks::herdr::HerdrOutcome::Attached {
+            name,
+            tab_id,
+            pane_id,
+        }) => {
+            let Some(herdr) = binaries.herdr.clone() else {
+                if pending.no_fallback {
+                    drop_dead_binding(app, pending, "the herdr CLI is missing");
+                } else {
+                    launch_direct_after_herdr(
+                        app,
+                        binaries,
+                        term_size,
+                        sessions,
+                        timeout,
+                        pending,
+                        slot,
+                        "the herdr CLI is missing",
+                    );
+                }
                 return;
             };
             let argv = gtasks::herdr::attach_argv(&herdr, &pending.path, &name);
@@ -852,6 +1001,10 @@ fn poll_herdr_launch(
                             name: name.clone(),
                             tab_id,
                             pane_id,
+                            repo: pending.plan.repo.clone(),
+                            number: pending.plan.number,
+                            kind: pending.plan.agent.id.name().to_string(),
+                            profile: pending.plan.profile.clone(),
                         },
                     );
                     app.session_dirty = true;
@@ -907,7 +1060,7 @@ fn launch_direct_after_herdr(
     app: &mut App,
     binaries: &Binaries,
     term_size: (u16, u16),
-    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64, String), EmbeddedSession>,
     timeout: Duration,
     pending: gtasks::herdr::HerdrPending,
     slot: &mut Option<gtasks::herdr::HerdrPending>,
@@ -937,25 +1090,36 @@ fn launch_direct_after_herdr(
 /// The agent lives in its item's tab: ensure the tab and show it. The box
 /// session itself is filed later (direct) or at attach (Herdr) — the tab
 /// must already exist while Herdr starts, or the poll mistakes a fresh
-/// launch for a tab closed mid-start and drops the session.
-fn ensure_tab(app: &mut App, plan: &AgentPlan) {
-    if !app
+/// launch for a tab closed mid-start and drops the session. Tabs are
+/// per-tree: launching on a second tree grows a second tab instead of
+/// stealing the first one's box; an unplaced bookmark adopts the tree.
+fn ensure_tab(app: &mut App, plan: &AgentPlan, path: &Path) {
+    let tree = path.display().to_string();
+    if let Some(idx) = app
         .tabs
         .iter()
-        .any(|tab| tab.repo == plan.repo && tab.number == plan.number)
+        .position(|tab| tab.repo == plan.repo && tab.number == plan.number && tab.tree == tree)
     {
-        app.tabs.push(gtasks::app::Tab {
-            repo: plan.repo.clone(),
-            number: plan.number,
-        });
+        app.activate_tab(idx);
+        return;
     }
     if let Some(idx) = app
         .tabs
         .iter()
-        .position(|tab| tab.repo == plan.repo && tab.number == plan.number)
+        .position(|tab| tab.repo == plan.repo && tab.number == plan.number && tab.tree.is_empty())
     {
+        if let Some(tab) = app.tabs.get_mut(idx) {
+            tab.tree = tree;
+        }
         app.activate_tab(idx);
+        return;
     }
+    app.tabs.push(gtasks::app::Tab {
+        repo: plan.repo.clone(),
+        number: plan.number,
+        tree,
+    });
+    app.activate_tab(app.tabs.len() - 1);
 }
 
 /// File a freshly spawned box session under its tab: tabs, screen, record,
@@ -964,7 +1128,7 @@ fn ensure_tab(app: &mut App, plan: &AgentPlan) {
 #[allow(clippy::too_many_arguments)]
 fn finish_launch(
     app: &mut App,
-    sessions: &mut HashMap<(String, u64), EmbeddedSession>,
+    sessions: &mut HashMap<(String, u64, String), EmbeddedSession>,
     plan: &AgentPlan,
     path: &Path,
     sess: EmbeddedSession,
@@ -972,8 +1136,8 @@ fn finish_launch(
     draft: Option<String>,
     status: String,
 ) {
-    let key = App::tab_key(&plan.repo, plan.number);
-    ensure_tab(app, plan);
+    let key = App::tab_key(&plan.repo, plan.number, &path.display().to_string());
+    ensure_tab(app, plan, path);
     let screen = sess.snapshot();
     let entry = app.tab_agents.entry(key.clone()).or_default();
     entry.running = true;
@@ -1004,6 +1168,23 @@ fn finish_launch(
     entry.draft = draft;
     app.status = status;
     app.remember_worktree_agent(plan, path);
+    // The pid record is what survives a restart: the next process finds
+    // this agent by pid instead of forgetting it. Herdr agents need no
+    // record — the daemon owns them and the binding reattaches.
+    if plan.agent.herdr {
+        app.live_direct.remove(&path.display().to_string());
+    } else if let Some(pid) = sess.pid() {
+        app.live_direct.insert(
+            path.display().to_string(),
+            gtasks::agent::LiveDirect {
+                pid,
+                repo: plan.repo.clone(),
+                number: plan.number,
+                agent: plan.agent.id.name().to_string(),
+                profile: plan.profile.clone(),
+            },
+        );
+    }
     sessions.insert(key, sess);
 }
 
@@ -1243,6 +1424,8 @@ fn run_tui() -> anyhow::Result<()> {
     // open tabs come back from `state.json`. Unknown values fall back
     // instead of breaking startup.
     app.restore_session(&state);
+    // The daemon kept the Herdr agents: reattach the open tabs' views.
+    queue_herdr_reattaches(&mut app, &binaries);
     // The items cache paints instantly; the fetch below refreshes in the
     // background. A broken cache is ignored — the fetch is the source of
     // truth, the cache only speed.
@@ -1254,7 +1437,7 @@ fn run_tui() -> anyhow::Result<()> {
         cache_path.as_deref().and_then(gtasks::cache::load);
     if let Some(items) = cached_items.clone() {
         app.items = items;
-        app.set_lengths(app.repos.len(), app.visible_items().len());
+        app.set_lengths(app.repos.len(), app.visible_rows().len());
         app.refresh_status();
         app.status = format!("{} — cached, refreshing…", app.status);
     }
@@ -1286,7 +1469,7 @@ fn run_tui() -> anyhow::Result<()> {
     // Live agent sessions, one per tab: the loop owns the children, the
     // App only carries what the screen needs. Switching tabs switches
     // boxes; background tabs keep running.
-    let mut sessions: HashMap<(String, u64), EmbeddedSession> = HashMap::new();
+    let mut sessions: HashMap<(String, u64, String), EmbeddedSession> = HashMap::new();
     // One Herdr-side start at a time: the worker thread answers, the loop
     // embeds `herdr agent attach` (or falls back to direct).
     let mut herdr_pending: Option<gtasks::herdr::HerdrPending> = None;
@@ -1794,9 +1977,48 @@ fn run_tui() -> anyhow::Result<()> {
                 &mut herdr_pending,
             );
         }
+        // Automatic Herdr reattaches feed the normal resume flow one per
+        // tick, behind anything the user asked for: `agent_resume` stays
+        // the single funnel, so validation, takeover and status behave
+        // exactly like a manual reopen.
+        if app.agent_resume.is_none() && herdr_pending.is_none() {
+            if let Some((plan, path)) = app.herdr_reattach_queue.pop() {
+                // A restored shadow would trip the per-tree guard: the
+                // attach rebuilds the entry itself on success.
+                app.tab_agents.remove(&App::tab_key(
+                    &plan.repo,
+                    plan.number,
+                    &path.display().to_string(),
+                ));
+                app.agent_resume = Some((plan, path));
+                app.auto_reattach = true;
+                needs_draw = true;
+            }
+        }
         if let Some((plan, path)) = app.agent_resume.take() {
             needs_draw = true;
-            if let Some(pending) = launch_agent(
+            // A startup reattach must never fall back to a direct launch:
+            // the user asked for nothing.
+            let auto = app.auto_reattach;
+            app.auto_reattach = false;
+            // Taking over a detached agent: only on an explicit reopen,
+            // never on the automatic startup reattach. The old process is
+            // not ours anymore and its output is already lost (its pty
+            // died with the old gtasks): stop it before reopening the
+            // session, or two agents would work the same tree.
+            let tree = path.display().to_string();
+            let mut took_over: Option<u32> = None;
+            if !auto {
+                if let Some(live) = app.live_direct.get(&tree) {
+                    let (pid, alive) = (live.pid, crate::agent::owns_tree(live.pid, &tree));
+                    app.live_direct.remove(&tree);
+                    if alive {
+                        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                        took_over = Some(pid);
+                    }
+                }
+            }
+            if let Some(mut pending) = launch_agent(
                 &mut app,
                 &plan,
                 &path,
@@ -1808,7 +2030,15 @@ fn run_tui() -> anyhow::Result<()> {
                 },
                 true,
             ) {
+                if auto {
+                    pending.no_fallback = true;
+                }
                 herdr_pending = Some(pending);
+            }
+            // The relaunch sets its own status inside; keep the takeover
+            // visible by appending it.
+            if let Some(pid) = took_over {
+                app.status = format!("{} — detached agent (pid {pid}) stopped", app.status);
             }
         }
         // A Herdr-side start answering: embed the attach view, or launch
@@ -1837,6 +2067,49 @@ fn run_tui() -> anyhow::Result<()> {
                 &mut herdr_pending,
             );
         }
+        // A dedicated branch agreed in the name prompt: cut it in the
+        // tree, then continue the launch (preset agent launches there,
+        // otherwise the agent menu opens for that tree). A taken name
+        // fails here with the reason on screen — nothing launches
+        // half-placed on the default branch.
+        if let Some((mut plan, path, branch, preset)) = app.branch_go.take() {
+            needs_draw = true;
+            match gtasks::worktree::BranchName::parse(&branch) {
+                Ok(name) => {
+                    let argv = gtasks::worktree::checkout_new_branch_argv(&binaries, &path, &name);
+                    match gtasks::worktree::run_mutation(&argv, timeout) {
+                        Ok(out) if out.status.success() => {
+                            plan.branch = name.as_str().to_string();
+                            match preset {
+                                Some(agent) => {
+                                    plan.agent = agent;
+                                    start_placed(
+                                        &mut app,
+                                        plan,
+                                        path,
+                                        term_size,
+                                        &mut sessions,
+                                        &binaries,
+                                        timeout,
+                                        &mut herdr_pending,
+                                    );
+                                }
+                                None => app.offer_agent_for_tree(plan, path),
+                            }
+                        }
+                        _ => {
+                            app.status = format!(
+                                "cannot create branch {branch} in {} — working on the default branch stays an explicit n",
+                                path.display()
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    app.status = format!("bad branch name: {err:#}");
+                }
+            }
+        }
         if let Some(order) = app.rename_go.take() {
             needs_draw = true;
             rename_worktree(&mut app, &binaries, order, &sessions);
@@ -1844,6 +2117,10 @@ fn run_tui() -> anyhow::Result<()> {
         if let Some(order) = app.delete_go.take() {
             needs_draw = true;
             delete_worktree(&mut app, &binaries, order, &sessions);
+        }
+        if let Some(stop) = app.stop_herdr_go.take() {
+            needs_draw = true;
+            stop_herdr_agent(&mut app, &binaries, stop);
         }
         if let Some(order) = app.cleanup_go.take() {
             needs_draw = true;
@@ -1962,7 +2239,7 @@ fn run_tui() -> anyhow::Result<()> {
             app.col_pct,
             app.row_pct,
         );
-        let mut exited: Vec<((String, u64), String)> = Vec::new();
+        let mut exited: Vec<((String, u64, String), String)> = Vec::new();
         for (key, sess) in sessions.iter_mut() {
             if Some(key) == active_key.as_ref() {
                 sess.resize(
@@ -1982,7 +2259,11 @@ fn run_tui() -> anyhow::Result<()> {
                     // The finish is announced in the status line; the detail
                     // returns at once instead of gluing the finished card to
                     // the item. A new run clears the dismissal at launch.
-                    agent.dismissed_for = Some((record.repo.clone(), record.number));
+                    agent.dismissed_for = Some((
+                        record.repo.clone(),
+                        record.number,
+                        record.worktree.display().to_string(),
+                    ));
                     agent.record = Some(record);
                     agent.running = false;
                     agent.screen = Vec::new();
@@ -1992,6 +2273,12 @@ fn run_tui() -> anyhow::Result<()> {
             }
         }
         for (key, summary) in exited {
+            // A reaped agent is gone for good: drop the restart record
+            // with it, so the next launch does not chase a dead pid.
+            if let Some(sess) = sessions.get(&key) {
+                app.live_direct
+                    .remove(&sess.worktree().display().to_string());
+            }
             sessions.remove(&key);
             needs_draw = true;
             if Some(&key) == active_key.as_ref() {
@@ -2001,13 +2288,9 @@ fn run_tui() -> anyhow::Result<()> {
         // A tab closed under a live session: the agent dies with its box
         // instead of working headless. The close message already said the
         // tab is gone; nothing more needs announcing.
-        let live_keys: Vec<(String, u64)> = sessions.keys().cloned().collect();
+        let live_keys: Vec<(String, u64, String)> = sessions.keys().cloned().collect();
         for key in live_keys {
-            if !app
-                .tabs
-                .iter()
-                .any(|tab| (tab.repo.clone(), tab.number) == key)
-            {
+            if !app.tabs.iter().any(|tab| tab.key() == key) {
                 if let Some(mut sess) = sessions.remove(&key) {
                     sess.kill();
                 }
@@ -2018,7 +2301,7 @@ fn run_tui() -> anyhow::Result<()> {
         // Fresh launches type their drafts: 1KB per tick so a long seed
         // never blocks the loop on a full pty. The agent boots while the
         // first chunks queue up, then reads them as its input.
-        let draft_keys: Vec<(String, u64)> = app
+        let draft_keys: Vec<(String, u64, String)> = app
             .tab_agents
             .iter()
             .filter(|(_, agent)| agent.draft.is_some())
@@ -2178,7 +2461,7 @@ fn run_tui() -> anyhow::Result<()> {
                                         if let Some(idx) = ui::list_row_at(
                                             g.list,
                                             me.row,
-                                            app.visible_items().len(),
+                                            app.visible_rows().len(),
                                         ) {
                                             app.click_list_row(idx, Instant::now());
                                         }

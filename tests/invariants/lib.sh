@@ -79,7 +79,7 @@ ARGV_SITES_ALLOWED='src/actions.rs|1|an action becomes an argv here, through the
 src/agent.rs|4|the hermes handoff (agent_argv), its resume twin, its draft twin and the shared spawned-CLI shape (file_argv): all generated or validated, prompt as a path
 src/fetch.rs|3|read-only gh calls the builder vouches for: the repo list, one rescued closed item for its tab, and the GraphQL batch
 src/herdr.rs|1|the single Herdr CLI door (tab/agent/attach calls through the same checked transport, base-only env, validated names)
-src/worktree.rs|5|worktree mutations through run_mutation, branch reads (delete_branch_argv, has_branch, current_branch) and the project-create owner lookup'
+src/worktree.rs|6|worktree mutations through run_mutation, branch reads (delete_branch_argv, has_branch, current_branch, default_branch) and the project-create owner lookup'
 
 argv_sites_found() { # argv_sites_found <root> → "file:count" per file, sorted
   local root=$1

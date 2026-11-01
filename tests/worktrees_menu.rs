@@ -507,7 +507,7 @@ fn the_detail_names_the_open_trees_and_who_ran_there() {
 
     // A live session in that tree marks it running.
     app.tab_agents.insert(
-        ("o/r".to_string(), 7),
+        ("o/r".to_string(), 7, path.display().to_string()),
         gtasks::app::TabAgent {
             running: true,
             record: Some(AgentRecord {
@@ -982,6 +982,7 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
     let (mut app, tmp) = pr_app();
     plant_worktree(&tmp.path().join("wt"), "fix-foo");
     app.tabs.push(gtasks::app::Tab {
+        tree: String::new(),
         repo: "o/r".to_string(),
         number: 7,
     });
@@ -992,15 +993,14 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
         gtasks::actions::RepoSlug::parse("o/r").expect("valid slug"),
         gtasks::actions::RepoSlug::parse("o/other").expect("valid slug"),
     ]);
-    // Cursor onto o/other through keys, like a user: the filter follows.
+    // Cursor onto o/r first: tab visible, detail owned — the markers are
+    // the detail title, the worktrees box row and the tabs strip. The
+    // query hides the list row so it adds none of its own.
+    app.query = "zzz".to_string();
     app.pane = gtasks::app::Pane::Repos;
-    app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
     with_plain_icons(|| {
         let screen = render_200x30(&app);
-        // Three: the detail title (the tab owns the detail even though the
-        // filter hides its row), the worktrees box row, and the tabs
-        // strip — so a fourth would mean a leak.
         assert_eq!(
             screen.matches("◉").count(),
             3,
@@ -1009,8 +1009,180 @@ fn the_worktree_marker_keeps_its_gap_in_list_detail_and_tabs() {
         assert!(screen.contains("◉  #7"), "marker, gap, number: {screen}");
         assert!(screen.contains("fix-foo"), "the tree shows: {screen}");
     });
+    // Cursor onto o/other, like a user: the filter follows, the strip
+    // narrows, and the hidden tab stops owning the detail — it goes
+    // blank instead of showing another repo's issue.
+    app.update(gtasks::app::Msg::Key(gtasks::app::Key::Down));
+    with_plain_icons(|| {
+        let screen = render_200x30(&app);
+        assert_eq!(
+            screen.matches("◉").count(),
+            0,
+            "no marker anywhere: detail blank, strip narrowed: {screen}"
+        );
+    });
     // And the strip knows it structurally, not just visually.
     let infos = app.tab_infos();
-    assert_eq!(infos.len(), 1);
-    assert!(infos[0].has_worktree);
+    assert!(infos.is_empty(), "the o/r tab hides under o/other");
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} in {}: {e}", dir.display()));
+    assert!(
+        out.status.success(),
+        "git {args:?} failed in {}: {}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A real clone whose default branch is `main`: the question needs a clone
+/// that names its HEAD, which planted `.git` files cannot give.
+fn clone_with_default(tmp: &std::path::Path) -> PathBuf {
+    let clone = tmp.join("r");
+    std::fs::create_dir(&clone).unwrap();
+    git(&clone, &["init", "-q", "-b", "main", "."]);
+    git(&clone, &["config", "user.email", "t@t"]);
+    git(&clone, &["config", "user.name", "t"]);
+    git(&clone, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(
+        &clone,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    clone
+}
+
+fn hermes_choice() -> gtasks::agent::AgentChoice {
+    gtasks::agent::AgentChoice {
+        id: AgentId::Hermes,
+        program: PathBuf::from("/bin/hermes"),
+        herdr: false,
+    }
+}
+
+fn plan_on(clone: &std::path::Path, branch: &str) -> gtasks::agent::AgentPlan {
+    gtasks::agent::AgentPlan {
+        repo: "o/r".to_string(),
+        number: 7,
+        url: "https://github.com/o/r/pull/7".to_string(),
+        branch: branch.to_string(),
+        profile: "default".to_string(),
+        agent: hermes_choice(),
+        clone: clone.to_path_buf(),
+    }
+}
+
+fn main_tree_app(tmp: &std::path::Path, clone: &std::path::Path) -> App {
+    let mut binaries = gtasks::binaries::Binaries::detect().expect("git+gh on PATH");
+    binaries.hermes = Some(PathBuf::from("/bin/hermes"));
+    let row = gtasks::worktree::WorktreeRow {
+        branch: gtasks::worktree::BranchName::parse("main").unwrap(),
+        path: tmp.join("wt").join("o").join("r").join("main"),
+    };
+    App {
+        agent_profile: "default".to_string(),
+        clone_roots: vec![tmp.to_path_buf()],
+        binaries: Some(binaries),
+        modal: Some(Modal::Worktrees(gtasks::app::WorktreeMenu {
+            agent: None,
+            plan: plan_on(clone, "fix-foo"),
+            rows: vec![row],
+            cursor: 0,
+        })),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn enter_on_a_default_branch_tree_asks_for_a_dedicated_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let clone = clone_with_default(tmp.path());
+    let mut app = main_tree_app(tmp.path(), &clone);
+    press(&mut app, Key::Enter);
+    let Some(Modal::Confirm(question)) = app.modal.as_ref() else {
+        panic!("a main tree asks first, got {:?}", app.modal);
+    };
+    assert!(
+        question.contains("default branch"),
+        "the danger is named: {question}"
+    );
+    assert!(
+        matches!(app.pending, Some(gtasks::app::Pending::BranchOut { .. })),
+        "y would name the branch"
+    );
+    press(&mut app, Key::Char('n'));
+    assert!(
+        matches!(app.modal, Some(Modal::AgentMenu(_))),
+        "n works on main as asked — the menu opens: {:?}",
+        app.modal
+    );
+}
+
+#[test]
+fn y_names_the_item_branch_then_queues_the_cut() {
+    let tmp = tempfile::tempdir().unwrap();
+    let clone = clone_with_default(tmp.path());
+    let mut app = main_tree_app(tmp.path(), &clone);
+    press(&mut app, Key::Enter);
+    press(&mut app, Key::Char('y'));
+    let Some(Modal::NameInput(input)) = app.modal.as_ref() else {
+        panic!("y names the branch, got {:?}", app.modal);
+    };
+    assert_eq!(
+        input.value, "fix-foo",
+        "the item's branch is suggested, not main"
+    );
+    press(&mut app, Key::Enter);
+    let Some((plan, _path, branch, preset)) = app.branch_go.take() else {
+        panic!("confirming queues the cut");
+    };
+    assert_eq!(branch, "fix-foo");
+    assert_eq!(plan.branch, "fix-foo", "the plan still names the item");
+    assert!(preset.is_none(), "no preset agent in this flow");
+}
+
+#[test]
+fn a_bad_branch_name_keeps_the_prompt_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let clone = clone_with_default(tmp.path());
+    let mut app = main_tree_app(tmp.path(), &clone);
+    press(&mut app, Key::Enter);
+    press(&mut app, Key::Char('y'));
+    for ch in "bad name".chars() {
+        press(&mut app, Key::Char(ch));
+    }
+    press(&mut app, Key::Enter);
+    assert!(app.branch_go.is_none(), "nothing queues on a bad name");
+    assert!(
+        matches!(app.modal, Some(Modal::NameInput(_))),
+        "retype instead of reopening: {:?}",
+        app.modal
+    );
+}
+
+#[test]
+fn a_dedicated_branch_tree_skips_the_question() {
+    let tmp = tempfile::tempdir().unwrap();
+    let clone = clone_with_default(tmp.path());
+    let mut app = main_tree_app(tmp.path(), &clone);
+    // Same tree, but the row sits on the item's branch, not main.
+    let Some(Modal::Worktrees(menu)) = app.modal.as_mut() else {
+        panic!("setup");
+    };
+    menu.rows[0].branch = gtasks::worktree::BranchName::parse("fix-foo").unwrap();
+    menu.plan = plan_on(&clone, "fix-foo");
+    press(&mut app, Key::Enter);
+    assert!(
+        matches!(app.modal, Some(Modal::AgentMenu(_))),
+        "no question when the branch is dedicated: {:?}",
+        app.modal
+    );
 }

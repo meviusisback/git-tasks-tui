@@ -466,6 +466,12 @@ impl EmbeddedSession {
         &self.worktree
     }
 
+    /// The child's pid, for the restart record: the next gtasks process
+    /// finds the agent by pid instead of forgetting it.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+
     /// Send raw bytes to the agent. Typing jumps back to the live tail, so a
     /// reply never lands on a history view the user is reading. Failures are
     /// ignored — a dead child is reported by `poll_exit` on the next tick,

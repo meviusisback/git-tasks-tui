@@ -3,7 +3,7 @@
 
 use gtasks::app::{App, Key, Msg, Pane, Tab, TabAgent};
 use gtasks::theme;
-use gtasks::ui::{ViewModel, draw, view_for};
+use gtasks::ui::{ListRowView, ViewModel, draw, view_for};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
@@ -40,6 +40,23 @@ fn sample() -> (App, ViewModel) {
         item_kinds: vec![None, None],
         item_worktrees: vec![false, false],
         item_crs: vec![false, false],
+        item_tabs: vec![false, false],
+        rows: vec![
+            ListRowView::Item {
+                entry: "#12 Add widget".into(),
+                kind: None,
+                has_wt: false,
+                has_tab: false,
+                is_cr: false,
+            },
+            ListRowView::Item {
+                entry: "#7 Fix crash".into(),
+                kind: None,
+                has_wt: false,
+                has_tab: false,
+                is_cr: false,
+            },
+        ],
         detail: "Body line one\nBody line two".into(),
         trees: Vec::new(),
         tabs: Vec::new(),
@@ -88,7 +105,13 @@ fn untrusted_text_is_sanitised_before_display() {
     let (app, mut view) = sample();
     // The same bytes the model probe uses: an OSC-52 clipboard write and a
     // right-to-left override.
-    view.items[0] = "evil\u{1b}]52;c;Zm9v\u{07} title\u{202e}".into();
+    view.rows[0] = ListRowView::Item {
+        entry: "evil\u{1b}]52;c;Zm9v\u{07} title\u{202e}".into(),
+        kind: None,
+        has_wt: false,
+        has_tab: false,
+        is_cr: false,
+    };
     let screen = render(&app, &view);
     assert!(
         !screen.contains('\u{1b}'),
@@ -482,15 +505,18 @@ fn the_action_menu_fits_at_80_columns() {
 }
 
 /// A finished run filed under its tab: records live per tab, so the test
-/// plants the tab and the entry together.
+/// plants the tab and the entry together. The tab adopts the record's
+/// tree, like a launch would place its bookmark.
 fn seed_tab_record(app: &mut App, record: gtasks::agent::AgentRecord) {
+    let tree = record.worktree.display().to_string();
     app.tabs.push(Tab {
+        tree: tree.clone(),
         repo: "o/r".to_string(),
         number: 7,
     });
     app.active_tab = Some(0);
     app.tab_agents.insert(
-        ("o/r".to_string(), 7),
+        ("o/r".to_string(), 7, tree),
         TabAgent {
             record: Some(record),
             ..Default::default()

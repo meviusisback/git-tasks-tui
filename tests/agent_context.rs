@@ -30,6 +30,7 @@ fn detail_shows_the_agent_tree_when_no_item_is_selected() {
         ..App::default()
     };
     app.tabs.push(Tab {
+        tree: String::new(),
         repo: "meviusisback/omarchy-ente-auth-dropdown".to_string(),
         number: 0,
     });
@@ -38,6 +39,7 @@ fn detail_shows_the_agent_tree_when_no_item_is_selected() {
         (
             "meviusisback/omarchy-ente-auth-dropdown".to_string(),
             0,
+            String::new(),
         ),
         TabAgent {
             running: true,

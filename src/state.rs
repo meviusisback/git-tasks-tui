@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 pub struct TabState {
     pub repo: String,
     pub number: u64,
+    /// The tab's worktree: "" on bookmarks from before the field existed.
+    #[serde(default)]
+    pub tree: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +52,16 @@ pub struct State {
     /// extra `agent get`, never a wrong session.
     #[serde(default)]
     pub herdr_bindings: HashMap<String, crate::herdr::HerdrBinding>,
+    /// Direct agents still alive the last time the session was saved, by
+    /// tree path: a restart re-shows the tab's agent instead of losing it.
+    /// Pids are verified before use (`owns_tree`), so a recycled pid is
+    /// inert, never a wrong agent.
+    #[serde(default)]
+    pub live_direct: HashMap<String, crate::agent::LiveDirect>,
+    /// The list shows worktree rows under their issue/PR (plus orphan
+    /// trees in their own section below): `v` flips it, saved here.
+    #[serde(default = "default_show_trees")]
+    pub show_trees: bool,
 }
 
 impl Default for State {
@@ -70,8 +83,16 @@ impl Default for State {
             row_pct: 38,
             last_agents: HashMap::new(),
             herdr_bindings: HashMap::new(),
+            live_direct: HashMap::new(),
+            show_trees: true,
         }
     }
+}
+
+/// The list shows worktrees unless the user hid them: a fresh state
+/// shows them, an old file without the field reads as shown.
+fn default_show_trees() -> bool {
+    true
 }
 
 impl State {

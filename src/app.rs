@@ -31,13 +31,24 @@ pub enum Pane {
     Agent,
 }
 
-/// One open tab: the issue/PR opened with `Enter`.
+/// One open tab: an issue/PR bookmark, or a repo tree (number 0). The tree
+/// pins the tab to its worktree: two tabs can share a repo and a branch
+/// on two different trees, each with its own agent. Empty until something
+/// is placed there — the bookmark comes first, the tree when it lands.
 /// The title is resolved live from `items`, so the tab stays valid across
 /// refreshes even when the title changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tab {
     pub repo: String,
     pub number: u64,
+    pub tree: String,
+}
+
+impl Tab {
+    /// The tab's key in `TabAgent` and the loop sessions.
+    pub fn key(&self) -> (String, u64, String) {
+        App::tab_key(&self.repo, self.number, &self.tree)
+    }
 }
 
 /// One entry of the tabs strip: the label, the kind (for colour) and whether
@@ -45,6 +56,9 @@ pub struct Tab {
 /// its branch (the mauve marker, like the list and the detail).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabInfo {
+    /// Position in `tabs`: the strip only shows the filtered repo, but a
+    /// click still has to land on the real tab.
+    pub index: usize,
     pub label: String,
     pub kind: Option<crate::model::ItemKind>,
     pub active: bool,
@@ -158,6 +172,16 @@ pub struct PendingAction {
     pub argv: CheckedArgv,
 }
 
+/// What the loop closes Herdr-side on `y` to the `K` question: the Herdr
+/// tab, the local shadow key, and the reattach binding's tree.
+#[derive(Debug, Clone)]
+pub struct HerdrStop {
+    pub tab_id: String,
+    pub key: (String, u64, String),
+    pub tree: String,
+    pub name: String,
+}
+
 /// What `y` will run when the confirmation dialog is open. One dialog, one
 /// pending — an action and an agent launch can never wait together, so the
 /// key that confirms cannot run the wrong one.
@@ -192,6 +216,28 @@ pub enum Pending {
     /// new-branch flow for that repo instead of an empty list.
     NewBranch {
         repo: String,
+    },
+    /// `Enter` on a tree sitting on the clone's default branch, confirmed
+    /// with `y`: name the dedicated branch, then the loop cuts it there and
+    /// launches.
+    BranchOut {
+        plan: AgentPlan,
+        path: std::path::PathBuf,
+        preset: Option<crate::agent::AgentChoice>,
+        suggestion: String,
+    },
+    /// `K` on a tab with a Herdr agent, confirmed with `y`: the loop
+    /// closes the Herdr-side tab and forgets the binding, so the next
+    /// launch starts fresh instead of reattaching to a dead tab.
+    StopHerdr {
+        /// Herdr tab id to close.
+        tab_id: String,
+        /// The tab's key, to drop the local shadow.
+        key: (String, u64, String),
+        /// The tree path, to drop the reattach binding.
+        tree: String,
+        /// For the status line.
+        name: String,
     },
 }
 
@@ -353,6 +399,14 @@ pub enum NamePurpose {
         agent: Option<crate::agent::AgentChoice>,
         plan: AgentPlan,
     },
+    /// Name the dedicated branch for a tree sitting on the default branch:
+    /// confirming queues the cut, then the launch continues (preset agent
+    /// launches there, otherwise the agent menu opens for that tree).
+    BranchOut {
+        plan: AgentPlan,
+        path: std::path::PathBuf,
+        preset: Option<crate::agent::AgentChoice>,
+    },
     Rename {
         order: RenameDraft,
     },
@@ -462,6 +516,9 @@ pub struct App {
     pub repos_len: usize,
     pub list_cursor: usize,
     pub list_len: usize,
+    /// The list shows worktree rows under their issue/PR (plus orphan
+    /// trees below the issues): `v` flips it, saved across restarts.
+    pub show_trees: bool,
     pub detail_scroll: u16,
     pub modal: Option<Modal>,
     /// True while `/` search input is active: keys go to the query.
@@ -554,7 +611,7 @@ pub struct App {
     /// reads or writes for the box in that tab. The session itself lives in
     /// the loop (it owns threads); this is the state the screen renders.
     /// Sessions die with the app, so this map never touches `state.json`.
-    pub tab_agents: HashMap<(String, u64), TabAgent>,
+    pub tab_agents: HashMap<(String, u64, String), TabAgent>,
     /// The agent last launched in each worktree, by tree path. Recorded on
     /// every launch, persisted in the session file: reopening the tree
     /// offers that agent's previous session instead of a fresh start.
@@ -562,6 +619,18 @@ pub struct App {
     /// The Herdr agent behind each tree, by tree path: re-attaching after a
     /// restart finds the same live agent. Persisted with the session.
     pub herdr_bindings: HashMap<String, crate::herdr::HerdrBinding>,
+    /// Direct agents alive at the last save, by tree path: the restart
+    /// re-shows them instead of forgetting them. Persisted with the
+    /// session; pids are verified before use.
+    pub live_direct: HashMap<String, crate::agent::LiveDirect>,
+    /// Herdr bindings to reattach at startup: a restart re-embeds the
+    /// live agents instead of leaving blank tabs. Fed one per tick into
+    /// the normal resume flow (with `no_fallback`, so a dead agent only
+    /// drops its binding — nothing ever launches unasked).
+    pub herdr_reattach_queue: Vec<(AgentPlan, std::path::PathBuf)>,
+    /// This resume came from the startup queue, not from the user: the
+    /// Herdr wait must not fall back to a direct launch.
+    pub auto_reattach: bool,
     /// Why the last launch fell back to direct despite the herdr backend:
     /// consumed by the direct tail, which prints it on top of the outcome.
     pub herdr_fallback_note: Option<String>,
@@ -621,6 +690,7 @@ pub struct App {
     pub rename_go: Option<crate::worktree::WorktreeRename>,
     /// `y` on the delete question, consumed by the loop.
     pub delete_go: Option<crate::worktree::WorktreeDelete>,
+    pub stop_herdr_go: Option<HerdrStop>,
     /// Set by `y` on the merge cleanup question, consumed by the loop: the
     /// merged PR's local trees plus its head branch.
     pub cleanup_go: Option<crate::worktree::CleanupOrder>,
@@ -629,6 +699,15 @@ pub struct App {
     /// continue when it lands. The loop clones in a thread (network can
     /// take minutes) and continues the flow that asked when done.
     pub clone_go: Option<(String, std::path::PathBuf, CloneThen)>,
+    /// Set by `y` on the dedicated-branch question, consumed by the loop:
+    /// cut the branch in the tree, then continue the launch (preset agent
+    /// launches there, otherwise the agent menu opens for that tree).
+    pub branch_go: Option<(
+        AgentPlan,
+        std::path::PathBuf,
+        String,
+        Option<crate::agent::AgentChoice>,
+    )>,
     /// Where worktrees live (configured root, or the default). The list
     /// icons and the worktree picker read it; `None` (unresolvable home)
     /// means no icons, and the picker explains instead of guessing.
@@ -659,6 +738,29 @@ pub struct ItemTree {
     pub drifted: bool,
 }
 
+/// One row of the bottom-left list: an issue/PR, a worktree under its
+/// issue/PR (child) or with no issue at all (orphan), or the divider
+/// between the issues and the orphan section. Children and orphans are
+/// real cursor stops; the divider is drawn but never selected.
+#[derive(Debug, Clone)]
+pub enum ListRow {
+    Item { repo: String, number: u64 },
+    Tree(TreeRow),
+    Divider,
+}
+
+/// A worktree row: which issue/PR it works on (`None` for orphans),
+/// its branch and path, who ran there last and whether one is live now.
+#[derive(Debug, Clone)]
+pub struct TreeRow {
+    pub repo: String,
+    pub number: Option<u64>,
+    pub branch: String,
+    pub path: std::path::PathBuf,
+    pub agent: Option<String>,
+    pub live: bool,
+}
+
 /// One tab's agent side: the screen the box renders, whether its session
 /// is alive, the finished run (the card stays after the exit), what the
 /// agent works on (shown in the detail while nothing is selected), and
@@ -670,7 +772,7 @@ pub struct TabAgent {
     pub screen: crate::embedded::AgentScreen,
     pub scroll: u16,
     pub record: Option<AgentRecord>,
-    pub dismissed_for: Option<(String, u64)>,
+    pub dismissed_for: Option<(String, u64, String)>,
     pub context: Option<AgentContext>,
     pub draft: Option<String>,
 }
@@ -697,6 +799,7 @@ impl Default for App {
             repos_len: 0,
             list_cursor: 0,
             list_len: 0,
+            show_trees: true,
             detail_scroll: 0,
             modal: None,
             searching: false,
@@ -733,6 +836,9 @@ impl Default for App {
             tab_agents: HashMap::new(),
             last_agents: HashMap::new(),
             herdr_bindings: HashMap::new(),
+            live_direct: HashMap::new(),
+            herdr_reattach_queue: Vec::new(),
+            auto_reattach: false,
             herdr_fallback_note: None,
             agent_requested: None,
             agent_go: None,
@@ -740,8 +846,10 @@ impl Default for App {
             agent_place: None,
             rename_go: None,
             delete_go: None,
+            stop_herdr_go: None,
             cleanup_go: None,
             clone_go: None,
+            branch_go: None,
             worktree_root: None,
             detail: String::new(),
             detail_for: None,
@@ -841,7 +949,7 @@ impl App {
                 }
             }
         }
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         // A fresh list means a fresh selection to describe: start its body
         // at once, quietly — Enter stays the loud, explicit ask.
         self.preload_detail();
@@ -884,7 +992,7 @@ impl App {
             .collect();
         self.repos_cursor = 0;
         self.repo_filter = RepoFilter::All;
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         // A new list means a new context: a body fetched for the previous
         // one would say "this is the item you are looking at" about an item
         // that may be gone — same discipline as `apply_repo_filter`.
@@ -902,12 +1010,14 @@ impl App {
             _ => RepoFilter::All,
         };
         self.list_cursor = 0;
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         // The detail belonged to the previous list: showing it here would say
         // "this is the item you are looking at" about an item that is gone.
         self.detail.clear();
         self.detail_for = None;
         self.detail_requested = None;
+        // A hidden tab must not keep owning the detail from off-screen.
+        self.ensure_active_visible();
         // ... but the new first row starts loading at once: the description
         // is on its way before anyone presses Enter.
         self.preload_detail();
@@ -963,6 +1073,161 @@ impl App {
             ordered.sort_by_key(|i| i.number);
             ordered
         }
+    }
+
+    /// The branch an issue/PR grows its work on: the head branch for PRs,
+    /// `issue-N` for issues. Same rule as the worktrees box, so the list
+    /// children and the detail agree about what belongs where.
+    fn link_branch(item: &Item) -> String {
+        item.head_ref_name
+            .clone()
+            .unwrap_or_else(|| format!("issue-{}", item.number))
+    }
+
+    /// Every worktree directory of one repo with a readable branch: branch
+    /// and path, sorted by path. Detached or unreadable trees are skipped —
+    /// nothing can be placed on them reliably.
+    fn repo_tree_branches(&self, repo: &str) -> Vec<(String, std::path::PathBuf)> {
+        let (Some(root), Ok(slug)) = (
+            self.worktree_root.as_deref(),
+            crate::actions::RepoSlug::parse(repo),
+        ) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, std::path::PathBuf)> =
+            crate::worktree::list_worktrees(root, &slug)
+                .into_iter()
+                .filter_map(|path| {
+                    crate::worktree::worktree_branch(&path)
+                        .map(|branch| (branch.as_str().to_string(), path))
+                })
+                .collect();
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out
+    }
+
+    /// The agent marks of one tree, from memory: who ran there last and
+    /// whether one is live inside right now. No disk reads — the branches
+    /// come from the trees themselves, the marks from the session.
+    pub fn tree_marks(&self, path: &std::path::Path) -> (Option<String>, bool) {
+        let agent = self
+            .last_agents
+            .get(&path.display().to_string())
+            .map(|last| last.agent.clone());
+        let live = self.tab_agents.values().any(|tab| {
+            tab.running
+                && tab
+                    .record
+                    .as_ref()
+                    .is_some_and(|record| record.worktree == path)
+        });
+        (agent, live)
+    }
+
+    /// The bottom-left list as rows: one per visible issue/PR, each with
+    /// its worktrees underneath, then — when `v` shows trees — the divider
+    /// and the orphan trees (branches no fetched issue/PR owns). The scope
+    /// comes from the repo filter, not the items: a repo with zero issues
+    /// still shows its trees. A hidden parent takes its children with it;
+    /// orphans answer the search box on their branch name.
+    pub fn visible_rows(&self) -> Vec<ListRow> {
+        let items = self.visible_items();
+        if !self.show_trees {
+            return items
+                .iter()
+                .map(|item| ListRow::Item {
+                    repo: item.repo.clone(),
+                    number: item.number,
+                })
+                .collect();
+        }
+        // One disk pass per repo in scope: every tree with its branch.
+        // Under "all repos" the scope is every configured repo — not just
+        // the ones with visible issues — so a repo with zero issues still
+        // shows its trees instead of vanishing from the list.
+        let scope: Vec<String> = match &self.repo_filter {
+            RepoFilter::One(slug) => vec![slug.as_str().to_string()],
+            RepoFilter::All => {
+                let mut repos: Vec<String> = self
+                    .repos
+                    .iter()
+                    .filter_map(|row| match row {
+                        RepoRow::Repo(slug) => Some(slug.as_str().to_string()),
+                        RepoRow::All => None,
+                    })
+                    .collect();
+                repos.sort();
+                repos.dedup();
+                repos
+            }
+        };
+        let mut trees: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+        for repo in &scope {
+            for (branch, path) in self.repo_tree_branches(repo) {
+                trees.push((repo.clone(), branch, path));
+            }
+        }
+        // A tree is linked when its branch belongs to any fetched issue/PR
+        // of the scope — even a hidden one: a filtered-out parent hides the
+        // tree with it instead of orphaning it. Closed-but-tabbed history
+        // counts too: its trees are spoken for, not orphans.
+        let linked: std::collections::HashSet<(String, String)> = self
+            .items
+            .iter()
+            .chain(self.retained.iter())
+            .filter(|item| scope.iter().any(|repo| repo == &item.repo))
+            .map(|item| (item.repo.clone(), Self::link_branch(item)))
+            .collect();
+        let mut rows = Vec::new();
+        for item in &items {
+            rows.push(ListRow::Item {
+                repo: item.repo.clone(),
+                number: item.number,
+            });
+            let want = Self::link_branch(item);
+            for (repo, branch, path) in trees
+                .iter()
+                .filter(|tree| tree.0 == item.repo && tree.1 == want)
+            {
+                let (agent, live) = self.tree_marks(path);
+                rows.push(ListRow::Tree(TreeRow {
+                    repo: repo.clone(),
+                    number: Some(item.number),
+                    branch: branch.clone(),
+                    path: path.clone(),
+                    agent,
+                    live,
+                }));
+            }
+        }
+        let needle = self.query.trim().to_lowercase();
+        let mut orphans: Vec<&(String, String, std::path::PathBuf)> = trees
+            .iter()
+            .filter(|tree| !linked.contains(&(tree.0.clone(), tree.1.clone())))
+            .collect();
+        if !needle.is_empty() {
+            orphans.retain(|tree| tree.1.to_lowercase().contains(&needle));
+        }
+        orphans.sort();
+        if !orphans.is_empty() {
+            // A divider only ever sits between issues and orphans — never
+            // first, never last — so the cursor always has somewhere to go.
+            if !rows.is_empty() {
+                rows.push(ListRow::Divider);
+            }
+            for (repo, branch, path) in orphans {
+                let (agent, live) = self.tree_marks(path);
+                rows.push(ListRow::Tree(TreeRow {
+                    repo: repo.clone(),
+                    number: None,
+                    branch: branch.clone(),
+                    path: path.clone(),
+                    agent,
+                    live,
+                }));
+            }
+        }
+        rows
     }
 
     /// The bottom legend: the keys available right now, never the full keymap
@@ -1043,11 +1308,11 @@ impl App {
             )
         } else if self.repo_filter == RepoFilter::All {
             String::from(
-                "q quit · ? help · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · R repos · m actions · g agent · W trees · d diff · s settings",
+                "q quit · ? help · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · R repos · m actions · g agent · W trees · d diff · v trees · s settings",
             )
         } else {
             String::from(
-                "q quit · ? help · Esc back · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · m actions · g agent · W trees · d diff · f state · s settings",
+                "q quit · ? help · Esc back · ←/→ tabs · ↑/↓ move · Tab repos · Enter open tab · x close · m actions · g agent · W trees · d diff · v trees · f state · s settings",
             )
         };
         // The marker is *prefixed*, not appended, and the reason is measured: appended, the key
@@ -1297,7 +1562,7 @@ impl App {
         // just unchecked. The refresh below re-reads from the server.
         self.items
             .retain(|i| shown.iter().any(|s| s.as_str() == i.repo));
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         self.loading = true;
         self.refresh_requested = true;
     }
@@ -1351,7 +1616,9 @@ impl App {
     pub fn click_list_row(&mut self, idx: usize, now: Instant) {
         let double = matches!(self.last_click, Some((Pane::List, row, at)) if row == idx && now.duration_since(at) < Duration::from_millis(DOUBLE_CLICK_MS));
         self.last_click = Some((Pane::List, idx, now));
-        if idx >= self.visible_items().len() {
+        let rows = self.visible_rows();
+        // The divider is drawn, not selected: a click on it does nothing.
+        if matches!(rows.get(idx), None | Some(ListRow::Divider)) {
             return;
         }
         self.list_cursor = idx;
@@ -1379,9 +1646,37 @@ impl App {
         }
     }
 
-    /// The item under the cursor, if any.
+    /// The row under the cursor, if any. Rows are computed live (trees
+    /// come from the disk), so the cursor reads them fresh every time.
+    pub fn selected_row(&self) -> Option<ListRow> {
+        self.visible_rows().into_iter().nth(self.list_cursor)
+    }
+
+    /// The item under the cursor, if any. A worktree child resolves to
+    /// its parent issue/PR — every action that acts on a row keeps
+    /// working on children. Orphans and the divider select nothing.
     pub fn selected_item(&self) -> Option<&Item> {
-        self.visible_items().get(self.list_cursor).copied()
+        match self.selected_row() {
+            Some(ListRow::Item { repo, number }) => self
+                .items
+                .iter()
+                .find(|item| item.repo == repo && item.number == number),
+            Some(ListRow::Tree(tree)) => tree.number.and_then(|number| {
+                self.items
+                    .iter()
+                    .find(|item| item.repo == tree.repo && item.number == number)
+            }),
+            _ => None,
+        }
+    }
+
+    /// The worktree under the cursor, if the row is one: branch, path,
+    /// who ran there last and whether one is live now.
+    pub fn selected_tree_row(&self) -> Option<TreeRow> {
+        match self.selected_row() {
+            Some(ListRow::Tree(tree)) => Some(tree),
+            _ => None,
+        }
     }
 
     /// The item the right column acts on. An open tab owns the detail:
@@ -1411,6 +1706,31 @@ impl App {
         self.selected_item()
     }
 
+    /// The active tab's own tree, when no issue/PR stands behind it: a
+    /// repo-level tab (`#0`) works on a tree, not on a row. The branch is
+    /// read from the tree itself, so a renamed branch still names itself.
+    /// `None` when the tab has an issue (the item owns the detail then)
+    /// or no placed tree (an unplaced bookmark follows the list).
+    pub fn active_repo_tree(&self) -> Option<(String, std::path::PathBuf, String)> {
+        let tab = self.active_tab.and_then(|idx| self.tabs.get(idx))?;
+        if tab.tree.is_empty() {
+            return None;
+        }
+        let known = self
+            .items
+            .iter()
+            .chain(self.retained.iter())
+            .any(|i| i.repo == tab.repo && i.number == tab.number);
+        if known {
+            return None;
+        }
+        let path = std::path::PathBuf::from(&tab.tree);
+        let branch = crate::worktree::worktree_branch(&path)
+            .map(|b| b.as_str().to_string())
+            .unwrap_or_default();
+        Some((tab.repo.clone(), path, branch))
+    }
+
     /// Open a tab for the row under the cursor, or activate it when open.
     /// `Enter` in the list opens; the detail and the left column follow it.
     /// `Enter` on the already-active tab changes nothing: the cached body
@@ -1437,6 +1757,7 @@ impl App {
             self.tabs.push(Tab {
                 repo: item.repo.clone(),
                 number: item.number,
+                tree: String::new(),
             });
             self.active_tab = Some(self.tabs.len() - 1);
         }
@@ -1455,6 +1776,91 @@ impl App {
             }
             self.status = format!("loading #{}…", item.number);
         }
+    }
+
+    /// `Enter` on a list row: an issue/PR opens its tab, a worktree child
+    /// opens the tab pinned to that tree, an orphan activates the tab
+    /// living on its tree (or says there is none). The divider does
+    /// nothing — the cursor can never sit on it anyway.
+    pub fn open_row(&mut self) {
+        match self.selected_row() {
+            Some(ListRow::Item { .. }) => self.open_tab_for_selected(),
+            Some(ListRow::Tree(tree)) => match tree.number {
+                Some(number) => self.open_tab_on_tree(&tree.repo, number, &tree.path),
+                None => self.activate_tab_on_tree(&tree.path),
+            },
+            _ => {}
+        }
+    }
+
+    /// `Enter` on a worktree child: the tab for this exact tree opens (or
+    /// activates), placed from the start — no retarget dance. Same detail
+    /// and focus flow as opening from the parent row.
+    pub fn open_tab_on_tree(&mut self, repo: &str, number: u64, tree: &std::path::Path) {
+        self.dismiss_finished_card();
+        let Some(item) = self
+            .items
+            .iter()
+            .find(|i| i.repo == repo && i.number == number)
+            .cloned()
+        else {
+            return;
+        };
+        self.pane = Pane::Detail;
+        let tree = tree.display().to_string();
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.repo == repo && t.number == number && t.tree == tree)
+        {
+            if Some(idx) == self.active_tab {
+                self.request_detail();
+                return;
+            }
+            self.active_tab = Some(idx);
+        } else {
+            self.tabs.push(Tab {
+                repo: item.repo.clone(),
+                number: item.number,
+                tree,
+            });
+            self.active_tab = Some(self.tabs.len() - 1);
+        }
+        self.dismiss_finished_card();
+        self.session_dirty = true;
+        let key = (item.repo.clone(), item.number);
+        if self.detail_for.as_ref() != Some(&key) {
+            if self.detail_requested.as_ref() != Some(&key) {
+                self.detail_requested = Some(key);
+            }
+            self.status = format!("loading #{}…", item.number);
+        }
+    }
+
+    /// `Enter` on an orphan tree: a tab already living on that tree takes
+    /// over. Orphans name no issue/PR, so there is nothing to bookmark —
+    /// without a tab the row only says so.
+    pub fn activate_tab_on_tree(&mut self, tree: &std::path::Path) {
+        let wanted = tree.display().to_string();
+        if let Some(idx) = self.tabs.iter().position(|t| t.tree == wanted) {
+            self.activate_tab(idx);
+        } else {
+            self.status = String::from("no tab on this tree — open it from its issue/PR first");
+        }
+    }
+
+    /// `v` flips the worktree rows: children under their issue/PR plus the
+    /// orphan section, or issues alone. The cursor re-clamps to the new
+    /// rows and the choice is saved with the session.
+    pub fn toggle_tree_filter(&mut self) {
+        self.show_trees = !self.show_trees;
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
+        self.status = if self.show_trees {
+            String::from("worktree rows on — children under their issue, orphans below")
+        } else {
+            String::from("worktree rows off — issues alone")
+        };
+        self.session_dirty = true;
     }
 
     /// Activate tab `idx` (clamped): the tab owns the detail, so it shows
@@ -1486,38 +1892,69 @@ impl App {
                     self.detail_requested = Some(key);
                 }
             }
+            // The status line names the live agent: refresh it on every
+            // switch, or a dead agent's message sticks to the new tab. No
+            // agent — back to the list summary, like everywhere else idle.
+            let live = self
+                .tab_agents
+                .get(&Self::tab_key(&tab.repo, tab.number, &tab.tree))
+                .filter(|agent| agent.running);
+            match live {
+                Some(agent) => {
+                    self.status = match &agent.record {
+                        Some(record) => format!(
+                            "agent {} running on {}#{}",
+                            record.agent, record.repo, record.number
+                        ),
+                        None => "starting the agent…".to_string(),
+                    };
+                }
+                None => self.refresh_status(),
+            }
         }
+    }
+
+    /// Tabs visible right now: every tab with no repo filter, else only
+    /// the filtered repo's. Cycling, clicks and closes move inside this
+    /// list, so selecting a repo narrows the strip to its work.
+    pub fn visible_tabs(&self) -> Vec<usize> {
+        let only: Option<&str> = match &self.repo_filter {
+            RepoFilter::One(slug) => Some(slug.as_str()),
+            RepoFilter::All => None,
+        };
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| only.is_none_or(|repo| tab.repo == repo))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     pub fn next_tab(&mut self) {
-        let Some(cur) = self.active_tab else {
-            if !self.tabs.is_empty() {
-                self.activate_tab(0);
-            }
-            return;
-        };
-        if self.tabs.is_empty() {
+        let visible = self.visible_tabs();
+        if visible.is_empty() {
             return;
         }
-        self.activate_tab((cur + 1) % self.tabs.len());
+        let Some(cur) = self.active_tab else {
+            self.activate_tab(visible[0]);
+            return;
+        };
+        let pos = visible.iter().position(|idx| *idx == cur).unwrap_or(0);
+        self.activate_tab(visible[(pos + 1) % visible.len()]);
     }
 
     pub fn prev_tab(&mut self) {
-        let Some(cur) = self.active_tab else {
-            if !self.tabs.is_empty() {
-                self.activate_tab(0);
-            }
-            return;
-        };
-        if self.tabs.is_empty() {
+        let visible = self.visible_tabs();
+        if visible.is_empty() {
             return;
         }
-        let prev = if cur == 0 {
-            self.tabs.len() - 1
-        } else {
-            cur - 1
+        let Some(cur) = self.active_tab else {
+            self.activate_tab(visible[0]);
+            return;
         };
-        self.activate_tab(prev);
+        let pos = visible.iter().position(|idx| *idx == cur).unwrap_or(0);
+        let prev = if pos == 0 { visible.len() - 1 } else { pos - 1 };
+        self.activate_tab(visible[prev]);
     }
 
     /// Close the active tab. Returns true when a tab was closed.
@@ -1532,8 +1969,7 @@ impl App {
         let closed = self.tabs.remove(idx);
         // The closed tab's agent side goes with it: the loop kills a
         // session whose tab is gone, so no agent outlives its box.
-        self.tab_agents
-            .remove(&(closed.repo.clone(), closed.number));
+        self.tab_agents.remove(&closed.key());
         // A body belonging to the closed tab must not linger under the next
         // tab's fields.
         if self.detail_for.as_ref() == Some(&(closed.repo.clone(), closed.number)) {
@@ -1548,8 +1984,11 @@ impl App {
         } else {
             let next = idx.min(self.tabs.len() - 1);
             self.active_tab = Some(next);
+            // The neighbour may belong to another repo: never leave the
+            // detail owned from off-screen.
+            self.ensure_active_visible();
             // Load the newly active tab's body when missing.
-            if let Some(tab) = self.tabs.get(next).cloned()
+            if let Some(tab) = self.active_tab.and_then(|a| self.tabs.get(a)).cloned()
                 && let Some(item) = self
                     .items
                     .iter()
@@ -1570,44 +2009,90 @@ impl App {
 
     /// One-line label per tab, with the live title when the item is loaded.
     pub fn tab_labels(&self) -> Vec<String> {
-        self.tab_infos()
-            .into_iter()
-            .map(|info| info.label)
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| self.tab_info(i, tab).label)
             .collect()
     }
 
     /// One entry per open tab for the tabs strip: the label, the kind (for
-    /// colour) and whether it is the active one (for emphasis).
+    /// colour) and whether it is the active one (for emphasis). When a repo
+    /// filter is on, only that repo's tabs show — selecting a repo narrows
+    /// the strip to its work. Each entry carries its real index, so clicks
+    /// land on the tab even while others are hidden.
     pub fn tab_infos(&self) -> Vec<TabInfo> {
+        let only: Option<&str> = match &self.repo_filter {
+            RepoFilter::One(slug) => Some(slug.as_str()),
+            RepoFilter::All => None,
+        };
         self.tabs
             .iter()
             .enumerate()
-            .map(|(i, tab)| {
-                let found = self
-                    .items
-                    .iter()
-                    .find(|item| item.repo == tab.repo && item.number == tab.number);
-                let label = match found {
-                    Some(item) => {
-                        let short: String = item.title.chars().take(28).collect();
-                        format!("#{} {short}", tab.number)
-                    }
-                    None => format!("#{} {}", tab.number, tab.repo),
-                };
-                TabInfo {
-                    label,
-                    kind: found.map(|item| item.kind),
-                    active: Some(i) == self.active_tab,
-                    has_worktree: found.is_some_and(|item| {
-                        self.has_worktree(&item.repo, item.head_ref_name.as_deref())
-                    }),
-                    has_agent: self
-                        .tab_agents
-                        .get(&(tab.repo.clone(), tab.number))
-                        .is_some_and(|agent| agent.running),
-                }
-            })
+            .filter(|(_, tab)| only.is_none_or(|repo| tab.repo == repo))
+            .map(|(i, tab)| self.tab_info(i, tab))
             .collect()
+    }
+
+    /// The strip only shows the filtered repo's tabs: an active tab the
+    /// filter hides would own the detail from off-screen — a repo on the
+    /// left, another repo's issue on the right. After every filter change
+    /// or close, land on the filter's first tab, or none when it has no
+    /// tabs. With no filter everything shows, so nothing moves.
+    fn ensure_active_visible(&mut self) {
+        let visible: Vec<usize> = self.tab_infos().iter().map(|i| i.index).collect();
+        if let Some(active) = self.active_tab {
+            if visible.contains(&active) {
+                return;
+            }
+        }
+        self.active_tab = visible.first().copied();
+    }
+
+    /// One tab's strip entry, by real index. Shared by the filtered strip
+    /// and the full label list, so both spell a tab the same way.
+    fn tab_info(&self, i: usize, tab: &Tab) -> TabInfo {
+        let found = self
+            .items
+            .iter()
+            .find(|item| item.repo == tab.repo && item.number == tab.number)
+            .cloned();
+        let agent = self
+            .tab_agents
+            .get(&Self::tab_key(&tab.repo, tab.number, &tab.tree))
+            .cloned();
+        // A placed tab names its worktree and its agent: the tree
+        // is what tells two tabs on the same issue apart. An
+        // unplaced bookmark falls back to the issue title.
+        let label = if tab.tree.is_empty() {
+            match found.as_ref() {
+                Some(item) => {
+                    let short: String = item.title.chars().take(28).collect();
+                    format!("#{} {short}", tab.number)
+                }
+                None => format!("#{} {}", tab.number, tab.repo),
+            }
+        } else {
+            let short = tab.tree.rsplit('/').next().unwrap_or(&tab.tree).to_string();
+            let running = agent.as_ref().is_some_and(|a| a.running);
+            let name = agent
+                .as_ref()
+                .and_then(|a| a.record.as_ref())
+                .map(|r| r.agent.clone())
+                .map(|name| format!(" · {name}"))
+                .unwrap_or_default();
+            let dot = if running { " ◉" } else { "" };
+            format!("#{} {short}{name}{dot}", tab.number)
+        };
+        TabInfo {
+            index: i,
+            label,
+            kind: found.as_ref().map(|item| item.kind),
+            active: Some(i) == self.active_tab,
+            has_worktree: found
+                .is_some_and(|item| self.has_worktree(&item.repo, item.head_ref_name.as_deref())),
+            has_agent: agent.is_some_and(|agent| agent.running),
+        }
     }
 
     /// The agent pane shows only while an agent is being arranged or is
@@ -1637,22 +2122,23 @@ impl App {
         agent.record.is_some() && agent.dismissed_for.is_none()
     }
 
-    /// The tab's key in `TabAgent`: agents live per tab, so switching
-    /// tabs switches boxes.
-    pub fn tab_key(repo: &str, number: u64) -> (String, u64) {
-        (repo.to_string(), number)
+    /// The tab's key in `TabAgent` and the loop sessions: agents live per
+    /// tab, so switching tabs switches boxes. The tree is part of the key:
+    /// two tabs can share a repo and a branch on two different trees.
+    pub fn tab_key(repo: &str, number: u64, tree: &str) -> (String, u64, String) {
+        (repo.to_string(), number, tree.to_string())
     }
 
     /// This tab's agent side, if the tab ever launched one.
-    pub fn tab_agent(&self, key: &(String, u64)) -> Option<&TabAgent> {
+    pub fn tab_agent(&self, key: &(String, u64, String)) -> Option<&TabAgent> {
         self.tab_agents.get(key)
     }
 
     /// The active tab's key, when a tab is open.
-    pub fn active_key(&self) -> Option<(String, u64)> {
+    pub fn active_key(&self) -> Option<(String, u64, String)> {
         self.active_tab
             .and_then(|i| self.tabs.get(i))
-            .map(|tab| (tab.repo.clone(), tab.number))
+            .map(|tab| (tab.repo.clone(), tab.number, tab.tree.clone()))
     }
 
     /// The active tab's agent side, if it ever launched one.
@@ -1720,6 +2206,7 @@ impl App {
             .map(|t| crate::state::TabState {
                 repo: t.repo.clone(),
                 number: t.number,
+                tree: t.tree.clone(),
             })
             .collect();
         state.active_tab = self.active_tab;
@@ -1727,6 +2214,31 @@ impl App {
         state.row_pct = self.row_pct;
         state.last_agents = self.last_agents.clone();
         state.herdr_bindings = self.herdr_bindings.clone();
+        state.live_direct = self.live_direct.clone();
+        state.show_trees = self.show_trees;
+    }
+
+    /// The tab for this tree: the exact one when several share the repo
+    /// and the number, else an unplaced bookmark adopts the tree it lands
+    /// on. None when no tab names the issue at all — restore never
+    /// invents tabs.
+    fn place_tab(&mut self, repo: &str, number: u64, tree: &str) -> Option<(String, u64, String)> {
+        if let Some(tab) = self
+            .tabs
+            .iter()
+            .find(|t| t.repo == repo && t.number == number && t.tree == tree)
+        {
+            return Some(Self::tab_key(&tab.repo, tab.number, &tab.tree));
+        }
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.repo == repo && t.number == number && t.tree.is_empty())
+        {
+            tab.tree = tree.to_string();
+            return Some(Self::tab_key(&tab.repo, tab.number, &tab.tree));
+        }
+        None
     }
 
     /// Restore pane, cursors, filter, query and tabs from a saved session.
@@ -1763,6 +2275,7 @@ impl App {
             self.repos_cursor = state.repos_cursor.min(self.repos.len().saturating_sub(1));
         }
         self.list_cursor = state.list_cursor;
+        self.show_trees = state.show_trees;
         // The cross geometry comes back too, clamped like a fresh drag:
         // a shrunken terminal must not restore an unusable split.
         self.col_pct = state.col_pct.clamp(15, 85);
@@ -1775,6 +2288,7 @@ impl App {
                     Some(Tab {
                         repo: t.repo.clone(),
                         number: t.number,
+                        tree: t.tree.clone(),
                     })
                 } else {
                     None
@@ -1782,9 +2296,98 @@ impl App {
             })
             .collect();
         self.active_tab = state.active_tab.filter(|idx| *idx < self.tabs.len());
+        // A saved tab the saved filter hides must not own the detail from
+        // off-screen: land on the filter's own first tab, or none.
+        self.ensure_active_visible();
         self.last_agents = state.last_agents.clone();
         self.herdr_bindings = state.herdr_bindings.clone();
-        self.set_lengths(self.repos.len(), self.visible_items().len());
+        // Direct agents outlive a restart: the new process is not their
+        // parent, but the pid record says which tree they work in. A live
+        // pid re-shows the tab's agent instead of a blank box; a dead or
+        // recycled one is dropped, so the tab starts clean. The tab is
+        // matched by tree (several tabs can share the repo and the
+        // number); an unplaced bookmark adopts the tree it lands on.
+        self.live_direct = state.live_direct.clone();
+        self.live_direct
+            .retain(|tree, live| crate::agent::owns_tree(live.pid, tree));
+        for (tree, live) in self.live_direct.clone() {
+            let Some(key) = self.place_tab(&live.repo, live.number, &tree) else {
+                continue;
+            };
+            let entry = self.tab_agents.entry(key).or_default();
+            entry.running = true;
+            entry.record = Some(crate::agent::AgentRecord {
+                repo: live.repo.clone(),
+                number: live.number,
+                profile: live.profile.clone(),
+                agent: live.agent.clone(),
+                worktree: std::path::PathBuf::from(&tree),
+                seed_lines: 0,
+                status: crate::agent::AgentStatus::Running,
+            });
+        }
+        // Orphans from before the pid record existed (or a crashed save):
+        // one /proc walk, matched against every open tab's trees. Only
+        // reparented agents count (see `orphaned_agents`), so a second
+        // live gtasks keeps its own children. An unplaced bookmark adopts
+        // the tree it lands on, like the pid record above.
+        let orphans = crate::agent::orphaned_agents();
+        if !orphans.is_empty() {
+            for tab in self.tabs.clone() {
+                let Ok(slug) = crate::actions::RepoSlug::parse(&tab.repo) else {
+                    continue;
+                };
+                let found = self
+                    .worktree_root
+                    .iter()
+                    .flat_map(|root| crate::worktree::list_worktrees(root, &slug))
+                    .find_map(|tree| {
+                        let tree_str = tree.display().to_string();
+                        orphans.iter().find_map(|(pid, agent, cmdline)| {
+                            if cmdline.contains(&tree_str) {
+                                Some((*pid, *agent, tree_str.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                    });
+                if let Some((pid, agent, tree_str)) = found {
+                    let Some(key) = self.place_tab(&tab.repo, tab.number, &tree_str) else {
+                        continue;
+                    };
+                    if self.tab_agents.get(&key).is_some_and(|a| a.running) {
+                        continue;
+                    }
+                    let profile = self
+                        .last_agents
+                        .get(&tree_str)
+                        .map(|last| last.profile.clone())
+                        .unwrap_or_else(|| self.agent_profile.clone());
+                    self.live_direct.insert(
+                        tree_str.clone(),
+                        crate::agent::LiveDirect {
+                            pid,
+                            repo: tab.repo.clone(),
+                            number: tab.number,
+                            agent: agent.to_string(),
+                            profile: profile.clone(),
+                        },
+                    );
+                    let entry = self.tab_agents.entry(key).or_default();
+                    entry.running = true;
+                    entry.record = Some(crate::agent::AgentRecord {
+                        repo: tab.repo.clone(),
+                        number: tab.number,
+                        profile,
+                        agent: agent.to_string(),
+                        worktree: std::path::PathBuf::from(&tree_str),
+                        seed_lines: 0,
+                        status: crate::agent::AgentStatus::Running,
+                    });
+                }
+            }
+        }
+        self.set_lengths(self.repos.len(), self.visible_rows().len());
         self.refresh_status();
     }
 
@@ -1855,6 +2458,31 @@ impl App {
         }
     }
 
+    /// The clone's default branch through the app's binaries, if the clone
+    /// names one. Reads are local and instant; a missing remote just means
+    /// no question.
+    fn default_branch_of(&self, clone: &std::path::Path) -> Option<String> {
+        let binaries = self.binaries.as_ref()?;
+        crate::worktree::default_branch(binaries, clone, std::time::Duration::from_secs(10))
+    }
+
+    /// Open the agent menu with a tree preset: the `W`-flow continuation
+    /// after a row is picked and no agent was chosen yet. Also the loop's
+    /// continuation after it cuts a dedicated branch.
+    pub fn offer_agent_for_tree(&mut self, plan: AgentPlan, path: std::path::PathBuf) {
+        let rows = self.agent_choices();
+        if rows.is_empty() {
+            self.status = "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
+        } else {
+            self.modal = Some(Modal::AgentMenu(AgentMenu {
+                rows,
+                cursor: 0,
+                plan,
+                place: Some(path),
+            }));
+        }
+    }
+
     /// `Enter` on a worktree row: work on it. Inside the `g` flow the agent
     /// is already picked and the loop launches on the row's path; opened
     /// directly with `W`, the agent menu comes first with the tree preset.
@@ -1877,7 +2505,11 @@ impl App {
                 .get(&row.path.display().to_string())
                 .cloned()
             {
-                let key = Self::tab_key(&menu.plan.repo, menu.plan.number);
+                let key = Self::tab_key(
+                    &menu.plan.repo,
+                    menu.plan.number,
+                    &row.path.display().to_string(),
+                );
                 let busy = self.tab_agents.get(&key).is_some_and(|a| a.running);
                 if !busy {
                     if let Some(choice) = self
@@ -1913,6 +2545,41 @@ impl App {
                     }
                 }
             }
+            // The tree sits on the clone's default branch: working here
+            // would commit straight onto it. Offer a dedicated branch
+            // first — `y` names it (the item's branch suggested), `n`
+            // works on the default branch as asked.
+            if let Some(default) = self.default_branch_of(&menu.plan.clone) {
+                if row.branch.as_str() == default {
+                    let suggestion = if menu.plan.branch != row.branch.as_str()
+                        && crate::worktree::BranchName::parse(&menu.plan.branch).is_ok()
+                    {
+                        menu.plan.branch.clone()
+                    } else {
+                        let short = menu
+                            .plan
+                            .repo
+                            .split('/')
+                            .next_back()
+                            .unwrap_or(&menu.plan.repo);
+                        format!("{short}-dev")
+                    };
+                    let question = format!(
+                        "tree {} is on {} (the default branch) — create a dedicated branch here? (y = name it · n = work on {} anyway)",
+                        row.path.display(),
+                        default,
+                        default
+                    );
+                    self.modal = Some(Modal::Confirm(question));
+                    self.pending = Some(Pending::BranchOut {
+                        plan: menu.plan,
+                        path: row.path,
+                        preset: menu.agent,
+                        suggestion,
+                    });
+                    return;
+                }
+            }
             match menu.agent {
                 Some(agent) => {
                     let mut plan = menu.plan;
@@ -1921,21 +2588,10 @@ impl App {
                     self.agent_place = Some((plan, row.path));
                 }
                 None => {
-                    let rows = self.agent_choices();
-                    if rows.is_empty() {
-                        self.status =
-                            "no agent binaries found (hermes, pi, omp, opencode, agy)".to_string();
-                        return;
-                    }
                     let mut plan = menu.plan;
                     plan.branch = row.branch.as_str().to_string();
                     let place = row.path;
-                    self.modal = Some(Modal::AgentMenu(AgentMenu {
-                        rows,
-                        cursor: 0,
-                        plan,
-                        place: Some(place),
-                    }));
+                    self.offer_agent_for_tree(plan, place);
                 }
             }
         }
@@ -2076,6 +2732,21 @@ impl App {
                         self.status = format!("bad worktree name: {err:#}");
                         self.modal = Some(Modal::NameInput(NameInput {
                             purpose: NamePurpose::Create { agent, plan },
+                            value: input.value,
+                        }));
+                    }
+                }
+            }
+            NamePurpose::BranchOut { plan, path, preset } => {
+                let name = input.value.trim();
+                match crate::worktree::BranchName::parse(name) {
+                    Ok(branch) => {
+                        self.branch_go = Some((plan, path, branch.as_str().to_string(), preset));
+                    }
+                    Err(err) => {
+                        self.status = format!("bad branch name: {err:#}");
+                        self.modal = Some(Modal::NameInput(NameInput {
+                            purpose: NamePurpose::BranchOut { plan, path, preset },
                             value: input.value,
                         }));
                     }
@@ -2343,9 +3014,15 @@ impl App {
             return;
         };
         // One agent per tab: a second `g` on the same tab refuses instead
-        // of orphaning the first. Other tabs keep running untouched.
-        let key = Self::tab_key(&item.repo, item.number);
-        if self.tab_agents.get(&key).is_some_and(|a| a.running) {
+        // of orphaning the first. Other tabs keep running untouched — even
+        // on the same issue, when they work different trees.
+        let busy = match self.active_tab.and_then(|idx| self.tabs.get(idx)) {
+            Some(tab) if tab.repo == item.repo && tab.number == item.number => {
+                self.tab_agents.get(&tab.key()).is_some_and(|a| a.running)
+            }
+            _ => false,
+        };
+        if busy {
             self.status = "an agent is already running in this tab".to_string();
             return;
         }
@@ -2417,8 +3094,9 @@ impl App {
     /// (not at startup), so an install mid-session just appears. When the
     /// Herdr CLI is around, every agent grows a second row launching it
     /// unsandboxed through Herdr — the per-launch answer to a global
-    /// `sandbox_agents = true`.
-    fn agent_choices(&self) -> Vec<AgentChoice> {
+    /// `sandbox_agents = true`. Public for the startup reattach, which
+    /// rebuilds a resume plan from a binding without a menu.
+    pub fn agent_choices(&self) -> Vec<AgentChoice> {
         let mut direct = Vec::new();
         if let Some(hermes) = self.binaries.as_ref().and_then(|b| b.hermes.clone()) {
             direct.push(AgentChoice {
@@ -2969,7 +3647,12 @@ impl App {
         let key = self.active_key()?;
         let agent = self.tab_agents.get(&key)?;
         let record = agent.record.as_ref()?;
-        if (record.repo.clone(), record.number) != key {
+        if (
+            record.repo.clone(),
+            record.number,
+            record.worktree.display().to_string(),
+        ) != key
+        {
             return None;
         }
         if agent.dismissed_for.as_ref() == Some(&key) {
@@ -3000,7 +3683,11 @@ impl App {
         );
         if finished {
             if let Some(record) = agent.record.as_ref() {
-                let key = (record.repo.clone(), record.number);
+                let key = (
+                    record.repo.clone(),
+                    record.number,
+                    record.worktree.display().to_string(),
+                );
                 agent.dismissed_for = Some(key);
             }
         }
@@ -3053,6 +3740,59 @@ impl App {
             return;
         }
         self.close_agent_record();
+    }
+
+    /// `K`: stop the active tab's Herdr agent Herdr-side, after a
+    /// question. The tab stays open (this is not `x`): the Herdr tab
+    /// closes, and the local shadow plus the reattach binding go with it,
+    /// so the next launch starts fresh. Without a Herdr binding there is
+    /// nothing Herdr-side to stop.
+    pub fn ask_stop_herdr(&mut self) {
+        let Some(idx) = self.active_tab else {
+            self.status = "no tabs — Enter opens one".to_string();
+            return;
+        };
+        let Some(tab) = self.tabs.get(idx).cloned() else {
+            self.status = "no tabs — Enter opens one".to_string();
+            return;
+        };
+        let key = tab.key();
+        let tree = if tab.tree.is_empty() {
+            // An unplaced bookmark has no tree yet: the record, when one
+            // exists, says where its agent works.
+            self.tab_agents
+                .get(&key)
+                .and_then(|agent| agent.record.as_ref())
+                .map(|record| record.worktree.display().to_string())
+        } else {
+            Some(tab.tree.clone())
+        };
+        let binding = tree
+            .as_deref()
+            .and_then(|tree| self.herdr_bindings.get(tree));
+        match (binding, tree) {
+            (Some(binding), Some(tree)) => {
+                self.pending = Some(Pending::StopHerdr {
+                    tab_id: binding.tab_id.clone(),
+                    key,
+                    tree,
+                    name: binding.name.clone(),
+                });
+                self.modal = Some(Modal::Confirm(format!(
+                    "stop the Herdr agent {}? (y = stop it · n = keep it running)",
+                    binding.name
+                )));
+            }
+            _ => {
+                let running = self.tab_agents.get(&key).is_some_and(|a| a.running);
+                self.status = if running {
+                    "the agent here runs direct, not on Herdr — x closes it with the tab"
+                        .to_string()
+                } else {
+                    "no Herdr agent in this tab".to_string()
+                };
+            }
+        }
     }
 
     /// The kind of `(repo, number)` on the current list, for body fetches:
@@ -3427,6 +4167,19 @@ impl App {
                                     }
                                 }
                             },
+                            Pending::BranchOut {
+                                plan,
+                                path,
+                                preset,
+                                suggestion: _,
+                            } => match preset {
+                                Some(agent) => {
+                                    let mut plan = plan;
+                                    plan.agent = agent;
+                                    self.agent_place = Some((plan, path));
+                                }
+                                None => self.offer_agent_for_tree(plan, path),
+                            },
                             other => self.pending = Some(other),
                         }
                     }
@@ -3475,7 +4228,8 @@ impl App {
                         // Like `g`, never onto a running agent: overwriting
                         // the live session would drop in-flight work.
                         Some(Pending::Resume { plan, path, .. }) => {
-                            let key = App::tab_key(&plan.repo, plan.number);
+                            let key =
+                                App::tab_key(&plan.repo, plan.number, &path.display().to_string());
                             if self.tab_agents.get(&key).is_some_and(|a| a.running) {
                                 self.status = "an agent is already running in this tab".to_string();
                             } else {
@@ -3486,6 +4240,22 @@ impl App {
                         // loop): `y` moves the agreed order there.
                         Some(Pending::Delete(order)) => {
                             self.delete_go = Some(order);
+                        }
+                        // Stopping a Herdr agent is a write too (to the
+                        // Herdr daemon, via the loop): `y` moves the
+                        // agreed stop there.
+                        Some(Pending::StopHerdr {
+                            tab_id,
+                            key,
+                            tree,
+                            name,
+                        }) => {
+                            self.stop_herdr_go = Some(HerdrStop {
+                                tab_id,
+                                key,
+                                tree,
+                                name,
+                            });
                         }
                         // A clone is a write too (network, minutes): `y`
                         // moves the agreed repo+directory there; the loop
@@ -3499,6 +4269,21 @@ impl App {
                         // still asks before anything touches the disk.
                         Some(Pending::NewBranch { repo }) => {
                             self.open_repo_worktree_for(&repo);
+                        }
+                        // A dedicated branch for a default-branch tree: `y`
+                        // names it (editable suggestion), `n` works on the
+                        // default branch as asked — the question was the
+                        // protection, not a refusal.
+                        Some(Pending::BranchOut {
+                            plan,
+                            path,
+                            preset,
+                            suggestion,
+                        }) => {
+                            self.modal = Some(Modal::NameInput(NameInput {
+                                value: suggestion,
+                                purpose: NamePurpose::BranchOut { plan, path, preset },
+                            }));
                         }
                         // Nothing was asked: never claim success for it.
                         None => self.status = "nothing to run".into(),
@@ -3580,6 +4365,11 @@ impl App {
             // `x`/`X` close the active tab first, then the agent record.
             // Tabs are the newest layer; without tabs this is the old `x`.
             Key::Char('x') | Key::Char('X') => self.close_tab_or_record(),
+            // `K` stops the active tab's Herdr agent Herdr-side: the tab
+            // stays, the agent dies, and the binding is forgotten so the
+            // next launch starts fresh. A direct agent needs no key —
+            // `x` already kills it with its tab.
+            Key::Char('K') => self.ask_stop_herdr(),
             // `t`/`T` cycle tabs, like a browser. Without tabs it says so
             // instead of staying silent.
             Key::Char('t') => {
@@ -3643,6 +4433,9 @@ impl App {
             // then cached). With a running agent focused this key types
             // into the agent instead — it never reaches here.
             Key::Char('d') => self.request_diff(),
+            // `v` flips the worktree rows in the list: children under
+            // their issue/PR plus the orphan section, or issues alone.
+            Key::Char('v') => self.toggle_tree_filter(),
             // `s` opens the settings menu (app-wide toggles like sandboxed
             // agents). With a running agent focused this key types into
             // the agent instead — it never reaches here.
@@ -3656,9 +4449,9 @@ impl App {
                 // First Esc closes the record card and shows the detail; the
                 // record itself stays (a new run replaces it, `x` deletes it).
                 // Reselecting the item shows the card again.
-                if let Some(item) = self.effective_item().cloned() {
+                if let Some(key) = self.active_key() {
                     if let Some(agent) = self.active_agent_mut() {
-                        agent.dismissed_for = Some((item.repo, item.number));
+                        agent.dismissed_for = Some(key);
                     }
                 }
             }
@@ -3745,6 +4538,22 @@ impl App {
             // is a starting point, not a dead end: offer a fresh branch.
             Key::Enter if self.pane == Pane::Repos => {
                 self.pane = Pane::List;
+                if let RepoFilter::One(slug) = &self.repo_filter {
+                    // The strip now shows this repo's tabs only: land on
+                    // the first one, unless already on one of them. The
+                    // detail belongs to the tab, so it comes along.
+                    let on_repo = self
+                        .active_tab
+                        .and_then(|idx| self.tabs.get(idx))
+                        .is_some_and(|tab| tab.repo == slug.as_str());
+                    if !on_repo {
+                        if let Some(idx) =
+                            self.tabs.iter().position(|tab| tab.repo == slug.as_str())
+                        {
+                            self.activate_tab(idx);
+                        }
+                    }
+                }
                 if self.query.trim().is_empty()
                     && let RepoFilter::One(slug) = &self.repo_filter
                     && self.visible_items().is_empty()
@@ -3759,7 +4568,7 @@ impl App {
             // In the list Enter opens a tab for the row; the detail follows
             // the active tab from then on.
             Key::Enter if self.pane == Pane::List => {
-                self.open_tab_for_selected();
+                self.open_row();
             }
             Key::Enter => self.request_detail(),
             // Handled at the top; repeated here because the match must be total.
@@ -3774,7 +4583,26 @@ impl App {
                 self.apply_repo_filter();
             }
             Pane::List => {
-                self.list_cursor = step(self.list_cursor, delta, self.list_len);
+                let rows = self.visible_rows();
+                if rows.is_empty() {
+                    self.list_cursor = 0;
+                } else {
+                    // The divider is drawn, not selected: stepping onto it
+                    // keeps going the same way. It never sits first or last,
+                    // so the walk always lands on a real row.
+                    let mut next = step(self.list_cursor, delta, rows.len());
+                    for _ in 0..rows.len() {
+                        if !matches!(rows.get(next), Some(ListRow::Divider)) {
+                            break;
+                        }
+                        let moved = step(next, delta, rows.len());
+                        if moved == next {
+                            break;
+                        }
+                        next = moved;
+                    }
+                    self.list_cursor = next;
+                }
                 self.dismiss_finished_card();
                 // Landing on a row starts its body: by the time the user
                 // reads the fields, the description is already on its way.
